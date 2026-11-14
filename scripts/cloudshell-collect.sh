@@ -48,7 +48,7 @@ call() {
   local api="$1:$2"
   echo "  ${api}" >&2
   if ! aws "$@" --region "${REGION}" --output json > "${out}" 2> "${out}.err"; then
-    jq -cn --arg api "${api}" --arg msg "$(tr '\n' ' ' < "${out}.err")" '{api: $api, message: $msg}' >> "${ERRORS}"
+    jq -cn --arg api "${api}" --arg msg "$(tr '\n\r\t' '   ' < "${out}.err" | tr -d '\000-\037\177' | head -c 4000)" '{api: $api, message: $msg}' >> "${ERRORS}"
     echo '{}' > "${out}"
   fi
 }

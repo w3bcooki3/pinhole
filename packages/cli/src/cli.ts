@@ -12,7 +12,7 @@ import { parseArgs } from 'node:util';
 import { analyzeExposure, normalize, assertSnapshot, SEVERITY_ORDER, SnapshotError } from '@pinhole/engine';
 import type { Severity, Snapshot } from '@pinhole/engine';
 import { formatExposureText } from './format-text.js';
-import { analyzeBlastRadius, ChangeError } from '@pinhole/engine';
+import { analyzeBlastRadius, assertChanges, ChangeError } from '@pinhole/engine';
 import type { Change } from '@pinhole/engine';
 import { blastText, canText, fixesFor, fixText, hygiene, hygieneText, LookupError, plan, planText, shortcutChanges, whatIf, whatIfText } from './advanced.js';
 import { VERSION } from './version.js';
@@ -232,8 +232,12 @@ function cmdWhatIf(args: string[], io: Io): number {
     } catch (e) {
       throw new UsageError(`Cannot read ${values.changes}: ${(e as Error).message}`);
     }
-    if (!Array.isArray(parsed)) throw new UsageError(`${values.changes} must hold a JSON array of changes.`);
-    changes.push(...(parsed as Change[]));
+    try {
+      assertChanges(parsed);
+    } catch (e) {
+      throw new UsageError(`${values.changes}: ${(e as Error).message}`);
+    }
+    changes.push(...parsed);
   }
   if (!changes.length) throw new UsageError('whatif needs at least one change.');
   const d = whatIf(model, changes);

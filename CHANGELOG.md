@@ -71,6 +71,18 @@ All notable changes to this project are recorded here. The format follows
 - The demo environment has a fifth snapshot built from fixture 09.
 
 ### Security
+- Snapshots are validated field by field before analysis (types, ranges, ID
+  and ARN shapes, account, region and time formats, sizes); failures name the
+  field. Control characters are refused in structural fields and replaced in
+  free text; reserved keys are refused; keyed lookups use own properties only.
+- Generated AWS CLI commands pass structured parameters as JSON, so a hostile
+  rule description cannot change what a fix command sets. Numbers are checked,
+  comment lines are kept to one line, and hygiene commands are shell-quoted.
+- `pinhole whatif --changes` validates the change list before use.
+- Collector error messages are kept to one line with control characters
+  removed.
+- CSV export also guards cells starting with tab or carriage return; the web
+  console reads at most 200 files at once.
 - Web console: the Content Security Policy now allows only the page's own
   script by SHA-256 hash (no `'unsafe-inline'` for scripts), blocks all
   connections, and sends no referrer. Documentation links are shown only for

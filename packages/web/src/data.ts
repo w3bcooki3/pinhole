@@ -258,7 +258,7 @@ export async function copyText(text: string) {
 export function csv(rows: Row[]): string {
   const cell = (v: string | number) => {
     const t = String(v);
-    return `"${(/^[=+\-@]/.test(t) ? `'${t}` : t).replace(/"/g, '""')}"`;
+    return `"${(/^[=+\-@\t\r]/.test(t) ? `'${t}` : t).replace(/"/g, '""')}"`;
   };
   const head = ['severity', 'account', 'region', 'kind', 'resource_id', 'resource_name', 'vpc', 'protocol', 'port_from', 'port_to', 'allowed_by', 'responses'];
   return [head.join(','), ...rows.map(({ f, snap }) => [f.severity, snap.account, snap.region, f.kind, f.resourceId, f.resourceName, f.vpcId, f.protocol, f.ports.from, f.ports.to, f.sources.join(' '), f.returnPath].map(cell).join(','))].join('\n') + '\n';
@@ -292,11 +292,16 @@ export const STEPS = [
 /** Larger files would freeze the tab while parsing; the CLI has no such limit. */
 export const MAX_SNAPSHOT_BYTES = 200_000_000;
 
+/** More files than this in one drop is almost certainly a mistake. */
+export const MAX_FILES = 200;
+
 export function readFiles(files: FileList | File[], done: (snaps: Snap[], errors: string[]) => void) {
-  const list = [...files];
+  const all = [...files];
+  const list = all.slice(0, MAX_FILES);
   const snaps: Snap[] = [];
-  const errors: string[] = [];
+  const errors: string[] = all.length > MAX_FILES ? [`Only the first ${MAX_FILES} of ${all.length} files were read.`] : [];
   let left = list.length;
+  if (!left) return done(snaps, errors);
   for (const file of list) {
     if (file.size > MAX_SNAPSHOT_BYTES) {
       errors.push(`${file.name} is ${Math.round(file.size / 1e6)} MB; the limit is ${MAX_SNAPSHOT_BYTES / 1e6} MB. Use the CLI for very large snapshots.`);
@@ -308,7 +313,8 @@ export function readFiles(files: FileList | File[], done: (snaps: Snap[], errors
       try {
         snaps.push(parseFile(String(r.result), file.name));
       } catch (e) {
-        errors.push((e as Error).message);
+        const msg = (e as Error).message;
+        errors.push(msg.includes(file.name) ? msg : `${file.name}: ${msg}`);
       }
       if (--left === 0) done(snaps, errors);
     };

@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { run, VERSION } from '../src/index.js';
+import { safeForTerminal } from '../src/cli.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fx = (name: string) => join(here, '../../../fixtures', name, 'snapshot.json');
@@ -58,9 +59,12 @@ describe('pinhole CLI', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'pinhole-cli-')), 'snap.json');
     writeFileSync(file, JSON.stringify(snap));
     const r = await cli('exposure', file);
+    // Control characters in free text are replaced when the snapshot is read.
     expect(r.stdout).toMatch(/web\ufffd\[2J/);
     // eslint-disable-next-line no-control-regex
-    expect(r.stdout).not.toMatch(/[\u001b\u0007]/);
+    expect(r.stdout + r.stderr).not.toMatch(/[\u001b\u0007]/);
+    // The output filter still applies to anything that gets through another way.
+    expect(safeForTerminal('web\u001b[2J')).toBe('web\ufffd[2J');
   });
 
   it('shows load balancer targets in the text report', async () => {
@@ -117,7 +121,7 @@ describe('pinhole CLI', () => {
       const all = await cli('fix', f9, '--all');
       expect(all.stdout).toContain('Verified: Allow tcp/22 on sgr-bastion-ssh-world only from inside vpc-1');
       expect(all.stdout).toContain('Still reachable after a compromise of: web');
-      expect(all.stdout).toContain("$ aws ec2 modify-security-group-rules --region us-east-1 --group-id sg-bastion --security-group-rules 'SecurityGroupRuleId=sgr-bastion-ssh-world,SecurityGroupRule={IpProtocol=tcp,FromPort=22,ToPort=22,CidrIpv4=10.0.0.0/16,Description=SSH from anywhere}'");
+      expect(all.stdout).toContain(`$ aws ec2 modify-security-group-rules --region us-east-1 --group-id sg-bastion --security-group-rules '[{"SecurityGroupRuleId":"sgr-bastion-ssh-world","SecurityGroupRule":{"IpProtocol":"tcp","FromPort":22,"ToPort":22,"CidrIpv4":"10.0.0.0/16","Description":"SSH from anywhere"}}]'`);
     });
     it('fix --plan: an ordered plan that closes everything critical and high', async () => {
       const r = await cli('fix', f9, '--plan');

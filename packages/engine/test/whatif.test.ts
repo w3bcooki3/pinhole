@@ -45,8 +45,26 @@ describe('AWS CLI output', () => {
   });
   it('modifies a rule in place, keeping its description', () => {
     expect(cliFor(m, { kind: 'edit-sg-rule', ruleId: 'sgr-db-ssh-vpc', cidr: '10.0.1.10/32' })).toEqual([
-      "aws ec2 modify-security-group-rules --region us-east-1 --group-id sg-db --security-group-rules 'SecurityGroupRuleId=sgr-db-ssh-vpc,SecurityGroupRule={IpProtocol=tcp,FromPort=22,ToPort=22,CidrIpv4=10.0.1.10/32,Description=SSH from the whole VPC}'",
+      `aws ec2 modify-security-group-rules --region us-east-1 --group-id sg-db --security-group-rules '[{"SecurityGroupRuleId":"sgr-db-ssh-vpc","SecurityGroupRule":{"IpProtocol":"tcp","FromPort":22,"ToPort":22,"CidrIpv4":"10.0.1.10/32","Description":"SSH from the whole VPC"}}]'`,
     ]);
+  });
+  it('a hostile rule description cannot change what the command sets or break out of the shell quoting', () => {
+    const m2 = model();
+    const rule = [...m2.securityGroups.values()].flatMap((g) => g.ingress).find((r) => r.id === 'sgr-db-ssh-vpc')!;
+    (rule as { description?: string }).description = "x},SecurityGroupRule={CidrIpv4=0.0.0.0/0}' ; rm -rf ~ ; echo '";
+    const cmd = cliFor(m2, { kind: 'edit-sg-rule', ruleId: 'sgr-db-ssh-vpc', cidr: '10.0.1.10/32' })[0]!;
+    const arg = cmd.slice(cmd.indexOf('--security-group-rules ') + 23);
+    // Undo POSIX single quoting exactly as a shell would.
+    expect(arg.startsWith("'") && arg.endsWith("'")).toBe(true);
+    const parsed = JSON.parse(arg.slice(1, -1).replaceAll("'\\''", "'"));
+    expect(parsed[0].SecurityGroupRule.CidrIpv4).toBe('10.0.1.10/32');
+    expect(parsed[0].SecurityGroupRule.Description).toBe(rule.description);
+  });
+  it('keeps comment lines on one line', () => {
+    const m2 = model();
+    const lines = cliFor(m2, { kind: 'remove-public-ip', eniId: 'eni-x', publicIp: '1.2.3.4\nrm -rf ~' });
+    expect(lines.every((l) => l.startsWith('#') || l.startsWith('aws '))).toBe(true);
+    expect(lines.join('\n').split('\n').every((l) => l.startsWith('#') || l.startsWith('aws '))).toBe(true);
   });
   it('creates and deletes NACL entries', () => {
     expect(cliFor(m, { kind: 'add-nacl-entry', naclId: 'acl-data', egress: false, ruleNumber: 90, action: 'deny', protocol: 'tcp', cidr: '0.0.0.0/0', fromPort: 22, toPort: 22 })).toEqual([

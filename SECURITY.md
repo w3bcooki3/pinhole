@@ -23,6 +23,20 @@ You can expect an acknowledgement within a week. Fixes are released as a new ver
 - Links to AWS documentation are shown only for `https://docs.aws.amazon.com/` URLs.
 - The theme choice (light or dark) is the only thing stored in the browser.
 
+**Every file is checked before it is used.**
+
+- Snapshots are validated field by field before analysis: types, port and rule-number ranges, ID and ARN shapes, account, region and time formats, and size limits. A snapshot that fails is refused with the exact field named, so an edited or truncated file cannot give a silently wrong answer.
+- Control characters are refused in IDs, addresses and other structural fields. In free text (names, tags, descriptions) they are replaced, so one odd tag does not block an account. Reserved keys such as `__proto__` are refused.
+- The web console reads at most 200 files of at most 200 MB each.
+- Change lists given to `pinhole whatif --changes` are validated the same way.
+
+**Downloads and generated commands.**
+
+- AWS CLI commands are generated for review, never run. Every argument taken from a snapshot is shell-quoted; structured parameters are passed as JSON, so a rule description cannot change what a command sets; numbers are checked to be numbers; comment lines cannot spill onto the next line.
+- CSV exports prefix cells that start with `=`, `+`, `-`, `@`, tab or carriage return, so spreadsheets do not run them as formulas.
+- The downloadable report is one HTML file with a Content Security Policy that allows no script and no network requests; all snapshot text in it is escaped.
+- CLI text output replaces terminal control sequences.
+
 **What a snapshot contains.**
 
 - VPCs, subnets, route tables, gateways, network ACLs, security groups and their rules, prefix lists, network interfaces, instances and load balancers, with their tags.

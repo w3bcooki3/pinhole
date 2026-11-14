@@ -182,18 +182,18 @@ function tgwPair(opts: { tgwSgRef: boolean; srcAz: string }) {
   ];
   e.TransitGateways = [{ TransitGatewayId: 'tgw-1', Options: { SecurityGroupReferencingSupport: opts.tgwSgRef ? 'enable' : 'disable' } }];
   e.TransitGatewayAttachments = [
-    { TransitGatewayAttachmentId: 'att-1', TransitGatewayId: 'tgw-1', ResourceType: 'vpc', ResourceId: 'vpc-1', State: 'available', Association: { TransitGatewayRouteTableId: 'tgw-rtb', State: 'associated' } },
-    { TransitGatewayAttachmentId: 'att-b', TransitGatewayId: 'tgw-1', ResourceType: 'vpc', ResourceId: 'vpc-b', State: 'available', Association: { TransitGatewayRouteTableId: 'tgw-rtb', State: 'associated' } },
+    { TransitGatewayAttachmentId: 'tgw-attach-1', TransitGatewayId: 'tgw-1', ResourceType: 'vpc', ResourceId: 'vpc-1', State: 'available', Association: { TransitGatewayRouteTableId: 'tgw-rtb-1', State: 'associated' } },
+    { TransitGatewayAttachmentId: 'tgw-attach-b', TransitGatewayId: 'tgw-1', ResourceType: 'vpc', ResourceId: 'vpc-b', State: 'available', Association: { TransitGatewayRouteTableId: 'tgw-rtb-1', State: 'associated' } },
   ];
   e.TransitGatewayVpcAttachments = [
-    { TransitGatewayAttachmentId: 'att-1', VpcId: 'vpc-1', SubnetIds: ['subnet-1-tgw'], Options: { SecurityGroupReferencingSupport: 'enable' } },
-    { TransitGatewayAttachmentId: 'att-b', VpcId: 'vpc-b', SubnetIds: ['subnet-b'], Options: { SecurityGroupReferencingSupport: 'enable' } },
+    { TransitGatewayAttachmentId: 'tgw-attach-1', VpcId: 'vpc-1', SubnetIds: ['subnet-1-tgw'], Options: { SecurityGroupReferencingSupport: 'enable' } },
+    { TransitGatewayAttachmentId: 'tgw-attach-b', VpcId: 'vpc-b', SubnetIds: ['subnet-b'], Options: { SecurityGroupReferencingSupport: 'enable' } },
   ];
-  e.TransitGatewayRouteTables = [{ TransitGatewayRouteTableId: 'tgw-rtb', TransitGatewayId: 'tgw-1' }];
+  e.TransitGatewayRouteTables = [{ TransitGatewayRouteTableId: 'tgw-rtb-1', TransitGatewayId: 'tgw-1' }];
   e.TransitGatewayRoutes = {
-    'tgw-rtb': [
-      { DestinationCidrBlock: '10.0.0.0/16', TransitGatewayAttachments: [{ TransitGatewayAttachmentId: 'att-1' }], Type: 'propagated', State: 'active' },
-      { DestinationCidrBlock: '10.1.0.0/16', TransitGatewayAttachments: [{ TransitGatewayAttachmentId: 'att-b' }], Type: 'propagated', State: 'active' },
+    'tgw-rtb-1': [
+      { DestinationCidrBlock: '10.0.0.0/16', TransitGatewayAttachments: [{ TransitGatewayAttachmentId: 'tgw-attach-1' }], Type: 'propagated', State: 'active' },
+      { DestinationCidrBlock: '10.1.0.0/16', TransitGatewayAttachments: [{ TransitGatewayAttachmentId: 'tgw-attach-b' }], Type: 'propagated', State: 'active' },
     ],
   };
   e.SecurityGroups!.push({ GroupId: 'sg-b', GroupName: 'b', VpcId: 'vpc-b' });

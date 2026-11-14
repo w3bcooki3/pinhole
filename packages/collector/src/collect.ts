@@ -71,12 +71,15 @@ class Collector {
 }
 
 function errorMessage(e: unknown): string {
+  let text = String(e);
   if (e && typeof e === 'object') {
     const name = (e as { name?: string }).name;
     const msg = (e as { message?: string }).message;
-    return [name, msg].filter(Boolean).join(': ') || String(e);
+    text = [name, msg].filter(Boolean).join(': ') || text;
   }
-  return String(e);
+  // One line, no control characters, bounded: it ends up in a file people read in a terminal.
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\r\n\t]+/g, ' ').replace(/[\u0000-\u001f\u007f-\u009f]/g, '').slice(0, 4000);
 }
 
 /** Removes SDK response metadata and turns Dates into ISO strings. */

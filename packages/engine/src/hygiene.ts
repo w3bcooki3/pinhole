@@ -8,7 +8,7 @@
 import { hasPorts, protocolName } from './packet.js';
 import { assessPorts, categorize, compareSeverity } from './risk.js';
 import type { Severity } from './risk.js';
-import { ruleText } from './whatif.js';
+import { ruleText, shellQuote } from './whatif.js';
 import type { Change } from './whatif.js';
 import type { ExposureReport } from './exposure.js';
 import { PROTO_ALL } from './types.js';
@@ -76,7 +76,7 @@ const PRIVATE = [
 export function analyzeHygiene(model: NetworkModel, exposure?: ExposureReport): HygieneFinding[] {
   const out: HygieneFinding[] = [];
   const exposing = new Set(exposure?.findings.flatMap((f) => f.trace.filter((h) => h.stage === 'dest-sg-ingress').flatMap((h) => h.ruleIds ?? [])) ?? []);
-  const region = model.region ? ` --region ${model.region}` : '';
+  const region = model.region ? ` --region ${shellQuote(model.region)}` : '';
 
   const used = new Set<string>();
   for (const e of model.enis.values()) e.groupIds.forEach((g) => used.add(g));
@@ -93,7 +93,7 @@ export function analyzeHygiene(model: NetworkModel, exposure?: ExposureReport): 
         resourceId: g.id,
         title: `${g.id} (${g.name}) is not attached to anything`,
         detail: `No interface or load balancer in this snapshot uses it${referenced.has(g.id) ? ', although another group\'s rules refer to it' : ''}. Unused groups with open rules are a trap: attaching one by mistake opens everything it allows.`,
-        ...(referenced.has(g.id) ? {} : { cli: [`aws ec2 delete-security-group${region} --group-id ${g.id}`] }),
+        ...(referenced.has(g.id) ? {} : { cli: [`aws ec2 delete-security-group${region} --group-id ${shellQuote(g.id)}`] }),
       });
     }
 

@@ -9,7 +9,7 @@ export { evaluatePath, evaluateClientPreservedTarget, CLIENT_PROFILES, ELB_PROFI
 export type { Endpoint, PathQuery, PathResult, EphemeralProfile, ReturnCoverage, ReturnProfileResult, EvaluateOptions } from './path.js';
 export { analyzeExposure } from './exposure.js';
 export type { ExposureFinding, ExposureReport, ExposureOptions, LbTargetResult } from './exposure.js';
-export { applyChanges, cliFor, describeChange, diffExposure, ruleText, ChangeError } from './whatif.js';
+export { applyChanges, cliFor, describeChange, diffExposure, ruleText, ChangeError, assertChanges } from './whatif.js';
 export type { Change, DiffStatus, ExposureDelta, ExposureDiff } from './whatif.js';
 export { findChokepoints, findFixes, planFixes } from './fixes.js';
 export type { Chokepoint, FixCandidate, FixPlan, PlanStep } from './fixes.js';

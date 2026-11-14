@@ -27,6 +27,41 @@ export type Change =
 
 export class ChangeError extends Error {}
 
+/**
+ * Check a list of changes read from a file before using it: every field the
+ * right type, ports and rule numbers in range, IDs and CIDRs plain text. The
+ * changes are turned into AWS CLI commands, so nothing unexpected may get in.
+ */
+export function assertChanges(value: unknown): asserts value is Change[] {
+  if (!Array.isArray(value)) throw new ChangeError('Changes must be a JSON array.');
+  if (value.length > 1000) throw new ChangeError('At most 1000 changes at a time.');
+  const plain = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+  value.forEach((c, i) => {
+    const bad = (what: string): never => { throw new ChangeError(`Change ${i + 1}: ${what}.`); };
+    if (typeof c !== 'object' || c === null || Array.isArray(c)) bad('must be an object');
+    const o = c as Record<string, unknown>;
+    const str = (k: string, opt = false) => { const v = o[k]; if (v === undefined && opt) return; if (typeof v !== 'string' || !plain.test(v)) bad(`"${k}" must be an ID or address`); };
+    const bool = (k: string) => { if (typeof o[k] !== 'boolean') bad(`"${k}" must be true or false`); };
+    const port = (k: string) => { const v = o[k]; if (v !== undefined && (!Number.isInteger(v) || (v as number) < -1 || (v as number) > 65535)) bad(`"${k}" must be a port from -1 to 65535`); };
+    const ruleNo = () => { const v = o.ruleNumber; if (!Number.isInteger(v) || (v as number) < 1 || (v as number) > 32766) bad('"ruleNumber" must be from 1 to 32766'); };
+    switch (o.kind) {
+      case 'revoke-sg-rule': str('ruleId'); break;
+      case 'edit-sg-rule': str('ruleId'); str('cidr', true); port('fromPort'); port('toPort'); break;
+      case 'add-sg-rule':
+        str('groupId'); bool('egress'); str('protocol'); port('fromPort'); port('toPort'); str('cidr', true); str('referencedGroupId', true);
+        if (o.description !== undefined && (typeof o.description !== 'string' || o.description.length > 255 || /[\u0000-\u001f\u007f-\u009f]/.test(o.description))) bad('"description" must be one line of at most 255 characters');
+        if (o.cidr === undefined && o.referencedGroupId === undefined) bad('needs "cidr" or "referencedGroupId"');
+        break;
+      case 'add-nacl-entry': str('naclId'); bool('egress'); ruleNo(); if (o.action !== 'allow' && o.action !== 'deny') bad('"action" must be "allow" or "deny"'); str('protocol'); str('cidr'); port('fromPort'); port('toPort'); break;
+      case 'remove-nacl-entry': str('naclId'); bool('egress'); ruleNo(); break;
+      case 'remove-route': str('routeTableId'); str('destination'); break;
+      case 'remove-public-ip': str('eniId'); str('publicIp'); break;
+      case 'detach-sg': str('eniId'); str('groupId'); break;
+      default: bad('unknown "kind"');
+    }
+  });
+}
+
 function findRule(model: NetworkModel, ruleId: string): { group: SecurityGroup; rule: SgRule } {
   for (const group of model.securityGroups.values()) {
     const rule = group.ingress.find((r) => r.id === ruleId) ?? group.egress.find((r) => r.id === ruleId);
@@ -172,8 +207,15 @@ export function ruleText(r: SgRule): string {
   return `${proto === 'all' ? 'all traffic' : proto}${ports} ${r.egress ? 'to' : 'from'} ${peer}`;
 }
 
-const q = (s: string) => (/^[A-Za-z0-9_./:@=,+-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+/** POSIX shell quoting for one argument: plain words stay as they are, anything else is single-quoted. */
+export const shellQuote = (s: string) => (/^[A-Za-z0-9_./:@=,+-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+const q = shellQuote;
 const protoArg = (p: string) => (p === 'all' || p === '-1' ? '-1' : p);
+/** A number for a command line: anything else becomes 0, which AWS rejects, rather than text a shell would run. */
+const int = (n: unknown) => (Number.isSafeInteger(n) ? String(n) : '0');
+/** Text inside a "#" comment must stay on that line, or a pasted command block would run the rest. */
+// eslint-disable-next-line no-control-regex
+const oneLine = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ');
 
 /**
  * AWS CLI commands for a change. Every command is printed for review; none is
@@ -193,22 +235,30 @@ export function cliFor(model: NetworkModel, c: Change): string[] {
       const cidr = c.cidr ?? rule.cidr?.text;
       const from = c.fromPort ?? rule.fromPort ?? -1;
       const to = c.toPort ?? rule.toPort ?? -1;
-      const spec = [`IpProtocol=${protoArg(proto)}`, ...(hasPorts(rule.protocol) ? [`FromPort=${from}`, `ToPort=${to}`] : []), ...(cidr ? [`CidrIpv4=${cidr}`] : []), ...(!cidr && rule.referencedGroupId ? [`ReferencedGroupId=${rule.referencedGroupId}`] : []), ...(!cidr && rule.prefixListId ? [`PrefixListId=${rule.prefixListId}`] : []), ...(rule.description ? [`Description=${rule.description}`] : [])].join(',');
-      return [`aws ec2 modify-security-group-rules${region} --group-id ${q(group.id)} --security-group-rules ${q(`SecurityGroupRuleId=${rule.id},SecurityGroupRule={${spec}}`)}`];
+      // JSON, not shorthand: a description holding "," or "}" would otherwise change what the command sets.
+      const spec = {
+        IpProtocol: protoArg(proto),
+        ...(hasPorts(rule.protocol) ? { FromPort: from, ToPort: to } : {}),
+        ...(cidr ? { CidrIpv4: cidr } : rule.referencedGroupId ? { ReferencedGroupId: rule.referencedGroupId } : rule.prefixListId ? { PrefixListId: rule.prefixListId } : {}),
+        ...(rule.description ? { Description: rule.description } : {}),
+      };
+      return [`aws ec2 modify-security-group-rules${region} --group-id ${q(group.id)} --security-group-rules ${q(JSON.stringify([{ SecurityGroupRuleId: rule.id, SecurityGroupRule: spec }]))}`];
     }
     case 'add-sg-rule': {
-      const proto = protoArg(c.protocol);
-      const ports = hasPorts(normalizeProtocol(c.protocol)) ? `,FromPort=${c.fromPort ?? 0},ToPort=${c.toPort ?? c.fromPort ?? 65535}` : '';
-      const peer = c.cidr ? `,IpRanges=[{CidrIp=${c.cidr}${c.description ? `,Description=${c.description}` : ''}}]` : `,UserIdGroupPairs=[{GroupId=${c.referencedGroupId}}]`;
-      return [`aws ec2 authorize-security-group-${c.egress ? 'egress' : 'ingress'}${region} --group-id ${q(c.groupId)} --ip-permissions ${q(`IpProtocol=${proto}${ports}${peer}`)}`];
+      const perm = {
+        IpProtocol: protoArg(c.protocol),
+        ...(hasPorts(normalizeProtocol(c.protocol)) ? { FromPort: c.fromPort ?? 0, ToPort: c.toPort ?? c.fromPort ?? 65535 } : {}),
+        ...(c.cidr ? { IpRanges: [{ CidrIp: c.cidr, ...(c.description ? { Description: c.description } : {}) }] } : { UserIdGroupPairs: [{ GroupId: c.referencedGroupId }] }),
+      };
+      return [`aws ec2 authorize-security-group-${c.egress ? 'egress' : 'ingress'}${region} --group-id ${q(c.groupId)} --ip-permissions ${q(JSON.stringify([perm]))}`];
     }
     case 'add-nacl-entry': {
       const proto = protoArg(String(normalizeProtocol(c.protocol)));
-      const ports = hasPorts(normalizeProtocol(c.protocol)) ? ` --port-range From=${c.fromPort ?? 0},To=${c.toPort ?? c.fromPort ?? 65535}` : '';
-      return [`aws ec2 create-network-acl-entry${region} --network-acl-id ${q(c.naclId)} ${c.egress ? '--egress' : '--ingress'} --rule-number ${c.ruleNumber} --protocol ${proto}${ports} --cidr-block ${q(c.cidr)} --rule-action ${c.action}`];
+      const ports = hasPorts(normalizeProtocol(c.protocol)) ? ` --port-range From=${int(c.fromPort ?? 0)},To=${int(c.toPort ?? c.fromPort ?? 65535)}` : '';
+      return [`aws ec2 create-network-acl-entry${region} --network-acl-id ${q(c.naclId)} ${c.egress ? '--egress' : '--ingress'} --rule-number ${int(c.ruleNumber)} --protocol ${q(proto)}${ports} --cidr-block ${q(c.cidr)} --rule-action ${c.action === 'allow' ? 'allow' : 'deny'}`];
     }
     case 'remove-nacl-entry':
-      return [`aws ec2 delete-network-acl-entry${region} --network-acl-id ${q(c.naclId)} ${c.egress ? '--egress' : '--ingress'} --rule-number ${c.ruleNumber}`];
+      return [`aws ec2 delete-network-acl-entry${region} --network-acl-id ${q(c.naclId)} ${c.egress ? '--egress' : '--ingress'} --rule-number ${int(c.ruleNumber)}`];
     case 'remove-route': {
       const flag = c.destination.startsWith('pl-') ? '--destination-prefix-list-id' : '--destination-cidr-block';
       return [`aws ec2 delete-route${region} --route-table-id ${q(c.routeTableId)} ${flag} ${q(c.destination)}`];
@@ -218,14 +268,14 @@ export function cliFor(model: NetworkModel, c: Change): string[] {
       const pub = eni?.publicAddresses.find((p) => p.publicIp === c.publicIp);
       return pub?.elastic
         ? [`# Find the association ID, then disassociate the Elastic IP:`, `aws ec2 describe-addresses${region} --public-ips ${q(c.publicIp)} --query 'Addresses[0].AssociationId' --output text`, `aws ec2 disassociate-address${region} --association-id <association-id>`]
-        : [`# ${c.publicIp} is an auto-assigned public IP. It is released when the instance stops, or by replacing the interface; there is no single CLI call to remove it.`];
+        : [`# ${oneLine(c.publicIp)} is an auto-assigned public IP. It is released when the instance stops, or by replacing the interface; there is no single CLI call to remove it.`];
     }
     case 'detach-sg': {
       const eni = model.enis.get(c.eniId);
       const keep = (eni?.groupIds ?? []).filter((g) => g !== c.groupId);
       return keep.length
         ? [`aws ec2 modify-network-interface-attribute${region} --network-interface-id ${q(c.eniId)} --groups ${keep.map(q).join(' ')}`]
-        : [`# ${c.eniId} must keep at least one security group; attach a replacement in the same command.`];
+        : [`# ${oneLine(c.eniId)} must keep at least one security group; attach a replacement in the same command.`];
     }
   }
 }

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+# Snapshots of real accounts never belong in the repo. Fixtures live in fixtures/.
+*snapshot*.json
+!fixtures/**/snapshot.json
+.env
+.aws/
+site/

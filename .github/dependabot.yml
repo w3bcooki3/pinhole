@@ -1,0 +1,14 @@
+# Weekly update pull requests for npm packages and the pinned GitHub Actions.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      aws-sdk:
+        patterns: ["@aws-sdk/*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

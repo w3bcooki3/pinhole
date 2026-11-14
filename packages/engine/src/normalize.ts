@@ -193,7 +193,7 @@ export function normalize(input: unknown): NetworkModel {
   const listIds = new Set<string>([...(ec2.ManagedPrefixLists ?? []).map((p) => p.PrefixListId), ...Object.keys(entriesById)]);
   for (const id of listIds) {
     const meta = (ec2.ManagedPrefixLists ?? []).find((p) => p.PrefixListId === id);
-    const raw = entriesById[id];
+    const raw = Object.hasOwn(entriesById, id) ? entriesById[id] : undefined;
     const entries: Cidr[] = [];
     let hasIpv6 = false;
     for (const e of raw ?? []) {
@@ -348,7 +348,7 @@ export function normalize(input: unknown): NetworkModel {
   }
   const tgwRoutes = ec2.TransitGatewayRoutes ?? {};
   for (const t of ec2.TransitGatewayRouteTables ?? []) {
-    const raw = tgwRoutes[t.TransitGatewayRouteTableId];
+    const raw = Object.hasOwn(tgwRoutes, t.TransitGatewayRouteTableId) ? tgwRoutes[t.TransitGatewayRouteTableId] : undefined;
     model.tgwRouteTables.set(t.TransitGatewayRouteTableId, {
       id: t.TransitGatewayRouteTableId,
       tgwId: t.TransitGatewayId,
@@ -443,7 +443,7 @@ export function normalize(input: unknown): NetworkModel {
     model.listeners.push({ arn: l.ListenerArn, loadBalancerArn: l.LoadBalancerArn, port: l.Port ?? 0, protocol: l.Protocol ?? 'TCP', targetGroupArns: [...tgs] });
   }
   for (const tg of elb.TargetGroups ?? []) {
-    const attrs = elb.TargetGroupAttributes?.[tg.TargetGroupArn];
+    const attrs = elb.TargetGroupAttributes && Object.hasOwn(elb.TargetGroupAttributes, tg.TargetGroupArn) ? elb.TargetGroupAttributes[tg.TargetGroupArn] : undefined;
     const pci = attrs?.find((a) => a.Key === 'preserve_client_ip.enabled')?.Value;
     const targetType = (['instance', 'ip', 'lambda', 'alb'].includes(tg.TargetType ?? '') ? tg.TargetType : 'instance') as TargetGroup['targetType'];
     model.targetGroups.set(tg.TargetGroupArn, {
@@ -455,7 +455,7 @@ export function normalize(input: unknown): NetworkModel {
       ...(tg.VpcId ? { vpcId: tg.VpcId } : {}),
       ...(tg.HealthCheckPort ? { healthCheckPort: tg.HealthCheckPort } : {}),
       ...(pci !== undefined ? { preserveClientIp: pci === 'true' } : {}),
-      targets: (elb.TargetHealth?.[tg.TargetGroupArn] ?? [])
+      targets: ((elb.TargetHealth && Object.hasOwn(elb.TargetHealth, tg.TargetGroupArn) ? elb.TargetHealth[tg.TargetGroupArn] : undefined) ?? [])
         .filter((t) => t.Target?.Id)
         .map((t) => ({
           id: t.Target!.Id!,
