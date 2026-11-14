@@ -1,0 +1,39 @@
+{
+  "description": "NACLs are stateless, so the response to an inbound HTTPS request needs an outbound rule for the client's ephemeral port. Three identical web servers differ only in their subnet's outbound NACL rule.",
+  "docs": [
+    "https://docs.aws.amazon.com/vpc/latest/userguide/custom-network-acl.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html"
+  ],
+  "paths": [
+    {
+      "name": "outbound 1024-65535 covers every client OS",
+      "from": { "internet": "198.51.100.7" }, "to": { "eni": "eni-full" }, "protocol": "tcp", "port": 443,
+      "expect": { "verdict": "reachable", "returnPath": "all" }
+    },
+    {
+      "name": "outbound 32768-61000 (Linux range) only partly covers Windows/macOS clients (49152-65535)",
+      "from": { "internet": "198.51.100.7" }, "to": { "eni": "eni-linux" }, "protocol": "tcp", "port": 443,
+      "expect": { "verdict": "reachable", "returnPath": "partial" }
+    },
+    {
+      "name": "outbound allows only port 443, so responses to ephemeral ports hit the * rule",
+      "from": { "internet": "198.51.100.7" }, "to": { "eni": "eni-none" }, "protocol": "tcp", "port": 443,
+      "expect": { "verdict": "blocked", "blockedAt": "return-nacl" }
+    },
+    {
+      "name": "the SG does not allow SSH",
+      "from": { "internet": "198.51.100.7" }, "to": { "eni": "eni-full" }, "protocol": "tcp", "port": 22,
+      "expect": { "verdict": "blocked", "blockedAt": "dest-nacl-ingress" }
+    }
+  ],
+  "exposure": {
+    "exposed": [
+      { "resource": "eni-full", "protocol": "tcp", "port": 443, "returnPath": "all" },
+      { "resource": "eni-linux", "protocol": "tcp", "port": 443, "returnPath": "partial" }
+    ],
+    "notExposed": [
+      { "resource": "eni-none", "protocol": "tcp", "port": 443 },
+      { "resource": "eni-full", "protocol": "tcp", "port": 22 }
+    ]
+  }
+}

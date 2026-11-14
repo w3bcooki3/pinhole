@@ -1,0 +1,37 @@
+{
+  "description": "An internet-facing ALB in two public subnets forwards 443 to instances on 8080 in a private subnet. One target's security group references the ALB's group; the other uses a CIDR that does not cover the ALB nodes.",
+  "docs": [
+    "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-update-security-groups.html",
+    "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-register-targets.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/custom-network-acl.html"
+  ],
+  "paths": [
+    {
+      "name": "ALB node to target with SG reference to the ALB group",
+      "from": { "eni": "eni-alb-a" }, "to": { "instance": "i-app1" }, "protocol": "tcp", "port": 8080,
+      "expect": { "verdict": "reachable", "sgRules": ["sgr-app-from-alb"] }
+    },
+    {
+      "name": "ALB node 10.0.1.50 is outside 10.0.10.0/24",
+      "from": { "eni": "eni-alb-a" }, "to": { "instance": "i-app2" }, "protocol": "tcp", "port": 8080,
+      "expect": { "verdict": "blocked", "blockedAt": "dest-sg-ingress" }
+    },
+    {
+      "name": "targets have no public IP",
+      "from": { "internet": "198.51.100.7" }, "to": { "instance": "i-app1" }, "protocol": "tcp", "port": 8080,
+      "expect": { "verdict": "blocked", "blockedAt": "public-ip" }
+    }
+  ],
+  "exposure": {
+    "exposed": [{ "resource": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/web/0123456789abcdef", "protocol": "tcp", "port": 443, "returnPath": "all" }],
+    "notExposed": [
+      { "resource": "eni-app1", "protocol": "tcp", "port": 8080 },
+      { "resource": "eni-alb-a", "protocol": "tcp", "port": 443 }
+    ],
+    "exactResources": ["arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/web/0123456789abcdef"],
+    "lbTargets": [
+      { "lb": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/web/0123456789abcdef", "listenerPort": 443, "target": "i-app1", "port": 8080, "verdict": "reachable" },
+      { "lb": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/web/0123456789abcdef", "listenerPort": 443, "target": "i-app2", "port": 8080, "verdict": "blocked" }
+    ]
+  }
+}

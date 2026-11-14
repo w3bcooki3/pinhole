@@ -1,0 +1,19 @@
+{
+  "description": "vpc-a routes to vpc-b over an active peering connection, but vpc-b has no route back. SYN packets arrive; responses cannot leave vpc-b.",
+  "docs": [
+    "https://docs.aws.amazon.com/vpc/latest/peering/vpc-peering-routing.html",
+    "https://docs.aws.amazon.com/vpc/latest/peering/vpc-peering-basics.html"
+  ],
+  "paths": [
+    {
+      "name": "forward path works, return route missing in vpc-b",
+      "from": { "eni": "eni-a" }, "to": { "eni": "eni-b" }, "protocol": "tcp", "port": 22,
+      "expect": { "verdict": "blocked", "blockedAt": "return-route", "via": ["pcx-ab"] }
+    },
+    {
+      "name": "the other direction fails immediately: vpc-b has no route to 10.0.0.0/16",
+      "from": { "eni": "eni-b" }, "to": { "eni": "eni-a" }, "protocol": "tcp", "port": 22,
+      "expect": { "verdict": "blocked", "blockedAt": "route" }
+    }
+  ]
+}

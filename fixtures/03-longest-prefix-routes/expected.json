@@ -1,0 +1,19 @@
+{
+  "description": "vpc-a routes 10.1.0.0/16 to peer B but a more specific 10.1.1.0/24 to peer C. Longest prefix wins, and peering is not transitive, so 10.1.1.0/24 becomes unreachable from A.",
+  "docs": [
+    "https://docs.aws.amazon.com/vpc/latest/userguide/route-tables-priority.html",
+    "https://docs.aws.amazon.com/vpc/latest/peering/vpc-peering-basics.html"
+  ],
+  "paths": [
+    {
+      "name": "10.1.2.10 matches only the /16 and goes to pcx-ab",
+      "from": { "eni": "eni-a" }, "to": { "eni": "eni-b2" }, "protocol": "tcp", "port": 22,
+      "expect": { "verdict": "reachable", "via": ["pcx-ab"] }
+    },
+    {
+      "name": "10.1.1.10 matches the /24 to pcx-ac first; vpc-c does not contain it and will not forward",
+      "from": { "eni": "eni-a" }, "to": { "eni": "eni-b1" }, "protocol": "tcp", "port": 22,
+      "expect": { "verdict": "blocked", "blockedAt": "peering", "via": ["pcx-ac"] }
+    }
+  ]
+}

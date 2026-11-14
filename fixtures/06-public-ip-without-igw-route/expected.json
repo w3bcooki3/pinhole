@@ -1,0 +1,33 @@
+{
+  "description": "A public IP alone does not make an interface reachable: its subnet also needs a route to an internet gateway. Here an Elastic IP sits on an instance in a subnet whose default route points at a NAT gateway.",
+  "docs": [
+    "https://docs.aws.amazon.com/vpc/latest/userguide/working-with-igw.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html"
+  ],
+  "paths": [
+    {
+      "name": "control: public IP + IGW route + SG/NACL allow",
+      "from": { "internet": "198.51.100.7" }, "to": { "eni": "eni-public" }, "protocol": "tcp", "port": 22,
+      "expect": { "verdict": "reachable", "returnPath": "all" }
+    },
+    {
+      "name": "Elastic IP, but the subnet's route for the client points at nat-1, not igw-1",
+      "from": { "internet": "198.51.100.7" }, "to": { "eni": "eni-private-eip" }, "protocol": "tcp", "port": 22,
+      "expect": { "verdict": "blocked", "blockedAt": "return-route" }
+    },
+    {
+      "name": "IGW route, but no public IP",
+      "from": { "internet": "198.51.100.7" }, "to": { "eni": "eni-no-public-ip" }, "protocol": "tcp", "port": 22,
+      "expect": { "verdict": "blocked", "blockedAt": "public-ip" }
+    }
+  ],
+  "exposure": {
+    "exposed": [{ "resource": "eni-public", "protocol": "tcp", "port": 22, "returnPath": "all" }],
+    "notExposed": [
+      { "resource": "eni-private-eip", "protocol": "tcp", "port": 22 },
+      { "resource": "eni-no-public-ip", "protocol": "tcp", "port": 22 },
+      { "resource": "eni-nat", "protocol": "tcp", "port": 22 }
+    ],
+    "exactResources": ["eni-public"]
+  }
+}

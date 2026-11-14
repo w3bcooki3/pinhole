@@ -1,0 +1,680 @@
+{
+ "schemaVersion": 1,
+ "source": "fixture",
+ "accountId": "111122223333",
+ "region": "us-east-1",
+ "ec2": {
+  "Vpcs": [
+   {
+    "VpcId": "vpc-1",
+    "CidrBlock": "10.0.0.0/16"
+   }
+  ],
+  "Subnets": [
+   {
+    "SubnetId": "subnet-public",
+    "VpcId": "vpc-1",
+    "CidrBlock": "10.0.1.0/24",
+    "AvailabilityZone": "us-east-1a"
+   },
+   {
+    "SubnetId": "subnet-app",
+    "VpcId": "vpc-1",
+    "CidrBlock": "10.0.2.0/24",
+    "AvailabilityZone": "us-east-1a"
+   },
+   {
+    "SubnetId": "subnet-data",
+    "VpcId": "vpc-1",
+    "CidrBlock": "10.0.3.0/24",
+    "AvailabilityZone": "us-east-1a"
+   }
+  ],
+  "InternetGateways": [
+   {
+    "InternetGatewayId": "igw-1",
+    "Attachments": [
+     {
+      "VpcId": "vpc-1",
+      "State": "available"
+     }
+    ]
+   }
+  ],
+  "NatGateways": [
+   {
+    "NatGatewayId": "nat-1",
+    "VpcId": "vpc-1",
+    "SubnetId": "subnet-public",
+    "State": "available",
+    "ConnectivityType": "public"
+   }
+  ],
+  "RouteTables": [
+   {
+    "RouteTableId": "rtb-public",
+    "VpcId": "vpc-1",
+    "Associations": [
+     {
+      "SubnetId": "subnet-public"
+     }
+    ],
+    "Routes": [
+     {
+      "DestinationCidrBlock": "10.0.0.0/16",
+      "GatewayId": "local",
+      "State": "active",
+      "Origin": "CreateRouteTable"
+     },
+     {
+      "DestinationCidrBlock": "0.0.0.0/0",
+      "GatewayId": "igw-1",
+      "State": "active",
+      "Origin": "CreateRoute"
+     }
+    ]
+   },
+   {
+    "RouteTableId": "rtb-app",
+    "VpcId": "vpc-1",
+    "Associations": [
+     {
+      "SubnetId": "subnet-app"
+     }
+    ],
+    "Routes": [
+     {
+      "DestinationCidrBlock": "10.0.0.0/16",
+      "GatewayId": "local",
+      "State": "active",
+      "Origin": "CreateRouteTable"
+     },
+     {
+      "DestinationCidrBlock": "0.0.0.0/0",
+      "NatGatewayId": "nat-1",
+      "State": "active",
+      "Origin": "CreateRoute"
+     }
+    ]
+   },
+   {
+    "RouteTableId": "rtb-data",
+    "VpcId": "vpc-1",
+    "Associations": [
+     {
+      "Main": true
+     },
+     {
+      "SubnetId": "subnet-data"
+     }
+    ],
+    "Routes": [
+     {
+      "DestinationCidrBlock": "10.0.0.0/16",
+      "GatewayId": "local",
+      "State": "active",
+      "Origin": "CreateRouteTable"
+     }
+    ]
+   }
+  ],
+  "NetworkAcls": [
+   {
+    "NetworkAclId": "acl-default",
+    "VpcId": "vpc-1",
+    "IsDefault": true,
+    "Associations": [
+     {
+      "SubnetId": "subnet-public"
+     },
+     {
+      "SubnetId": "subnet-app"
+     }
+    ],
+    "Entries": [
+     {
+      "RuleNumber": 100,
+      "Protocol": "-1",
+      "RuleAction": "allow",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 100,
+      "Protocol": "-1",
+      "RuleAction": "allow",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     }
+    ]
+   },
+   {
+    "NetworkAclId": "acl-data",
+    "VpcId": "vpc-1",
+    "IsDefault": false,
+    "Associations": [
+     {
+      "SubnetId": "subnet-data"
+     }
+    ],
+    "Entries": [
+     {
+      "RuleNumber": 100,
+      "Protocol": "6",
+      "RuleAction": "allow",
+      "Egress": false,
+      "CidrBlock": "10.0.2.0/24",
+      "PortRange": {
+       "From": 5432,
+       "To": 5432
+      }
+     },
+     {
+      "RuleNumber": 110,
+      "Protocol": "6",
+      "RuleAction": "allow",
+      "Egress": false,
+      "CidrBlock": "10.0.0.0/16",
+      "PortRange": {
+       "From": 22,
+       "To": 22
+      }
+     },
+     {
+      "RuleNumber": 120,
+      "Protocol": "6",
+      "RuleAction": "allow",
+      "Egress": false,
+      "CidrBlock": "10.0.2.0/24",
+      "PortRange": {
+       "From": 5432,
+       "To": 5432
+      }
+     },
+     {
+      "RuleNumber": 130,
+      "Protocol": "6",
+      "RuleAction": "allow",
+      "Egress": false,
+      "CidrBlock": "10.0.2.0/24",
+      "PortRange": {
+       "From": 6379,
+       "To": 6379
+      }
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 100,
+      "Protocol": "6",
+      "RuleAction": "allow",
+      "Egress": true,
+      "CidrBlock": "10.0.0.0/16",
+      "PortRange": {
+       "From": 1024,
+       "To": 65535
+      }
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     }
+    ]
+   }
+  ],
+  "SecurityGroups": [
+   {
+    "GroupId": "sg-bastion",
+    "GroupName": "bastion",
+    "VpcId": "vpc-1"
+   },
+   {
+    "GroupId": "sg-web",
+    "GroupName": "web",
+    "VpcId": "vpc-1"
+   },
+   {
+    "GroupId": "sg-app",
+    "GroupName": "app",
+    "VpcId": "vpc-1"
+   },
+   {
+    "GroupId": "sg-db",
+    "GroupName": "db",
+    "VpcId": "vpc-1"
+   },
+   {
+    "GroupId": "sg-cache",
+    "GroupName": "cache",
+    "VpcId": "vpc-1"
+   },
+   {
+    "GroupId": "sg-unused",
+    "GroupName": "old-migration",
+    "VpcId": "vpc-1"
+   }
+  ],
+  "SecurityGroupRules": [
+   {
+    "SecurityGroupRuleId": "sgr-bastion-ssh-world",
+    "GroupId": "sg-bastion",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 22,
+    "ToPort": 22,
+    "CidrIpv4": "0.0.0.0/0",
+    "Description": "SSH from anywhere"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-bastion-out",
+    "GroupId": "sg-bastion",
+    "IsEgress": true,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-web-https",
+    "GroupId": "sg-web",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 443,
+    "ToPort": 443,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-web-https-partner",
+    "GroupId": "sg-web",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 443,
+    "ToPort": 443,
+    "CidrIpv4": "203.0.113.0/24",
+    "Description": "partner range, already covered"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-web-ssh-bastion",
+    "GroupId": "sg-web",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 22,
+    "ToPort": 22,
+    "ReferencedGroupInfo": {
+     "GroupId": "sg-bastion",
+     "UserId": "111122223333"
+    }
+   },
+   {
+    "SecurityGroupRuleId": "sgr-web-out",
+    "GroupId": "sg-web",
+    "IsEgress": true,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-app-8080-web",
+    "GroupId": "sg-app",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 8080,
+    "ToPort": 8080,
+    "ReferencedGroupInfo": {
+     "GroupId": "sg-web",
+     "UserId": "111122223333"
+    }
+   },
+   {
+    "SecurityGroupRuleId": "sgr-app-ssh-bastion",
+    "GroupId": "sg-app",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 22,
+    "ToPort": 22,
+    "ReferencedGroupInfo": {
+     "GroupId": "sg-bastion",
+     "UserId": "111122223333"
+    }
+   },
+   {
+    "SecurityGroupRuleId": "sgr-app-old",
+    "GroupId": "sg-app",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 9000,
+    "ToPort": 9000,
+    "ReferencedGroupInfo": {
+     "GroupId": "sg-deleted",
+     "UserId": "111122223333"
+    }
+   },
+   {
+    "SecurityGroupRuleId": "sgr-app-out",
+    "GroupId": "sg-app",
+    "IsEgress": true,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-db-pg-app",
+    "GroupId": "sg-db",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 5432,
+    "ToPort": 5432,
+    "ReferencedGroupInfo": {
+     "GroupId": "sg-app",
+     "UserId": "111122223333"
+    }
+   },
+   {
+    "SecurityGroupRuleId": "sgr-db-ssh-vpc",
+    "GroupId": "sg-db",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 22,
+    "ToPort": 22,
+    "CidrIpv4": "10.0.0.0/16",
+    "Description": "SSH from the whole VPC"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-db-out",
+    "GroupId": "sg-db",
+    "IsEgress": true,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-cache-redis",
+    "GroupId": "sg-cache",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 6379,
+    "ToPort": 6379,
+    "CidrIpv4": "10.0.0.0/8"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-cache-out",
+    "GroupId": "sg-cache",
+    "IsEgress": true,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-unused-all",
+    "GroupId": "sg-unused",
+    "IsEgress": false,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "0.0.0.0/0"
+   }
+  ],
+  "NetworkInterfaces": [
+   {
+    "NetworkInterfaceId": "eni-bastion",
+    "SubnetId": "subnet-public",
+    "VpcId": "vpc-1",
+    "InterfaceType": "interface",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.1.10",
+      "Primary": true,
+      "Association": {
+       "PublicIp": "52.0.0.10",
+       "IpOwnerId": "111122223333"
+      }
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-bastion"
+     }
+    ],
+    "Attachment": {
+     "InstanceId": "i-bastion",
+     "DeviceIndex": 0
+    }
+   },
+   {
+    "NetworkInterfaceId": "eni-web",
+    "SubnetId": "subnet-public",
+    "VpcId": "vpc-1",
+    "InterfaceType": "interface",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.1.20",
+      "Primary": true,
+      "Association": {
+       "PublicIp": "52.0.0.20",
+       "IpOwnerId": "amazon"
+      }
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-web"
+     }
+    ],
+    "Attachment": {
+     "InstanceId": "i-web",
+     "DeviceIndex": 0
+    }
+   },
+   {
+    "NetworkInterfaceId": "eni-app",
+    "SubnetId": "subnet-app",
+    "VpcId": "vpc-1",
+    "InterfaceType": "interface",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.2.10",
+      "Primary": true
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-app"
+     }
+    ],
+    "Attachment": {
+     "InstanceId": "i-app",
+     "DeviceIndex": 0
+    }
+   },
+   {
+    "NetworkInterfaceId": "eni-db",
+    "SubnetId": "subnet-data",
+    "VpcId": "vpc-1",
+    "InterfaceType": "interface",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.3.10",
+      "Primary": true
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-db"
+     }
+    ],
+    "Attachment": {
+     "InstanceId": "i-db",
+     "DeviceIndex": 0
+    }
+   },
+   {
+    "NetworkInterfaceId": "eni-cache",
+    "SubnetId": "subnet-data",
+    "VpcId": "vpc-1",
+    "InterfaceType": "interface",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.3.20",
+      "Primary": true
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-cache"
+     }
+    ],
+    "Attachment": {
+     "InstanceId": "i-cache",
+     "DeviceIndex": 0
+    }
+   },
+   {
+    "NetworkInterfaceId": "eni-nat",
+    "SubnetId": "subnet-public",
+    "VpcId": "vpc-1",
+    "InterfaceType": "nat_gateway",
+    "RequesterManaged": true,
+    "Description": "Interface for NAT Gateway nat-1",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.1.5",
+      "Primary": true,
+      "Association": {
+       "PublicIp": "52.0.0.5",
+       "IpOwnerId": "111122223333"
+      }
+     }
+    ],
+    "Groups": []
+   }
+  ],
+  "Instances": [
+   {
+    "InstanceId": "i-bastion",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "bastion"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-bastion",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   },
+   {
+    "InstanceId": "i-web",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "web"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-web",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   },
+   {
+    "InstanceId": "i-app",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "app"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-app",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   },
+   {
+    "InstanceId": "i-db",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "orders-db"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-db",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   },
+   {
+    "InstanceId": "i-cache",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "session-cache"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-cache",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   }
+  ]
+ }
+}

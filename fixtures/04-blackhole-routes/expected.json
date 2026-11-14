@@ -1,0 +1,25 @@
+{
+  "description": "Blackhole routes in both a VPC route table (target peering deleted) and a transit gateway route table (static blackhole for one /24). A blackhole that is the best match drops the packet; a less specific active route does not rescue it.",
+  "docs": [
+    "https://docs.aws.amazon.com/vpc/latest/userguide/route-tables-priority.html",
+    "https://docs.aws.amazon.com/vpc/latest/tgw/tgw-route-tables.html",
+    "https://docs.aws.amazon.com/vpc/latest/tgw/tgw-nacls.html"
+  ],
+  "paths": [
+    {
+      "name": "via transit gateway, active propagated route",
+      "from": { "eni": "eni-a" }, "to": { "eni": "eni-c1" }, "protocol": "tcp", "port": 22,
+      "expect": { "verdict": "reachable", "via": ["tgw-1", "tgw-rtb-1", "tgw-attach-c"] }
+    },
+    {
+      "name": "TGW static blackhole 10.2.9.0/24 beats propagated 10.2.0.0/16",
+      "from": { "eni": "eni-a" }, "to": { "eni": "eni-c9" }, "protocol": "tcp", "port": 22,
+      "expect": { "verdict": "blocked", "blockedAt": "tgw-route" }
+    },
+    {
+      "name": "VPC route to a deleted peering connection is a blackhole",
+      "from": { "eni": "eni-a" }, "to": { "ip": "10.1.0.5" }, "protocol": "tcp", "port": 22,
+      "expect": { "verdict": "blocked", "blockedAt": "route" }
+    }
+  ]
+}

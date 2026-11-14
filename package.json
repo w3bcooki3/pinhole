@@ -1,0 +1,36 @@
+{
+  "name": "pinhole-monorepo",
+  "private": true,
+  "description": "Offline AWS network reachability analysis",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/engine",
+    "packages/collector",
+    "packages/cli"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -b packages/engine packages/collector packages/cli",
+    "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo",
+    "typecheck": "tsc -b packages/engine packages/collector packages/cli --pretty",
+    "test": "vitest run",
+    "test:fixtures": "vitest run packages/engine/test/fixtures.test.ts",
+    "fixture-count": "node scripts/fixture-count.mjs",
+    "build:web": "node scripts/build-web.mjs",
+    "typecheck:web": "tsc -p packages/web/tsconfig.json",
+    "bench": "node scripts/bench-engine.mjs"
+  },
+  "devDependencies": {
+    "@fontsource/geist-mono": "^5.3.0",
+    "@fontsource/inter": "^5.3.0",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.2",
+    "jsdom": "^31.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^5.1.0"
+  }
+}

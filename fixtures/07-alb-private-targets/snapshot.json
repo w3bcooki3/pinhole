@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 1,
+  "source": "fixture",
+  "accountId": "111122223333",
+  "region": "us-east-1",
+  "ec2": {
+    "Vpcs": [{ "VpcId": "vpc-1", "CidrBlock": "10.0.0.0/16" }],
+    "Subnets": [
+      { "SubnetId": "subnet-pub-a", "VpcId": "vpc-1", "CidrBlock": "10.0.1.0/24", "AvailabilityZone": "us-east-1a" },
+      { "SubnetId": "subnet-pub-b", "VpcId": "vpc-1", "CidrBlock": "10.0.2.0/24", "AvailabilityZone": "us-east-1b" },
+      { "SubnetId": "subnet-app", "VpcId": "vpc-1", "CidrBlock": "10.0.10.0/24", "AvailabilityZone": "us-east-1a" }
+    ],
+    "InternetGateways": [{ "InternetGatewayId": "igw-1", "Attachments": [{ "VpcId": "vpc-1", "State": "available" }] }],
+    "NatGateways": [{ "NatGatewayId": "nat-1", "VpcId": "vpc-1", "SubnetId": "subnet-pub-a", "State": "available", "ConnectivityType": "public" }],
+    "RouteTables": [
+      {
+        "RouteTableId": "rtb-public", "VpcId": "vpc-1", "Associations": [{ "SubnetId": "subnet-pub-a" }, { "SubnetId": "subnet-pub-b" }],
+        "Routes": [
+          { "DestinationCidrBlock": "10.0.0.0/16", "GatewayId": "local", "State": "active", "Origin": "CreateRouteTable" },
+          { "DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "igw-1", "State": "active", "Origin": "CreateRoute" }
+        ]
+      },
+      {
+        "RouteTableId": "rtb-app", "VpcId": "vpc-1", "Associations": [{ "Main": true }, { "SubnetId": "subnet-app" }],
+        "Routes": [
+          { "DestinationCidrBlock": "10.0.0.0/16", "GatewayId": "local", "State": "active", "Origin": "CreateRouteTable" },
+          { "DestinationCidrBlock": "0.0.0.0/0", "NatGatewayId": "nat-1", "State": "active", "Origin": "CreateRoute" }
+        ]
+      }
+    ],
+    "NetworkAcls": [
+      {
+        "NetworkAclId": "acl-public", "VpcId": "vpc-1", "IsDefault": false, "Associations": [{ "SubnetId": "subnet-pub-a" }, { "SubnetId": "subnet-pub-b" }],
+        "Entries": [
+          { "RuleNumber": 100, "Protocol": "6", "RuleAction": "allow", "Egress": false, "CidrBlock": "0.0.0.0/0", "PortRange": { "From": 443, "To": 443 } },
+          { "RuleNumber": 110, "Protocol": "6", "RuleAction": "allow", "Egress": false, "CidrBlock": "10.0.10.0/24", "PortRange": { "From": 1024, "To": 65535 } },
+          { "RuleNumber": 32767, "Protocol": "-1", "RuleAction": "deny", "Egress": false, "CidrBlock": "0.0.0.0/0" },
+          { "RuleNumber": 100, "Protocol": "6", "RuleAction": "allow", "Egress": true, "CidrBlock": "0.0.0.0/0", "PortRange": { "From": 1024, "To": 65535 } },
+          { "RuleNumber": 32767, "Protocol": "-1", "RuleAction": "deny", "Egress": true, "CidrBlock": "0.0.0.0/0" }
+        ]
+      },
+      {
+        "NetworkAclId": "acl-app", "VpcId": "vpc-1", "IsDefault": false, "Associations": [{ "SubnetId": "subnet-app" }],
+        "Entries": [
+          { "RuleNumber": 100, "Protocol": "6", "RuleAction": "allow", "Egress": false, "CidrBlock": "10.0.0.0/16", "PortRange": { "From": 8080, "To": 8080 } },
+          { "RuleNumber": 32767, "Protocol": "-1", "RuleAction": "deny", "Egress": false, "CidrBlock": "0.0.0.0/0" },
+          { "RuleNumber": 100, "Protocol": "6", "RuleAction": "allow", "Egress": true, "CidrBlock": "10.0.0.0/16", "PortRange": { "From": 1024, "To": 65535 } },
+          { "RuleNumber": 32767, "Protocol": "-1", "RuleAction": "deny", "Egress": true, "CidrBlock": "0.0.0.0/0" }
+        ]
+      }
+    ],
+    "SecurityGroups": [
+      { "GroupId": "sg-alb", "GroupName": "alb", "VpcId": "vpc-1" },
+      { "GroupId": "sg-app", "GroupName": "app", "VpcId": "vpc-1" },
+      { "GroupId": "sg-app-wrong", "GroupName": "app-wrong-cidr", "VpcId": "vpc-1" }
+    ],
+    "SecurityGroupRules": [
+      { "SecurityGroupRuleId": "sgr-alb-https", "GroupId": "sg-alb", "IsEgress": false, "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "CidrIpv4": "0.0.0.0/0" },
+      { "SecurityGroupRuleId": "sgr-alb-to-app", "GroupId": "sg-alb", "IsEgress": true, "IpProtocol": "tcp", "FromPort": 8080, "ToPort": 8080, "CidrIpv4": "10.0.10.0/24" },
+      { "SecurityGroupRuleId": "sgr-app-from-alb", "GroupId": "sg-app", "IsEgress": false, "IpProtocol": "tcp", "FromPort": 8080, "ToPort": 8080, "ReferencedGroupInfo": { "GroupId": "sg-alb" } },
+      { "SecurityGroupRuleId": "sgr-app-egress", "GroupId": "sg-app", "IsEgress": true, "IpProtocol": "-1", "FromPort": -1, "ToPort": -1, "CidrIpv4": "0.0.0.0/0" },
+      { "SecurityGroupRuleId": "sgr-app-wrong-cidr", "GroupId": "sg-app-wrong", "IsEgress": false, "IpProtocol": "tcp", "FromPort": 8080, "ToPort": 8080, "CidrIpv4": "10.0.10.0/24" }
+    ],
+    "NetworkInterfaces": [
+      {
+        "NetworkInterfaceId": "eni-alb-a", "SubnetId": "subnet-pub-a", "VpcId": "vpc-1", "InterfaceType": "interface", "RequesterManaged": true,
+        "Description": "ELB app/web/0123456789abcdef",
+        "PrivateIpAddresses": [{ "PrivateIpAddress": "10.0.1.50", "Primary": true, "Association": { "PublicIp": "52.0.1.50", "IpOwnerId": "amazon-elb" } }],
+        "Groups": [{ "GroupId": "sg-alb" }]
+      },
+      {
+        "NetworkInterfaceId": "eni-alb-b", "SubnetId": "subnet-pub-b", "VpcId": "vpc-1", "InterfaceType": "interface", "RequesterManaged": true,
+        "Description": "ELB app/web/0123456789abcdef",
+        "PrivateIpAddresses": [{ "PrivateIpAddress": "10.0.2.50", "Primary": true, "Association": { "PublicIp": "52.0.2.50", "IpOwnerId": "amazon-elb" } }],
+        "Groups": [{ "GroupId": "sg-alb" }]
+      },
+      {
+        "NetworkInterfaceId": "eni-app1", "SubnetId": "subnet-app", "VpcId": "vpc-1", "InterfaceType": "interface",
+        "PrivateIpAddresses": [{ "PrivateIpAddress": "10.0.10.11", "Primary": true }],
+        "Groups": [{ "GroupId": "sg-app" }], "Attachment": { "InstanceId": "i-app1", "DeviceIndex": 0 }
+      },
+      {
+        "NetworkInterfaceId": "eni-app2", "SubnetId": "subnet-app", "VpcId": "vpc-1", "InterfaceType": "interface",
+        "PrivateIpAddresses": [{ "PrivateIpAddress": "10.0.10.12", "Primary": true }],
+        "Groups": [{ "GroupId": "sg-app-wrong" }], "Attachment": { "InstanceId": "i-app2", "DeviceIndex": 0 }
+      }
+    ],
+    "Instances": [
+      { "InstanceId": "i-app1", "State": { "Name": "running" }, "NetworkInterfaces": [{ "NetworkInterfaceId": "eni-app1", "Attachment": { "DeviceIndex": 0 } }] },
+      { "InstanceId": "i-app2", "State": { "Name": "running" }, "NetworkInterfaces": [{ "NetworkInterfaceId": "eni-app2", "Attachment": { "DeviceIndex": 0 } }] }
+    ]
+  },
+  "elbv2": {
+    "LoadBalancers": [
+      {
+        "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/web/0123456789abcdef",
+        "LoadBalancerName": "web", "Type": "application", "Scheme": "internet-facing", "VpcId": "vpc-1",
+        "AvailabilityZones": [{ "SubnetId": "subnet-pub-a", "ZoneName": "us-east-1a" }, { "SubnetId": "subnet-pub-b", "ZoneName": "us-east-1b" }],
+        "SecurityGroups": ["sg-alb"]
+      }
+    ],
+    "Listeners": [
+      {
+        "ListenerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:listener/app/web/0123456789abcdef/aaaa",
+        "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/web/0123456789abcdef",
+        "Port": 443, "Protocol": "HTTPS",
+        "DefaultActions": [{ "Type": "forward", "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/app/1111" }]
+      }
+    ],
+    "TargetGroups": [
+      {
+        "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/app/1111",
+        "TargetGroupName": "app", "Protocol": "HTTP", "Port": 8080, "TargetType": "instance", "VpcId": "vpc-1", "HealthCheckPort": "traffic-port"
+      }
+    ],
+    "TargetHealth": {
+      "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/app/1111": [
+        { "Target": { "Id": "i-app1", "Port": 8080 }, "TargetHealth": { "State": "healthy" } },
+        { "Target": { "Id": "i-app2", "Port": 8080 }, "TargetHealth": { "State": "unhealthy" } }
+      ]
+    }
+  }
+}

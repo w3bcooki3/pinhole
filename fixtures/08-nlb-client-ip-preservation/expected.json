@@ -1,0 +1,21 @@
+{
+  "description": "Internet-facing NLB without security groups. With client IP preservation on, targets see the internet client's address, so a target SG that only allows the VPC CIDR blocks real traffic. With it off, targets see the NLB's private address and the same SG works.",
+  "docs": [
+    "https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-security-groups.html",
+    "https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html",
+    "https://docs.aws.amazon.com/elasticloadbalancing/latest/network/edit-target-group-attributes.html"
+  ],
+  "exposure": {
+    "exposed": [{ "resource": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/net/api/fedcba9876543210", "protocol": "tcp", "port": 5000, "returnPath": "all" }],
+    "notExposed": [
+      { "resource": "eni-nlb", "protocol": "tcp", "port": 5000 },
+      { "resource": "eni-open", "protocol": "tcp", "port": 5000 }
+    ],
+    "exactResources": ["arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/net/api/fedcba9876543210"],
+    "lbTargets": [
+      { "lb": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/net/api/fedcba9876543210", "listenerPort": 5000, "target": "i-open", "port": 5000, "verdict": "reachable" },
+      { "lb": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/net/api/fedcba9876543210", "listenerPort": 5000, "target": "i-vpc", "port": 5000, "verdict": "blocked" },
+      { "lb": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/net/api/fedcba9876543210", "listenerPort": 5000, "target": "10.0.10.23", "port": 5000, "verdict": "reachable" }
+    ]
+  }
+}

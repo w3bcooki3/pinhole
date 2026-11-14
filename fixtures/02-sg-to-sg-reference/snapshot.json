@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "source": "fixture",
+  "accountId": "111122223333",
+  "region": "us-east-1",
+  "ec2": {
+    "Vpcs": [{ "VpcId": "vpc-1", "CidrBlock": "10.0.0.0/16" }],
+    "Subnets": [
+      { "SubnetId": "subnet-app", "VpcId": "vpc-1", "CidrBlock": "10.0.1.0/24", "AvailabilityZone": "us-east-1a" },
+      { "SubnetId": "subnet-db", "VpcId": "vpc-1", "CidrBlock": "10.0.2.0/24", "AvailabilityZone": "us-east-1a" }
+    ],
+    "InternetGateways": [{ "InternetGatewayId": "igw-1", "Attachments": [{ "VpcId": "vpc-1", "State": "available" }] }],
+    "RouteTables": [
+      {
+        "RouteTableId": "rtb-main", "VpcId": "vpc-1",
+        "Associations": [{ "Main": true }],
+        "Routes": [
+          { "DestinationCidrBlock": "10.0.0.0/16", "GatewayId": "local", "State": "active", "Origin": "CreateRouteTable" },
+          { "DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "igw-1", "State": "active", "Origin": "CreateRoute" }
+        ]
+      }
+    ],
+    "NetworkAcls": [
+      {
+        "NetworkAclId": "acl-default", "VpcId": "vpc-1", "IsDefault": true,
+        "Associations": [{ "SubnetId": "subnet-app" }, { "SubnetId": "subnet-db" }],
+        "Entries": [
+          { "RuleNumber": 100, "Protocol": "-1", "RuleAction": "allow", "Egress": false, "CidrBlock": "0.0.0.0/0" },
+          { "RuleNumber": 32767, "Protocol": "-1", "RuleAction": "deny", "Egress": false, "CidrBlock": "0.0.0.0/0" },
+          { "RuleNumber": 100, "Protocol": "-1", "RuleAction": "allow", "Egress": true, "CidrBlock": "0.0.0.0/0" },
+          { "RuleNumber": 32767, "Protocol": "-1", "RuleAction": "deny", "Egress": true, "CidrBlock": "0.0.0.0/0" }
+        ]
+      }
+    ],
+    "SecurityGroups": [
+      { "GroupId": "sg-web", "GroupName": "web", "VpcId": "vpc-1" },
+      { "GroupId": "sg-other", "GroupName": "other", "VpcId": "vpc-1" },
+      { "GroupId": "sg-db", "GroupName": "db", "VpcId": "vpc-1" }
+    ],
+    "SecurityGroupRules": [
+      { "SecurityGroupRuleId": "sgr-web-https", "GroupId": "sg-web", "IsEgress": false, "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "CidrIpv4": "0.0.0.0/0" },
+      { "SecurityGroupRuleId": "sgr-web-egress", "GroupId": "sg-web", "IsEgress": true, "IpProtocol": "-1", "FromPort": -1, "ToPort": -1, "CidrIpv4": "0.0.0.0/0" },
+      { "SecurityGroupRuleId": "sgr-other-egress", "GroupId": "sg-other", "IsEgress": true, "IpProtocol": "-1", "FromPort": -1, "ToPort": -1, "CidrIpv4": "0.0.0.0/0" },
+      { "SecurityGroupRuleId": "sgr-db-from-web", "GroupId": "sg-db", "IsEgress": false, "IpProtocol": "tcp", "FromPort": 5432, "ToPort": 5432, "ReferencedGroupInfo": { "GroupId": "sg-web", "UserId": "111122223333" } },
+      { "SecurityGroupRuleId": "sgr-db-egress", "GroupId": "sg-db", "IsEgress": true, "IpProtocol": "-1", "FromPort": -1, "ToPort": -1, "CidrIpv4": "0.0.0.0/0" }
+    ],
+    "NetworkInterfaces": [
+      {
+        "NetworkInterfaceId": "eni-web", "SubnetId": "subnet-app", "VpcId": "vpc-1", "InterfaceType": "interface",
+        "PrivateIpAddresses": [{ "PrivateIpAddress": "10.0.1.10", "Primary": true, "Association": { "PublicIp": "52.0.0.10", "IpOwnerId": "amazon" } }],
+        "Groups": [{ "GroupId": "sg-web" }], "Attachment": { "InstanceId": "i-web", "DeviceIndex": 0 }
+      },
+      {
+        "NetworkInterfaceId": "eni-other", "SubnetId": "subnet-app", "VpcId": "vpc-1", "InterfaceType": "interface",
+        "PrivateIpAddresses": [{ "PrivateIpAddress": "10.0.1.11", "Primary": true }],
+        "Groups": [{ "GroupId": "sg-other" }], "Attachment": { "InstanceId": "i-other", "DeviceIndex": 0 }
+      },
+      {
+        "NetworkInterfaceId": "eni-db", "SubnetId": "subnet-db", "VpcId": "vpc-1", "InterfaceType": "interface",
+        "PrivateIpAddresses": [{ "PrivateIpAddress": "10.0.2.20", "Primary": true, "Association": { "PublicIp": "52.0.0.20", "IpOwnerId": "111122223333" } }],
+        "Groups": [{ "GroupId": "sg-db" }], "Attachment": { "InstanceId": "i-db", "DeviceIndex": 0 }
+      }
+    ],
+    "Instances": [
+      { "InstanceId": "i-web", "State": { "Name": "running" }, "NetworkInterfaces": [{ "NetworkInterfaceId": "eni-web", "Attachment": { "DeviceIndex": 0 } }], "Tags": [{ "Key": "Name", "Value": "web-1" }] },
+      { "InstanceId": "i-other", "State": { "Name": "running" }, "NetworkInterfaces": [{ "NetworkInterfaceId": "eni-other", "Attachment": { "DeviceIndex": 0 } }] },
+      { "InstanceId": "i-db", "State": { "Name": "running" }, "NetworkInterfaces": [{ "NetworkInterfaceId": "eni-db", "Attachment": { "DeviceIndex": 0 } }], "Tags": [{ "Key": "Name", "Value": "db-1" }] }
+    ]
+  }
+}

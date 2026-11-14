@@ -1,0 +1,93 @@
+{
+  "description": "Lateral movement in a three-tier VPC. A bastion with SSH open to the internet and a public web server are entry points. From there, security group references, a VPC-wide SSH rule and a 10.0.0.0/8 Redis rule decide what an attacker reaches next. Network ACLs do not apply between interfaces in the same subnet. The fixture also carries rule hygiene problems: a redundant rule, a shadowed NACL entry, a stale group reference and an unused group.",
+  "docs": [
+    "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/nacl-basics.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html"
+  ],
+  "paths": [
+    {
+      "name": "bastion to db on 22: sgr-db-ssh-vpc (10.0.0.0/16) and acl-data rule 110 allow it",
+      "from": { "eni": "eni-bastion" }, "to": { "eni": "eni-db" }, "protocol": "tcp", "port": 22,
+      "expect": { "verdict": "reachable", "sgRules": ["sgr-db-ssh-vpc"], "via": ["acl-data"] }
+    },
+    {
+      "name": "bastion to cache on 6379: the security group allows 10.0.0.0/8, but acl-data only admits 6379 from the app subnet",
+      "from": { "eni": "eni-bastion" }, "to": { "eni": "eni-cache" }, "protocol": "tcp", "port": 6379,
+      "expect": { "verdict": "blocked", "blockedAt": "dest-nacl-ingress" }
+    },
+    {
+      "name": "db to cache on 6379: same subnet, so acl-data is not evaluated",
+      "from": { "eni": "eni-db" }, "to": { "eni": "eni-cache" }, "protocol": "tcp", "port": 6379,
+      "expect": { "verdict": "reachable", "sgRules": ["sgr-cache-redis"] }
+    },
+    {
+      "name": "web to app on 8080, allowed by reference to sg-web",
+      "from": { "eni": "eni-web" }, "to": { "eni": "eni-app" }, "protocol": "tcp", "port": 8080,
+      "expect": { "verdict": "reachable", "sgRules": ["sgr-app-8080-web"] }
+    },
+    {
+      "name": "web to db on 5432: acl-data only admits Postgres from the app subnet, so traffic stops there before sg-db (which only allows sg-app) is checked",
+      "from": { "eni": "eni-web" }, "to": { "eni": "eni-db" }, "protocol": "tcp", "port": 5432,
+      "expect": { "verdict": "blocked", "blockedAt": "dest-nacl-ingress" }
+    }
+  ],
+  "exposure": {
+    "exposed": [
+      { "resource": "eni-bastion", "protocol": "tcp", "port": 22, "returnPath": "all" },
+      { "resource": "eni-web", "protocol": "tcp", "port": 443, "returnPath": "all" }
+    ],
+    "notExposed": [{ "resource": "eni-web", "protocol": "tcp", "port": 22 }],
+    "exactResources": ["eni-bastion", "eni-web"]
+  },
+  "lateral": {
+    "reach": [
+      { "from": "eni-bastion", "to": "eni-db", "services": ["tcp/22"] },
+      { "from": "eni-bastion", "to": "eni-cache", "services": [] },
+      { "from": "eni-app", "to": "eni-db", "services": ["tcp/22", "tcp/5432"] },
+      { "from": "eni-app", "to": "eni-cache", "services": ["tcp/6379"] },
+      { "from": "eni-web", "to": "eni-app", "services": ["tcp/8080"] },
+      { "from": "eni-db", "to": "eni-app", "services": [] }
+    ],
+    "chains": [
+      { "steps": ["eni-bastion", "eni-app", "eni-db"], "service": "tcp/5432", "severity": "critical", "entries": ["eni-bastion"] },
+      { "steps": ["eni-bastion", "eni-app", "eni-cache"], "service": "tcp/6379", "severity": "critical", "entries": ["eni-bastion", "eni-web"] },
+      { "steps": ["eni-bastion", "eni-db"], "service": "tcp/22", "severity": "critical", "entries": ["eni-bastion", "eni-web"] }
+    ],
+    "chainCount": 5,
+    "redundantNote": "web can SSH to the bastion, but the bastion's SSH is already open to the internet, so that chain adds nothing and is not reported",
+    "noChains": [
+      { "steps": ["eni-web", "eni-app", "eni-db"], "why": "web reaches app only on 8080, which is not a remote administration service, so the attacker cannot move on from app" }
+    ],
+    "topChain": { "steps": ["eni-bastion", "eni-app"], "endsWith": "data" }
+  },
+  "hygiene": {
+    "exact": [
+      "open-to-world sgr-bastion-ssh-world",
+      "broad-internal-source sgr-cache-redis",
+      "broad-internal-source sgr-db-ssh-vpc",
+      "shadowed-nacl-entry acl-data#ingress#120",
+      "stale-group-reference sgr-app-old",
+      "redundant-sg-rule sgr-web-https-partner",
+      "unused-security-group sg-unused"
+    ]
+  },
+  "fixes": [
+    { "resource": "eni-bastion", "protocol": "tcp", "port": 22, "best": "revoke-sg-rule sgr-bastion-ssh-world", "allVerified": true }
+  ],
+  "whatIf": [
+    {
+      "name": "removing the VPC-wide SSH rule on the database closes SSH to it from every entry point, but Redis on the cache is still reached through the app server",
+      "changes": [{ "kind": "revoke-sg-rule", "ruleId": "sgr-db-ssh-vpc" }],
+      "exposureUnchanged": true,
+      "chainsClosed": [["eni-bastion", "eni-db"]],
+      "chainsStillOpen": [["eni-bastion", "eni-app", "eni-cache"]]
+    },
+    {
+      "name": "narrowing the bastion's SSH rule to one office range narrows the exposure, it does not close it",
+      "changes": [{ "kind": "edit-sg-rule", "ruleId": "sgr-bastion-ssh-world", "cidr": "198.51.100.0/24" }],
+      "deltas": [{ "resource": "eni-bastion", "protocol": "tcp", "port": 22, "status": "narrowed" }]
+    }
+  ]
+}

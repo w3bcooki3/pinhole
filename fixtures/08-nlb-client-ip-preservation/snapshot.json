@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "source": "fixture",
+  "accountId": "111122223333",
+  "region": "us-east-1",
+  "ec2": {
+    "Vpcs": [{ "VpcId": "vpc-1", "CidrBlock": "10.0.0.0/16" }],
+    "Subnets": [
+      { "SubnetId": "subnet-pub", "VpcId": "vpc-1", "CidrBlock": "10.0.1.0/24", "AvailabilityZone": "us-east-1a" },
+      { "SubnetId": "subnet-app", "VpcId": "vpc-1", "CidrBlock": "10.0.10.0/24", "AvailabilityZone": "us-east-1a" }
+    ],
+    "InternetGateways": [{ "InternetGatewayId": "igw-1", "Attachments": [{ "VpcId": "vpc-1", "State": "available" }] }],
+    "RouteTables": [
+      {
+        "RouteTableId": "rtb-public", "VpcId": "vpc-1", "Associations": [{ "SubnetId": "subnet-pub" }],
+        "Routes": [
+          { "DestinationCidrBlock": "10.0.0.0/16", "GatewayId": "local", "State": "active", "Origin": "CreateRouteTable" },
+          { "DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "igw-1", "State": "active", "Origin": "CreateRoute" }
+        ]
+      },
+      {
+        "RouteTableId": "rtb-app", "VpcId": "vpc-1", "Associations": [{ "Main": true }],
+        "Routes": [{ "DestinationCidrBlock": "10.0.0.0/16", "GatewayId": "local", "State": "active", "Origin": "CreateRouteTable" }]
+      }
+    ],
+    "NetworkAcls": [
+      {
+        "NetworkAclId": "acl-default", "VpcId": "vpc-1", "IsDefault": true, "Associations": [{ "SubnetId": "subnet-pub" }, { "SubnetId": "subnet-app" }],
+        "Entries": [
+          { "RuleNumber": 100, "Protocol": "-1", "RuleAction": "allow", "Egress": false, "CidrBlock": "0.0.0.0/0" },
+          { "RuleNumber": 32767, "Protocol": "-1", "RuleAction": "deny", "Egress": false, "CidrBlock": "0.0.0.0/0" },
+          { "RuleNumber": 100, "Protocol": "-1", "RuleAction": "allow", "Egress": true, "CidrBlock": "0.0.0.0/0" },
+          { "RuleNumber": 32767, "Protocol": "-1", "RuleAction": "deny", "Egress": true, "CidrBlock": "0.0.0.0/0" }
+        ]
+      }
+    ],
+    "SecurityGroups": [
+      { "GroupId": "sg-open", "GroupName": "tcp5000-world", "VpcId": "vpc-1" },
+      { "GroupId": "sg-vpc-only", "GroupName": "tcp5000-vpc", "VpcId": "vpc-1" }
+    ],
+    "SecurityGroupRules": [
+      { "SecurityGroupRuleId": "sgr-open-5000", "GroupId": "sg-open", "IsEgress": false, "IpProtocol": "tcp", "FromPort": 5000, "ToPort": 5000, "CidrIpv4": "0.0.0.0/0" },
+      { "SecurityGroupRuleId": "sgr-vpc-5000", "GroupId": "sg-vpc-only", "IsEgress": false, "IpProtocol": "tcp", "FromPort": 5000, "ToPort": 5000, "CidrIpv4": "10.0.0.0/16" }
+    ],
+    "NetworkInterfaces": [
+      {
+        "NetworkInterfaceId": "eni-nlb", "SubnetId": "subnet-pub", "VpcId": "vpc-1", "InterfaceType": "network_load_balancer", "RequesterManaged": true,
+        "Description": "ELB net/api/fedcba9876543210",
+        "PrivateIpAddresses": [{ "PrivateIpAddress": "10.0.1.60", "Primary": true, "Association": { "PublicIp": "52.0.1.60", "IpOwnerId": "amazon" } }],
+        "Groups": []
+      },
+      {
+        "NetworkInterfaceId": "eni-open", "SubnetId": "subnet-app", "VpcId": "vpc-1", "InterfaceType": "interface",
+        "PrivateIpAddresses": [{ "PrivateIpAddress": "10.0.10.21", "Primary": true }],
+        "Groups": [{ "GroupId": "sg-open" }], "Attachment": { "InstanceId": "i-open", "DeviceIndex": 0 }
+      },
+      {
+        "NetworkInterfaceId": "eni-vpc-preserved", "SubnetId": "subnet-app", "VpcId": "vpc-1", "InterfaceType": "interface",
+        "PrivateIpAddresses": [{ "PrivateIpAddress": "10.0.10.22", "Primary": true }],
+        "Groups": [{ "GroupId": "sg-vpc-only" }], "Attachment": { "InstanceId": "i-vpc", "DeviceIndex": 0 }
+      },
+      {
+        "NetworkInterfaceId": "eni-vpc-ip-target", "SubnetId": "subnet-app", "VpcId": "vpc-1", "InterfaceType": "interface",
+        "PrivateIpAddresses": [{ "PrivateIpAddress": "10.0.10.23", "Primary": true }],
+        "Groups": [{ "GroupId": "sg-vpc-only" }]
+      }
+    ],
+    "Instances": [
+      { "InstanceId": "i-open", "State": { "Name": "running" }, "NetworkInterfaces": [{ "NetworkInterfaceId": "eni-open", "Attachment": { "DeviceIndex": 0 } }] },
+      { "InstanceId": "i-vpc", "State": { "Name": "running" }, "NetworkInterfaces": [{ "NetworkInterfaceId": "eni-vpc-preserved", "Attachment": { "DeviceIndex": 0 } }] }
+    ]
+  },
+  "elbv2": {
+    "LoadBalancers": [
+      {
+        "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/net/api/fedcba9876543210",
+        "LoadBalancerName": "api", "Type": "network", "Scheme": "internet-facing", "VpcId": "vpc-1",
+        "AvailabilityZones": [{ "SubnetId": "subnet-pub", "ZoneName": "us-east-1a" }]
+      }
+    ],
+    "Listeners": [
+      {
+        "ListenerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:listener/net/api/fedcba9876543210/l1",
+        "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/net/api/fedcba9876543210",
+        "Port": 5000, "Protocol": "TCP",
+        "DefaultActions": [{ "Type": "forward", "ForwardConfig": { "TargetGroups": [
+          { "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/instances/2222" },
+          { "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/ips/3333" }
+        ] } }]
+      }
+    ],
+    "TargetGroups": [
+      { "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/instances/2222", "TargetGroupName": "instances", "Protocol": "TCP", "Port": 5000, "TargetType": "instance", "VpcId": "vpc-1" },
+      { "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/ips/3333", "TargetGroupName": "ips", "Protocol": "TCP", "Port": 5000, "TargetType": "ip", "VpcId": "vpc-1" }
+    ],
+    "TargetHealth": {
+      "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/instances/2222": [
+        { "Target": { "Id": "i-open", "Port": 5000 } },
+        { "Target": { "Id": "i-vpc", "Port": 5000 } }
+      ],
+      "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/ips/3333": [
+        { "Target": { "Id": "10.0.10.23", "Port": 5000 } }
+      ]
+    },
+    "TargetGroupAttributes": {
+      "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/instances/2222": [{ "Key": "preserve_client_ip.enabled", "Value": "true" }],
+      "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/ips/3333": [{ "Key": "preserve_client_ip.enabled", "Value": "false" }]
+    }
+  }
+}

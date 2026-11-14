@@ -1,0 +1,32 @@
+{
+  "description": "A database security group allows 5432 only from members of sg-web. Membership, not subnet or address, decides. The database also has an Elastic IP, but a security group reference never matches internet traffic.",
+  "docs": [
+    "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html"
+  ],
+  "paths": [
+    {
+      "name": "member of sg-web reaches the database",
+      "from": { "eni": "eni-web" }, "to": { "eni": "eni-db" }, "protocol": "tcp", "port": 5432,
+      "expect": { "verdict": "reachable", "sgRules": ["sgr-db-from-web"] }
+    },
+    {
+      "name": "same subnet as eni-web, but not a member of sg-web",
+      "from": { "eni": "eni-other" }, "to": { "eni": "eni-db" }, "protocol": "tcp", "port": 5432,
+      "expect": { "verdict": "blocked", "blockedAt": "dest-sg-ingress" }
+    },
+    {
+      "name": "internet client to the database's Elastic IP",
+      "from": { "internet": "198.51.100.7" }, "to": { "eni": "eni-db" }, "protocol": "tcp", "port": 5432,
+      "expect": { "verdict": "blocked", "blockedAt": "dest-sg-ingress" }
+    },
+    {
+      "name": "instance IDs resolve to their primary interface",
+      "from": { "instance": "i-web" }, "to": { "instance": "i-db" }, "protocol": "tcp", "port": 5432,
+      "expect": { "verdict": "reachable" }
+    }
+  ],
+  "exposure": {
+    "exposed": [{ "resource": "eni-web", "protocol": "tcp", "port": 443, "returnPath": "all" }],
+    "notExposed": [{ "resource": "eni-db", "protocol": "tcp", "port": 5432 }]
+  }
+}
