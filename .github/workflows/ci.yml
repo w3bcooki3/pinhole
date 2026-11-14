@@ -7,6 +7,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch or pull request replaces a run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-24.04
@@ -31,3 +36,30 @@ jobs:
       - run: npm test
       - name: README fixture count is current
         run: node scripts/fixture-count.mjs --check
+
+  # The reusable action (action.yml) works end to end from this checkout.
+  action:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: plan
+        name: A plan that opens a high exposure fails the step
+        uses: ./
+        continue-on-error: true
+        with:
+          command: plan
+          snapshot: fixtures/09-lateral-movement/snapshot.json
+          plan: fixtures/plans/09-plan.json
+          fail-on: high
+      - name: Check that it failed
+        if: steps.plan.outcome != 'failure'
+        run: exit 1
+      - name: Exposure with SARIF output
+        uses: ./
+        with:
+          snapshot: fixtures/09-lateral-movement/snapshot.json
+          fail-on: ""
+          sarif: pinhole.sarif
+      - run: test -s pinhole.sarif

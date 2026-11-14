@@ -1,0 +1,31 @@
+name: Feature or coverage request
+description: Something Pinhole should analyse, show or do.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Check the [Limitations](https://github.com/w3bcooki3/pinhole#limitations) and [Roadmap](https://github.com/w3bcooki3/pinhole#roadmap) first; it may already be planned.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to find out or do, and why can't you today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: What Pinhole should report or do. For AWS behaviour, link the AWS documentation that describes it.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - AWS coverage (a service or feature not modelled)
+        - Analysis or fixes
+        - Web console
+        - CLI
+        - Collectors
+        - Docs

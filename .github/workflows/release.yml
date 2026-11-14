@@ -1,0 +1,51 @@
+# Publishes a GitHub release when a version tag is pushed:
+#   git tag -a v0.2.0 -m "Pinhole 0.2.0" && git push origin v0.2.0
+# The tag must match the package versions and have a CHANGELOG section.
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    # Only this job can create the release.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Tag matches the versions and the changelog
+        run: node scripts/release-notes.mjs --check "$GITHUB_REF_NAME"
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm run build
+      - run: npm run typecheck:web
+      - run: npm test
+      - run: npm run build:web
+      - name: Assemble the files
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir release
+          cp site/index.html "release/pinhole-${version}.html"
+          cp scripts/cloudshell-collect.sh release/cloudshell-collect.sh
+          cp docs/iam-policy.json release/pinhole-iam-policy.json
+          (cd release && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+          node scripts/release-notes.mjs "$GITHUB_REF_NAME" > release-notes.md
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --verify-tag --title "Pinhole ${GITHUB_REF_NAME#v}" --notes-file release-notes.md

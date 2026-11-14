@@ -1,0 +1,63 @@
+name: Wrong result or bug
+description: Pinhole reported something that is not true, missed something, or failed.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Do not attach a real snapshot.** It describes your network in detail.
+        If a result is wrong, a few lines of hand-written snapshot JSON that show the problem are the most useful thing you can give. The files in `fixtures/` show the format.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What went wrong
+      options:
+        - Pinhole says something is reachable, but it is not
+        - Pinhole says something is not reachable, but it is
+        - A fix or command is wrong
+        - The web console shows something wrong or breaks
+        - The CLI or a collector fails
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: Include the exact message or the finding as Pinhole showed it. Replace account IDs, IPs and names if you need to.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal snapshot or steps to reproduce
+      description: The smallest hand-written snapshot (security groups, NACLs, routes, interfaces) that shows the problem, or the steps in the console.
+      render: json
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      multiple: true
+      options:
+        - Web console
+        - CLI
+        - CloudShell collector script
+        - SDK collector (pinhole collect)
+  - type: input
+    id: version
+    attributes:
+      label: Pinhole version
+      description: Shown next to the logo in the console, or `pinhole --version`.
+      placeholder: 0.2.0
+  - type: input
+    id: env
+    attributes:
+      label: Browser or Node.js version, and OS
+      placeholder: Chrome 131 on Windows 11 / Node 22.11 on macOS 15
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Before you submit
+      options:
+        - label: I have not attached a real snapshot, credentials, or unredacted account details.
+          required: true

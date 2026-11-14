@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/w3bcooki3/pinhole/security/advisories/new
+    about: Report privately. Do not open a public issue for security problems.
+  - name: Read the model and its limits
+    url: https://github.com/w3bcooki3/pinhole/blob/main/docs/model.md
+    about: How Pinhole decides reachability, and what it does not cover.
