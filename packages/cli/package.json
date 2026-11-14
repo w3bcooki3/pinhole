@@ -1,0 +1,17 @@
+{
+  "name": "pinhole",
+  "version": "0.2.0",
+  "description": "What can reach what in an AWS network: offline exposure and path analysis",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "pinhole": "dist/main.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "dependencies": {
+    "@pinhole/collector": "0.2.0",
+    "@pinhole/engine": "0.2.0"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@pinhole/engine",
+  "version": "0.2.0",
+  "description": "Pure, I/O-free evaluation of AWS VPC reachability (security groups, network ACLs, routing, load balancers)",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "sideEffects": false
+}

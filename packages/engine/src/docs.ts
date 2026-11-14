@@ -1,0 +1,34 @@
+/**
+ * AWS documentation links cited in findings, warnings and fixtures. Keeping
+ * them in one place makes it easy to re-check them when AWS moves pages.
+ */
+export const DOCS = {
+  sgRules: 'https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html',
+  sgBasics: 'https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html',
+  sgConnTracking: 'https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/security-group-connection-tracking.html',
+  naclCustom: 'https://docs.aws.amazon.com/vpc/latest/userguide/custom-network-acl.html',
+  naclBasics: 'https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html',
+  naclDefault: 'https://docs.aws.amazon.com/vpc/latest/userguide/default-network-acl.html',
+  routePriority: 'https://docs.aws.amazon.com/vpc/latest/userguide/route-tables-priority.html',
+  routeTables: 'https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html',
+  gatewayRouteTables: 'https://docs.aws.amazon.com/vpc/latest/userguide/gateway-route-tables.html',
+  igw: 'https://docs.aws.amazon.com/vpc/latest/userguide/working-with-igw.html',
+  peeringBasics: 'https://docs.aws.amazon.com/vpc/latest/peering/vpc-peering-basics.html',
+  tgwHowItWorks: 'https://docs.aws.amazon.com/vpc/latest/tgw/how-transit-gateways-work.html',
+  tgwRouteTables: 'https://docs.aws.amazon.com/vpc/latest/tgw/tgw-route-tables.html',
+  tgwVpcAttachments: 'https://docs.aws.amazon.com/vpc/latest/tgw/tgw-vpc-attachments.html',
+  tgwNacls: 'https://docs.aws.amazon.com/vpc/latest/tgw/tgw-nacls.html',
+  albSecurityGroups: 'https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-update-security-groups.html',
+  albTargets: 'https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-register-targets.html',
+  nlbSecurityGroups: 'https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-security-groups.html',
+  nlbTargets: 'https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html',
+  nlbClientIp: 'https://docs.aws.amazon.com/elasticloadbalancing/latest/network/edit-target-group-attributes.html#client-ip-preservation',
+  peeringSecurityGroups: 'https://docs.aws.amazon.com/vpc/latest/peering/vpc-peering-security-groups.html',
+  gwlbRouting: 'https://docs.aws.amazon.com/vpc/latest/userguide/gwlb-route.html',
+  networkFirewall: 'https://docs.aws.amazon.com/network-firewall/latest/developerguide/what-is-aws-network-firewall.html',
+  egressOnlyIgw: 'https://docs.aws.amazon.com/vpc/latest/userguide/egress-only-internet-gateway.html',
+  classicElb: 'https://docs.aws.amazon.com/elasticloadbalancing/latest/classic/introduction.html',
+  globalAccelerator: 'https://docs.aws.amazon.com/global-accelerator/latest/dg/introduction-how-it-works.html',
+  cloudfrontPrefixList: 'https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/LocationsOfEdgeServers.html',
+  vpn: 'https://docs.aws.amazon.com/vpn/latest/s2svpn/VPC_VPN.html',
+} as const;

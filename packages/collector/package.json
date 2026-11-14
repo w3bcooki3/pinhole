@@ -1,0 +1,23 @@
+{
+  "name": "@pinhole/collector",
+  "version": "0.2.0",
+  "description": "Read-only collector that writes a Pinhole snapshot using AWS describe APIs",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "dependencies": {
+    "@aws-sdk/client-ec2": "^3.600.0",
+    "@aws-sdk/client-elastic-load-balancing-v2": "^3.600.0",
+    "@aws-sdk/client-sts": "^3.600.0",
+    "@aws-sdk/credential-providers": "^3.600.0",
+    "@pinhole/engine": "0.2.0"
+  }
+}
