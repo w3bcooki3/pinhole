@@ -16,7 +16,7 @@ const sev = (s: Severity) => h('span', { class: `r-sev ${s}` }, D.SEV_LABEL[s]);
 const portsOf = (d: { protocol: string; ports?: { from: number; to: number } }) => `${d.protocol}${d.ports ? `/${d.ports.from === d.ports.to ? d.ports.from : `${d.ports.from}-${d.ports.to}`}` : ''}`;
 
 function table(head: string[], rows: Child[][]): HTMLElement {
-  return h('table', {}, h('thead', {}, h('tr', {}, ...head.map((x) => h('th', {}, x)))), h('tbody', {}, ...rows.map((r) => h('tr', {}, ...r.map((c) => h('td', {}, c))))));
+  return h('div', { class: 'r-tw' }, h('table', {}, h('thead', {}, h('tr', {}, ...head.map((x) => h('th', {}, x)))), h('tbody', {}, ...rows.map((r) => h('tr', {}, ...r.map((c) => h('td', {}, c)))))));
 }
 
 export function reportDoc(snaps: Snap[], rows: Row[], now = new Date()): HTMLElement {
@@ -49,7 +49,7 @@ export function reportDoc(snaps: Snap[], rows: Row[], now = new Date()): HTMLEle
     'article',
     { class: 'report' },
     h('header', {}, h('p', { class: 'r-kicker' }, 'Pinhole network exposure report'), h('h1', {}, `${D.plural(accounts.length, 'account')}, ${D.plural(regions.length, 'region')}`), h('p', { class: 'r-meta' }, `Accounts ${accounts.join(', ')}. Regions ${regions.join(', ')}. Report generated ${now.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}.`)),
-    h('section', {}, h('h2', {}, 'Summary'), h('p', { class: 'r-lede' }, summary), stale ? h('p', { class: 'r-warn' }, `At least one snapshot is more than ${D.STALE_DAYS} days old. The network may have changed since; collect fresh snapshots before acting.`) : null,
+    h('section', { id: 'r-summary' }, h('h2', {}, 'Summary'), h('p', { class: 'r-lede' }, summary), stale ? h('p', { class: 'r-warn' }, `At least one snapshot is more than ${D.STALE_DAYS} days old. The network may have changed since; collect fresh snapshots before acting.`) : null,
       table(['Critical', 'High', 'Medium', 'Low', 'Attack chains', 'Rule hygiene'], [[String(count('critical')), String(count('high')), String(count('medium')), String(count('low')), String(chains.length), String(hyg.length)]])),
   );
 
@@ -57,7 +57,7 @@ export function reportDoc(snaps: Snap[], rows: Row[], now = new Date()): HTMLEle
     doc.append(
       h(
         'section',
-        {},
+        { id: 'r-plan' },
         h('h2', {}, 'Fix plan'),
         h('p', {}, 'The fewest changes that close every critical and high exposure and attack chain, in order. Review each command, then run it; Pinhole never changes anything in AWS.'),
         h(
@@ -84,7 +84,7 @@ export function reportDoc(snaps: Snap[], rows: Row[], now = new Date()): HTMLEle
     doc.append(
       h(
         'section',
-        {},
+        { id: 'r-urgent' },
         h('h2', {}, 'Critical and high exposures'),
         ...urgent.map((r) => {
           const fix = D.fixesOf(r).find((x) => x.verified);
@@ -106,7 +106,7 @@ export function reportDoc(snaps: Snap[], rows: Row[], now = new Date()): HTMLEle
     doc.append(
       h(
         'section',
-        {},
+        { id: 'r-chains' },
         h('h2', {}, 'Attack chains'),
         h('p', {}, 'Each row assumes the first server, which the internet can reach, is compromised, and follows remote administration and control-plane access to an internal resource the internet cannot reach directly.'),
         table(
@@ -121,18 +121,18 @@ export function reportDoc(snaps: Snap[], rows: Row[], now = new Date()): HTMLEle
   }
 
   if (rest.length) {
-    doc.append(h('section', {}, h('h2', {}, 'Other exposures'), table(['Severity', 'Resource', 'Service', 'Open to', 'Account and region'], rest.map((r) => [sev(r.f.severity), D.shortName(r.f), `${D.service(r.f)}${D.serviceName(r.f) ? ` ${D.serviceName(r.f)}` : ''}`, D.openTo(r.f), `${r.snap.account} ${r.snap.region}`]))));
+    doc.append(h('section', { id: 'r-other' }, h('h2', {}, 'Other exposures'), table(['Severity', 'Resource', 'Service', 'Open to', 'Account and region'], rest.map((r) => [sev(r.f.severity), D.shortName(r.f), `${D.service(r.f)}${D.serviceName(r.f) ? ` ${D.serviceName(r.f)}` : ''}`, D.openTo(r.f), `${r.snap.account} ${r.snap.region}`]))));
   }
 
   if (hyg.length) {
-    doc.append(h('section', {}, h('h2', {}, 'Rule hygiene'), h('p', {}, 'Rules that do nothing, can never match, point at something that is gone, or allow much more than they need to. None of these lets the internet in today.'), table(['Severity', 'Finding', 'Account and region'], hyg.map((x) => [sev(x.h.severity), x.h.title, `${x.snap.account} ${x.snap.region}`]))));
+    doc.append(h('section', { id: 'r-hygiene' }, h('h2', {}, 'Rule hygiene'), h('p', {}, 'Rules that do nothing, can never match, point at something that is gone, or allow much more than they need to. None of these lets the internet in today.'), table(['Severity', 'Finding', 'Account and region'], hyg.map((x) => [sev(x.h.severity), x.h.title, `${x.snap.account} ${x.snap.region}`]))));
   }
 
   const notes = snaps.flatMap((s) => s.warnings.map((w) => ({ s, w })));
   doc.append(
     h(
       'section',
-      {},
+      { id: 'r-method' },
       h('h2', {}, 'Method and limits'),
       h('p', {}, 'Pinhole read each account with read-only Describe calls and evaluated every security group rule, network ACL entry, route table, internet gateway, public IP and load balancer listener on each path, in both directions. Results describe what the network allows at the time of collection.'),
       h('p', {}, 'It does not see host firewalls, the applications themselves, AWS WAF or Shield, or IAM. A path means the network lets the connection through, not that the service accepts it. Attack chains assume an attacker who controls one server can use any remote administration or control-plane service the network lets it reach.'),
@@ -143,28 +143,32 @@ export function reportDoc(snaps: Snap[], rows: Row[], now = new Date()): HTMLEle
   return doc;
 }
 
+// Colours are variables with the print colours as fallbacks: the downloaded file and print use
+// the fallbacks; the console sets the variables so the report follows its light or dark theme.
 export const REPORT_CSS = `
-.report{max-width:52rem;margin:0 auto;font:400 15px/1.55 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:#161A26}
-.report header{border-bottom:2px solid #161A26;padding-bottom:1rem;margin-bottom:1.5rem}
-.report .r-kicker{margin:0;color:#545B6E;font-weight:500}
-.report h1{font-size:1.75rem;margin:.25rem 0 .5rem;letter-spacing:-.015em}
-.report h2{font-size:1.2rem;margin:2rem 0 .75rem;padding-bottom:.375rem;border-bottom:1px solid #E2E5EB}
+.report{max-width:52rem;margin:0 auto;font:400 .9375rem/1.6 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--r-ink,#161A26)}
+.report header{border-bottom:2px solid var(--r-ink,#161A26);padding-bottom:1rem;margin-bottom:1.5rem}
+.report .r-kicker{margin:0;color:var(--r-ink2,#545B6E);font-weight:500}
+.report h1{font-size:1.75rem;line-height:1.2;margin:.25rem 0 .5rem;letter-spacing:-.015em}
+.report h2{font-size:1.2rem;margin:2.25rem 0 .75rem;padding-bottom:.375rem;border-bottom:1px solid var(--r-line,#E2E5EB);scroll-margin-top:1rem}
 .report h3{font-size:1rem;margin:0 0 .375rem}
 .report p{margin:0 0 .5rem}
-.report .r-meta,.report .r-dim{color:#545B6E}
+.report .r-meta,.report .r-dim{color:var(--r-ink2,#545B6E)}
 .report .r-lede{font-size:1.0625rem}
 .report .r-strong{font-weight:600}
-.report .r-warn{color:#876600;font-weight:500}
-.report table{width:100%;border-collapse:collapse;margin:.75rem 0;font-size:.9rem}
-.report th{text-align:left;font-weight:600;color:#545B6E;border-bottom:1px solid #C9CDD6;padding:.375rem .5rem}
-.report td{border-bottom:1px solid #E2E5EB;padding:.375rem .5rem;vertical-align:top}
-.report pre{background:#F3F4F7;border:1px solid #E2E5EB;border-radius:4px;padding:.5rem .625rem;font:12.5px/1.45 "Geist Mono",ui-monospace,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere;margin:.375rem 0 0}
+.report .r-warn{color:var(--r-warn,#876600);font-weight:500}
+.report .r-tw{overflow-x:auto;margin:.75rem 0}
+.report table{width:100%;border-collapse:collapse;font-size:.9rem}
+.report th{text-align:left;font-weight:600;color:var(--r-ink2,#545B6E);border-bottom:1px solid var(--r-line2,#C9CDD6);padding:.375rem .5rem;white-space:nowrap}
+.report td{border-bottom:1px solid var(--r-line,#E2E5EB);padding:.375rem .5rem;vertical-align:top}
+.report pre{background:var(--r-code,#F3F4F7);border:1px solid var(--r-line,#E2E5EB);border-radius:4px;padding:.5rem .625rem;font:.8125rem/1.5 "Geist Mono",ui-monospace,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere;margin:.375rem 0 0}
 .report ol.r-plan{padding-left:1.25rem}
 .report ol.r-plan li{margin-bottom:1rem;break-inside:avoid}
 .report .r-item{margin-bottom:1.125rem;break-inside:avoid}
 .report .r-sev{font-weight:600;white-space:nowrap}
-.report .r-sev.critical{color:#D7263D}.report .r-sev.high{color:#C25E00}.report .r-sev.medium{color:#876600}.report .r-sev.low{color:#23946A}.report .r-sev.info{color:#878D9E}
-@media print{.report{max-width:none;font-size:11pt}.report h2{break-after:avoid}}
+.report .r-sev.critical{color:var(--r-crit,#D7263D)}.report .r-sev.high{color:var(--r-high,#C25E00)}.report .r-sev.medium{color:var(--r-warn,#876600)}.report .r-sev.low{color:var(--r-low,#23946A)}.report .r-sev.info{color:#878D9E}
+@media (max-width:40rem){.report h1{font-size:1.4rem}.report .r-lede{font-size:1rem}}
+@media print{.report{max-width:none;font-size:11pt}.report h2{break-after:avoid}.report .r-tw{overflow:visible}}
 `;
 
 /** The report as one HTML file: no script, nothing loaded from anywhere. */

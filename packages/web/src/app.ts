@@ -136,6 +136,7 @@ function go(route: Route, patch: Partial<typeof st> = {}) {
   } catch {
     /* file:// in some browsers */
   }
+  scrollMemo.delete(`${st.route}|${st.sel}|${st.chain}`);
   render();
   document.querySelector('main.view')?.scrollTo?.(0, 0);
 }
@@ -214,6 +215,14 @@ function filtered(): Row[] {
   );
 }
 const selectedRow = () => rows.find((r) => r.id === st.sel);
+// A sticky filter bar whose height varies (it wraps on narrow screens): table headers stick
+// directly beneath it, at an offset kept up to date here.
+function stickyBar(bar: HTMLElement): HTMLElement {
+  const set = () => bar.parentElement?.style.setProperty('--sticky', `${bar.offsetHeight}px`);
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(set).observe(bar);
+  (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (f: () => void) => setTimeout(f, 0))(set);
+  return bar;
+}
 const scrollTop = () => document.querySelector('main.view')?.scrollTo?.(0, 0);
 
 // ---------------------------------------------------------------- shared pieces
@@ -262,7 +271,7 @@ function detail(r: Row, back: { label: string; act: () => void }, extra: Child[]
     ),
     h(
       'div',
-      { class: 'dgrid' },
+      { class: 'dtl-grid' },
       h(
         'div',
         { class: 'dcol' },
@@ -385,8 +394,11 @@ function dashboard(): HTMLElement {
     return page;
   }
   const toIssues = (patch: Partial<typeof st>) => () => go('issues', { sevOn: ALL(), cat: '', scope: '', q: '', sel: '', ...patch });
-  const grid = h('div', { class: 'dgrid' });
-  page.append(grid);
+  // Two columns: what to act on (plan, exposures, chains, graph) and the breakdowns beside it.
+  // Each column stacks on its own, so a long fix plan never leaves holes in the other column.
+  const mainCol = h('div', { class: 'dash-main' });
+  const sideCol = h('div', { class: 'dash-side' });
+  const grid = { append: (...els: HTMLElement[]) => mainCol.append(...els) };
 
   // Summary: exposures by severity, then the supporting counts.
   const bar = h('div', { class: 'sbar', 'aria-hidden': 'true' });
@@ -405,10 +417,10 @@ function dashboard(): HTMLElement {
     const kids = [h('div', { class: 'k' }, k), h('div', { class: 'v' }, v), h('div', { class: 'sub' }, sub)];
     return act ? on(h('button', { type: 'button', class: 'cell' }, ...kids), 'click', act) : h('div', {}, ...kids);
   };
-  grid.append(
+  page.append(
     h(
       'section',
-      { class: 'box summary s12', id: 'summary' },
+      { class: 'box summary', id: 'summary' },
       h('div', {}, h('div', { class: 'k' }, 'Internet exposures'), h('div', { class: 'v', id: 'total' }, String(rows.length)), bar, legend),
       cell('Exposed resources', String(res.length), `${D.plural(lbs, 'load balancer')}, ${D.plural(res.length - lbs, 'interface')}`, () => go('resources')),
       cell('Open to any address', String(world), 'Exposures open to 0.0.0.0/0 or ::/0', toIssues({ cat: 'world' })),
@@ -430,10 +442,10 @@ function dashboard(): HTMLElement {
   ];
   const catRows = cats.map((c) => ({ ...c, list: rows.filter((r) => D.category(r.f) === c.key) }));
   const max = Math.max(1, ...catRows.map((c) => c.list.length));
-  grid.append(
+  sideCol.append(
     h(
       'section',
-      { class: 'box s4', id: 'categories' },
+      { class: 'box', id: 'categories' },
       boxHead('By kind of service', 'Exposures per category'),
       h(
         'ul',
@@ -457,7 +469,7 @@ function dashboard(): HTMLElement {
   grid.append(
     h(
       'section',
-      { class: 'box s8', id: 'top-paths' },
+      { class: 'box', id: 'top-paths' },
       boxHead('Top exposures', 'What the internet can reach, most severe first', linkBtn(`View all ${rows.length}`, toIssues({}))),
       h(
         'table',
@@ -488,7 +500,7 @@ function dashboard(): HTMLElement {
 
   const accs = [...accounts].sort();
   const regs = [...regions].sort();
-  const matrix = h('div', { class: 'matrix', style: `grid-template-columns:minmax(6.5rem,1.2fr) repeat(${regs.length},minmax(0,1fr))` }, h('span'), ...regs.map((x) => h('span', { class: 'hd', title: x }, x)));
+  const matrix = h('div', { class: 'matrix', style: `grid-template-columns:minmax(6.5rem,1.2fr) repeat(${regs.length},minmax(0,1fr))` }, h('span'), ...regs.map((x) => { const m = /^(.*)-(\d+)$/.exec(x); return h('span', { class: 'hd', title: x }, ...(m ? [m[1]!, h('br'), m[2]!] : [x])); }));
   for (const a of accs) {
     const inAcc = rows.filter((r) => r.snap.account === a);
     matrix.append(h('span', { class: 'lab' }, h('b', {}, a), D.plural(inAcc.length, 'exposure')));
@@ -503,7 +515,7 @@ function dashboard(): HTMLElement {
       matrix.append(on(h('button', { type: 'button', class: 'c', style: `background:${softVar(worst)};color:${worst === 'medium' ? 'var(--medium-ink)' : sevVar(worst)}`, 'aria-label': `${here.length} paths in ${a} ${g}` }, String(here.length)), 'click', toIssues({ scope: `${a} / ${g}` })));
     }
   }
-  grid.append(h('section', { class: 'box s4', id: 'matrix' }, boxHead('Accounts and regions', 'Exposures, coloured by the worst one'), matrix));
+  sideCol.append(h('section', { class: 'box', id: 'matrix' }, boxHead('Accounts and regions', 'Exposures, coloured by the worst one'), matrix));
 
   // Lateral movement: the worst chains, and the rules that cut the most of them.
   if (chainRows.length) {
@@ -511,7 +523,7 @@ function dashboard(): HTMLElement {
     grid.append(
       h(
         'section',
-        { class: 'box s8', id: 'chains' },
+        { class: 'box', id: 'chains' },
         boxHead('Attack chains', 'Internal resources reachable after one server is compromised', linkBtn(`View all ${chainRows.length}`, () => go('blast', { chain: '' }))),
         h(
           'table',
@@ -540,10 +552,10 @@ function dashboard(): HTMLElement {
   const bySvc = new Map<string, Row[]>();
   for (const r of rows) bySvc.set(D.service(r.f), [...(bySvc.get(D.service(r.f)) ?? []), r]);
   const svcs = [...bySvc.entries()].sort((a, b) => D.sevRank(a[1][0]!.f.severity) - D.sevRank(b[1][0]!.f.severity) || b[1].length - a[1].length).slice(0, 8);
-  grid.append(
+  sideCol.append(
     h(
       'section',
-      { class: 'box s4', id: 'services' },
+      { class: 'box', id: 'services' },
       boxHead('Exposed services'),
       h(
         'table',
@@ -570,8 +582,8 @@ function dashboard(): HTMLElement {
   on(surface, 'keydown', (e) => e.key === 'Enter' && go('graph'));
   if (rows.length) renderGraph(surface, (top.length ? top : rows).slice(0, 10), { compact: true, showTargets: false });
   else surface.append(h('p', { class: 'dim' }, 'Nothing is reachable from the internet.'));
-  grid.append(h('section', { class: 'box s12', id: 'surface' }, boxHead('Attack surface', top.length ? `${D.plural(Math.min(top.length, 10), 'critical or high exposure')}` : 'All exposures', linkBtn('Open attack graph', () => go('graph'))), surface));
-
+  grid.append(h('section', { class: 'box', id: 'surface' }, boxHead('Attack surface', top.length ? `${D.plural(Math.min(top.length, 10), 'critical or high exposure')}` : 'All exposures', linkBtn('Open attack graph', () => go('graph'))), surface));
+  page.append(h('div', { class: 'dash' }, mainCol, sideCol));
   return page;
 }
 
@@ -661,36 +673,52 @@ function issuesPage(): HTMLElement {
   const fill = () => {
     const now = filtered();
     tbody.replaceChildren(
-      ...now.map((r) =>
-        on(
+      ...now.map((r) => {
+        const name = D.serviceName(r.f);
+        const open = D.openTo(r.f);
+        return on(
           h(
             'tr',
-            { class: 'click', tabindex: 0, 'aria-selected': String(st.sel === r.id) },
-            h('td', { class: 'first' }, sevPill(r.f.severity)),
-            h('td', {}, h('div', { style: 'font-weight:600' }, D.shortName(r.f)), h('div', { class: 'faint', style: 'font-size:0.75rem' }, D.kind(r.f))),
-            h('td', {}, h('span', { class: 'mono' }, D.service(r.f)), r.f.family === 'ipv6' ? h('span', { class: 'tag v6' }, 'IPv6') : null, h('div', { class: 'faint', style: 'font-size:0.75rem' }, D.serviceName(r.f))),
-            h('td', { class: 'mono' }, D.openTo(r.f)),
-            h('td', { class: 'mono faint hide-sm' }, `${r.snap.account} ${r.snap.region}`),
+            { class: 'click', tabindex: 0, 'aria-selected': String(st.sel === r.id), 'aria-label': `${D.SEV_LABEL[r.f.severity]}: ${D.shortName(r.f)} ${D.service(r.f)}` },
+            h('td', { class: 'first c-sev' }, sevPill(r.f.severity)),
+            h('td', { class: 'c-res' }, h('span', { class: 'xt-name' }, D.shortName(r.f)), h('span', { class: 'xt-sub' }, D.kind(r.f))),
+            h('td', { class: 'c-svc' }, h('span', { class: 'xt-port mono' }, D.service(r.f)), r.f.family === 'ipv6' ? h('span', { class: 'tag v6' }, 'IPv6') : null, name ? h('span', { class: 'xt-sub' }, name) : null),
+            h('td', { class: 'c-open mono', title: open }, open),
+            h('td', { class: 'c-where mono faint' }, `${r.snap.account} ${r.snap.region}`),
+            h('td', { class: 'last c-go', 'aria-hidden': 'true' }, iconSvg('chev', 14)),
           ),
           'click',
           () => { st.sel = r.id; render(); scrollTop(); },
-        ),
-      ),
+        );
+      }),
     );
     count.textContent = `${now.length} of ${D.plural(rows.length, 'exposure')}`;
   };
+  tbody.addEventListener('keydown', (e) => {
+    const tr = (e.target as HTMLElement).closest('tr');
+    if (!tr) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tr.click(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); (tr.nextElementSibling as HTMLElement | null)?.focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); (tr.previousElementSibling as HTMLElement | null)?.focus(); }
+  });
   const count = h('span', { class: 'count' });
   search.addEventListener('input', () => { st.q = search.value; fill(); });
 
   const exportCsv = () => D.saveFile('pinhole-exposures.csv', D.csv(filtered()), 'text/csv');
   const exportJson = () => D.saveFile('pinhole-exposures.json', `${JSON.stringify(filtered().map((r) => ({ account: r.snap.account, region: r.snap.region, ...r.f })), null, 2)}\n`, 'application/json');
-  const table = h('table', { class: 't' }, h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Resource'), h('th', {}, 'Service'), h('th', {}, 'Open to'), h('th', { class: 'hide-sm' }, 'Account and region'))), tbody);
+  const table = h(
+    'table',
+    { class: 't xt' },
+    h('colgroup', {}, h('col', { class: 'w-sev' }), h('col', { class: 'w-res' }), h('col', { class: 'w-svc' }), h('col', { class: 'w-open' }), h('col', { class: 'w-where' }), h('col', { class: 'w-go' })),
+    h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Resource'), h('th', {}, 'Service'), h('th', {}, 'Open to'), h('th', {}, 'Account and region'), h('th', { class: 'last' }, h('span', { class: 'sr' }, 'Open')))),
+    tbody,
+  );
   fill();
   const left = h(
     'div',
     { class: 'list' },
     h('div', { class: 'list-h' }, h('div', { class: 'ph', style: 'margin-bottom:0' }, h('div', {}, h('h1', {}, 'Internet exposures'), h('p', {}, 'Every service the internet can open a connection to, most severe first. Select one for the exact path and a verified fix.')), h('div', { class: 'acts' }, btn([iconSvg('download', 14), 'CSV'], 'sm', exportCsv), btn([iconSvg('download', 14), 'JSON'], 'sm', exportJson)))),
-    h('div', { class: 'filters' }, seg, h('label', { class: 'lsearch' }, iconSvg('search', 14), search), catSel, scopes.length > 1 ? scopeSel : null, count),
+    stickyBar(h('div', { class: 'filters' }, seg, h('label', { class: 'lsearch' }, iconSvg('search', 14), search), catSel, scopes.length > 1 ? scopeSel : null, count)),
     list.length || !rows.length ? table : null,
     !rows.length ? empty('No internet exposures', 'Nothing in the loaded snapshots is reachable from the internet.') : !list.length ? empty('No exposures match these filters', 'Clear the filters to see everything.', btn('Clear filters', '', () => go('issues', { sevOn: new Set(D.SEVERITY_ORDER), cat: '', scope: '', q: '' }))) : null,
   );
@@ -764,6 +792,17 @@ function reportPage(): HTMLElement {
   const accounts = [...new Set(st.snaps.map((x) => x.account))].sort();
   const day = new Date().toISOString().slice(0, 10);
   const title = `Pinhole report, ${accounts.join(', ')}, ${day}`;
+  // Contents rail on wide screens: the report is long, and this is how a reader finds a section.
+  const view = () => document.querySelector('main.view') as HTMLElement | null;
+  const toc = h('nav', { class: 'r-toc no-print', 'aria-label': 'Report sections' }, h('div', { class: 'r-toc-h' }, 'Contents'));
+  for (const sec of [...doc.querySelectorAll('section[id]')] as HTMLElement[]) {
+    const label = sec.querySelector('h2')?.textContent ?? '';
+    toc.append(on(h('a', { href: `#${sec.id}` }, label), 'click', (e) => {
+      e.preventDefault();
+      const top = sec.getBoundingClientRect().top - (view()?.getBoundingClientRect().top ?? 0) + (view()?.scrollTop ?? 0) - 16;
+      view()?.scrollTo({ top, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    }));
+  }
   return h(
     'div',
     { class: 'page report-page' },
@@ -773,9 +812,9 @@ function reportPage(): HTMLElement {
       h('div', {}, h('h1', {}, 'Report'), h('p', {}, 'Everything on one page for someone who will not open the console: the summary, the fix plan with commands, every exposure and chain, and what the analysis could not see.')),
       h('div', { class: 'acts' }, btn([iconSvg('file', 14), 'Print or save as PDF'], 'primary', () => window.print()), btn([iconSvg('download', 14), 'Download HTML'], '', () => D.saveFile(`pinhole-report-${day}.html`, reportHtml(doc, title), 'text/html'))),
     ),
-    st.demo ? h('p', { class: 'no-print stale-t', style: 'margin:0 0 1rem' }, 'This is the demo environment. Load your own snapshots for a real report.') : null,
+    st.demo ? h('p', { class: 'no-print stale-t demo-note' }, 'This is the demo environment. Load your own snapshots for a real report.') : null,
     h('style', {}, REPORT_CSS),
-    h('div', { class: 'paper' }, doc),
+    h('div', { class: 'report-wrap' }, toc, h('div', { class: 'paper' }, doc)),
   );
 }
 
@@ -954,7 +993,36 @@ function connectPage(): HTMLElement {
 
 const LOGO = () => s('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, s('path', { d: 'M3 17h5l4-10h4l2 5h3', fill: 'none', stroke: '#fff', 'stroke-width': 2.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
 
+// render() rebuilds the page. Without care that would throw the reader back to the top and drop
+// keyboard focus whenever a filter changes. So: keep the scroll position while on the same page,
+// remember where a list was when opening one of its rows, and put focus back on the same control.
+const scrollMemo = new Map<string, number>();
+let lastKey = '';
+function focusKey(el: Element | null): string {
+  if (!(el instanceof HTMLElement) || el === document.body) return '';
+  if (el.id) return `#${el.id}`;
+  for (const a of ['data-sev', 'data-cat', 'data-route', 'aria-label']) {
+    const v = el.getAttribute(a);
+    if (v) return `${el.tagName.toLowerCase()}[${a}="${v.replace(/["\\]/g, '\\$&')}"]`;
+  }
+  return '';
+}
+
 function render() {
+  const before = document.querySelector('main.view') as HTMLElement | null;
+  if (before && lastKey) scrollMemo.set(lastKey, before.scrollTop);
+  const key = `${st.route}|${st.sel}|${st.chain}`;
+  const keep = key === lastKey;
+  const restore = keep || !st.sel ? scrollMemo.get(key) : undefined;
+  const focus = focusKey(document.activeElement);
+  lastKey = key;
+  renderNow();
+  const after = document.querySelector('main.view') as HTMLElement | null;
+  if (after && restore) after.scrollTop = restore;
+  if (focus) (document.querySelector(focus) as HTMLElement | null)?.focus?.({ preventScroll: true });
+}
+
+function renderNow() {
   const root = document.getElementById('root')!;
   const crit = rows.filter((r) => r.f.severity === 'critical').length;
   const warn = st.snaps.reduce((n, x) => n + x.warnings.length, 0);
@@ -999,7 +1067,7 @@ function render() {
   const isFull = st.route === 'graph' || st.route === 'simulator';
 
   const ribbon = st.demo
-    ? h('div', { class: 'ribbon', id: 'demo', role: 'note' }, h('b', {}, 'Demo environment'), h('span', {}, `Sample data from ${D.plural(st.all.length, 'snapshot')}. Load your own to replace it.`), h('span', { class: 'sp' }), on(h('button', { type: 'button' }, 'Load snapshots'), 'click', pick), on(h('button', { type: 'button' }, 'Connect an account'), 'click', () => go('connect')))
+    ? h('div', { class: 'ribbon', id: 'demo', role: 'note' }, h('b', {}, 'Demo environment'), h('span', { class: 'hide-sm' }, `Sample data from ${D.plural(st.all.length, 'snapshot')}. Load your own to replace it.`), h('span', { class: 'sp' }), on(h('button', { type: 'button' }, 'Load snapshots'), 'click', pick), on(h('button', { type: 'button' }, 'Connect an account'), 'click', () => go('connect')))
     : null;
   root.replaceChildren(
     h(

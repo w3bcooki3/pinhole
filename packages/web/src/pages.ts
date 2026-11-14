@@ -819,7 +819,7 @@ export function openPalette(ctx: Ctx, pages: { route: string; label: string; ico
 
 export function planBox(ctx: Ctx): HTMLElement {
   const plans = ctx.st.snaps.map((snap) => ({ snap, plan: D.planOf(snap) })).filter((x) => x.plan.before.exposures || x.plan.before.chains);
-  const box = h('section', { class: 'box s8', id: 'plan' }, boxHead('Fix plan', 'Fewest changes that close every critical and high risk, each proved by re-analysis'));
+  const box = h('section', { class: 'box', id: 'plan' }, boxHead('Fix plan', 'Fewest changes that close every critical and high risk, each proved by re-analysis'));
   if (!plans.length) {
     box.append(h('div', { class: 'pad' }, h('p', { class: 'plan-sum' }, 'Nothing critical or high to fix.'), h('p', { class: 'dim', style: 'margin:0' }, 'No critical or high exposure and no attack chain in the loaded snapshots.')));
     return box;
@@ -872,6 +872,20 @@ export function planBox(ctx: Ctx): HTMLElement {
       ),
     ),
   );
+  // Long plans show the first few changes; the rest are one click away, so the dashboard
+  // keeps its shape instead of one box running the length of the page.
+  const SHOWN = 5;
+  if (steps.length > SHOWN) {
+    const items = [...box.querySelectorAll('ol.plan > li')] as HTMLElement[];
+    const toggle = (open: boolean) => {
+      items.forEach((li, i) => { if (i >= SHOWN) li.hidden = !open; });
+      more.textContent = open ? 'Show fewer' : `Show all ${steps.length} changes`;
+      more.setAttribute('aria-expanded', String(open));
+    };
+    const more = on(h('button', { type: 'button', class: 'plan-more' }), 'click', () => toggle(more.getAttribute('aria-expanded') !== 'true'));
+    box.append(more);
+    toggle(false);
+  }
   const unresolved = plans.flatMap((x) => x.plan.unresolved);
   if (unresolved.length) box.append(h('div', { class: 'pad warn' }, `No single change closes ${unresolved.join('; ')}. Try combinations in the simulator.`));
   box.append(
