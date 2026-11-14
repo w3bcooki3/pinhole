@@ -50,6 +50,18 @@ function richProd() {
   s.ec2.RouteTables[1].Routes.push({ DestinationCidrBlock: '10.99.0.0/16', GatewayId: 'vpce-0fw1a2b3c4d', State: 'active', Origin: 'CreateRoute' });
   return s;
 }
+// The same account a week earlier, so the Compare page has something to show:
+// RDP on win-jump-01 and Postgres on analytics-db were opened since, and a
+// Prometheus port on grafana-ops was closed.
+function richProdEarlier() {
+  const s = richProd();
+  s.collectedAt = '2026-11-05T09:38:00Z';
+  const rule = (group, port) => s.ec2.SecurityGroupRules.find((r) => r.GroupId === group && r.FromPort === port && !r.IsEgress);
+  s.ec2.SecurityGroupRules = s.ec2.SecurityGroupRules.filter((r) => r !== rule('sg-win-jump-01', 3389));
+  rule('sg-analytics-db', 5432).CidrIpv4 = '10.0.0.0/8';
+  s.ec2.SecurityGroupRules.push({ SecurityGroupRuleId: 'sgr-0prometheus01', GroupId: 'sg-grafana-ops', IsEgress: false, IpProtocol: 'tcp', FromPort: 9090, ToPort: 9090, CidrIpv4: '0.0.0.0/0', Description: 'Prometheus' });
+  return s;
+}
 const withScope = (s, account, region) => ({ ...s, accountId: account, region, collectedAt: '2026-11-12T09:44:00Z' });
 export const DEMO = [
   { name: 'prod us-east-1', snapshot: richProd() },
@@ -57,5 +69,7 @@ export const DEMO = [
   { name: 'platform us-east-1', snapshot: withScope(fx('08-nlb-client-ip-preservation'), '444455556666', 'us-east-1') },
   { name: 'platform ap-southeast-2', snapshot: withScope(fx('01-nacl-ephemeral-return'), '444455556666', 'ap-southeast-2') },
   { name: 'orders us-west-2', snapshot: withScope(fx('09-lateral-movement'), '111122223333', 'us-west-2') },
+  { name: 'edge us-east-2', snapshot: withScope(fx('10-ipv6-exposure'), '444455556666', 'us-east-2') },
+  { name: 'prod us-east-1, a week earlier', snapshot: richProdEarlier() },
 ];
 

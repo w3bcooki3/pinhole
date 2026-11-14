@@ -36,6 +36,8 @@ You can expect an acknowledgement within a week. Fixes are released as a new ver
 - CSV exports prefix cells that start with `=`, `+`, `-`, `@`, tab or carriage return, so spreadsheets do not run them as formulas.
 - The downloadable report is one HTML file with a Content Security Policy that allows no script and no network requests; all snapshot text in it is escaped.
 - CLI text output replaces terminal control sequences.
+- Terraform plans are untrusted input too: every change taken from a plan passes the same validation as a change list, and a resource with a malformed value is skipped with the reason.
+- The GitHub Action passes its inputs to the script only as environment variables, never pasted into the script text, and checks each one against a fixed list or an existing file.
 
 **What a snapshot contains.**
 

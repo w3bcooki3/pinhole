@@ -37,6 +37,53 @@ All notable changes to this project are recorded here. The format follows
   showing what it closes, what else it affects and its AWS CLI command.
 - Fixes that restrict a rule to the VPC, keeping internal access.
 
+- Release workflow: pushing a version tag tests, builds and publishes a
+  GitHub release with the console as one HTML file, the CloudShell script,
+  the IAM policy and SHA-256 checksums, with notes from this changelog. The
+  tag must match the package versions.
+- Contributor guide, code of conduct, issue forms (wrong result, feature)
+  that remind reporters never to attach a real snapshot, and a pull request
+  checklist.
+- `npm run check` runs everything CI runs.
+
+- `pinhole diff OLD NEW`: what changed between two snapshots of one account
+  and region. New, wider, narrower and closed internet exposure; new and
+  closed attack chains; and the security group rule, network ACL, route,
+  public IP, load balancer and listener changes behind them. Text, JSON or
+  Markdown, and `--fail-on LEVEL` for pipelines.
+- Compare page in the console for the same comparison. Older snapshots of an
+  account and region are kept for it; every other page uses only the latest,
+  so loading last week's file next to today's no longer doubles findings.
+- `pinhole exposure --format sarif`: SARIF 2.1.0 for GitHub code scanning,
+  with a rule per kind of service, security severities and a stable
+  fingerprint per exposed service.
+- `pinhole exposure --format markdown` for tickets and pull request comments.
+
+- `pinhole plan SNAPSHOT PLAN.json`: what a Terraform plan would do to
+  internet exposure and attack chains before it is applied, from
+  `terraform show -json` output. Security groups and their rules, network
+  ACLs, routes, security group attachments and Elastic IP associations are
+  placed on the snapshot; anything that cannot be placed exactly is listed as
+  not analysed, with the reason. Text, JSON or Markdown, and `--fail-on`.
+  Security groups the plan creates are followed through the plan's
+  references, including module outputs, so a new group, its rules and its
+  attachment to an existing server are checked together.
+- GitHub Action (`uses: w3bcooki3/pinhole@v0.2.0`) to run the exposure, diff
+  or plan check in another repository's workflow, with a job summary,
+  optional SARIF, and a failing step on new exposure. CI tests it end to end.
+- Simulator and change lists can attach security groups, add routes and add
+  public IPs, and rules can reference prefix lists.
+
+- `pinhole collect --region a,b,c --out-dir DIR` collects several regions in
+  one run, one file each; a region that fails does not stop the others.
+
+- IPv6 internet exposure of network interfaces, for TCP and UDP: exact over
+  ports and 128-bit source ranges, through the internet gateway route, IPv6
+  network ACL rules in both directions and IPv6 security group rules. IPv6
+  addresses need no public IP, so dual-stack subnets are no longer a blind
+  spot. Findings are marked IPv6 in every output; fixes, plans, diffs and the
+  console handle them. Fixture 10 covers it.
+
 ### Changed
 - One vocabulary across the console: Exposures (what the internet reaches),
   Attack chains (what a compromised server reaches next) and Rule hygiene.
@@ -70,6 +117,26 @@ All notable changes to this project are recorded here. The format follows
   are merged, with the union of their sources, instead of one per deciding rule.
 - The demo environment has a fifth snapshot built from fixture 09.
 
+- README opens with the console link, a screenshot, three questions Pinhole
+  answers and a quick start.
+- Line endings are fixed to LF for every checkout, including on Windows.
+- CI cancels superseded runs on the same branch.
+- Exposure analysis is about 3 to 7 times faster on large accounts:
+  interfaces that share a subnet, security groups and interface type are
+  analysed once and checked per interface, and address-set comparisons no
+  longer build CIDR strings. Added `npm run bench`.
+- Renamed the project from CloudPath to Pinhole (the name is a registered
+  trademark of another network software vendor). The CLI command is now
+  `pinhole`, packages are `@pinhole/engine` and `@pinhole/collector`, and
+  snapshots are written as `pinhole-snapshot-<account>-<region>.json`.
+- New web console, replacing the first static page: still one offline HTML
+  file with no server or network access, light by default with a dark theme,
+  Inter and Geist Mono fonts (SIL OFL 1.1) embedded, a labelled demo
+  environment built from the fixtures, and a six-step Connect page with the
+  script and IAM policy viewer and troubleshooting notes. The design
+  prototypes and their React and Cloudscape development dependencies were
+  removed.
+
 ### Security
 - Snapshots are validated field by field before analysis (types, ranges, ID
   and ARN shapes, account, region and time formats, sizes); failures name the
@@ -98,6 +165,11 @@ All notable changes to this project are recorded here. The format follows
   the deploy job, and Dependabot for npm and Actions. Added SECURITY.md.
 
 ### Fixed
+- Snapshots of VPCs with IPv6 were refused: the IPv6 network ACL `*` rule is
+  number 32768, one above the IPv4 one.
+- A what-if or diff no longer reports an attack chain as closed when its
+  target became directly reachable from the internet; that is shown as new
+  exposure instead.
 - CI now runs on Node 22 and 24 (Node 20 is end of life and the test runner
   needs Node 21 or later). Node.js 22 is the minimum supported version.
   GitHub Actions updated to current major versions, still pinned by SHA.
@@ -106,39 +178,6 @@ All notable changes to this project are recorded here. The format follows
   through it are `unknown`, instead of being analysed from a partial list.
 - Classic Load Balancers were silently skipped. They are now reported as a
   coverage warning (`classic-load-balancer`).
-
-### Changed
-- Exposure analysis is about 3 to 7 times faster on large accounts:
-  interfaces that share a subnet, security groups and interface type are
-  analysed once and checked per interface, and address-set comparisons no
-  longer build CIDR strings. Added `npm run bench`.
-
-### Changed
-- Renamed the project from CloudPath to Pinhole (the name is a registered
-  trademark of another network software vendor). The CLI command is now
-  `pinhole`, packages are `@pinhole/engine` and `@pinhole/collector`, and
-  snapshots are written as `pinhole-snapshot-<account>-<region>.json`.
-
-### Changed
-- New web console, replacing the first static page. Still one offline HTML
-  file with no server or network access. Light theme by default, optional dark
-  theme. Pages:
-  - Dashboard: critical attack path count with a compact attack graph, risk
-    categories, top attack paths, security group rules ranked by the paths
-    they alone allow, and an account by region breakdown.
-  - Attack graph: pan and zoom view of internet, entry points, exposed
-    resources and load balancer targets, with severity filters, highlight
-    search and a path side panel.
-  - Issues, Resources and Coverage pages, and a six-step Connect page with a
-    script and IAM policy viewer and troubleshooting notes.
-  - Opens on a labelled demo environment built from the fixtures.
-- Fonts are now Inter and Geist Mono (SIL OFL 1.1), embedded.
-- Console restyled to a flat, dense layout that fills wide screens: hairline
-  panels instead of shadowed cards, severity as a coloured marker rather than
-  tinted pills, a summary strip and data tables on the dashboard, and the demo
-  notice as a ribbon above the app.
-- The design prototypes used to choose this direction were removed, along with
-  the React and Cloudscape development dependencies they needed.
 
 ## [0.1.0] - M1: engine and internet exposure
 
@@ -193,3 +232,6 @@ All notable changes to this project are recorded here. The format follows
     dark themes; phone layout. IBM Plex is embedded (SIL OFL 1.1).
 - The collector script now prints the full path of the snapshot and the next
   step when it finishes.
+
+[Unreleased]: https://github.com/w3bcooki3/pinhole/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/w3bcooki3/pinhole/releases/tag/v0.2.0

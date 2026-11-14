@@ -2,6 +2,25 @@
   "name": "pinhole",
   "version": "0.2.0",
   "description": "What can reach what in an AWS network: offline exposure and path analysis",
+  "keywords": [
+    "aws",
+    "vpc",
+    "security-groups",
+    "network-acl",
+    "reachability",
+    "attack-surface",
+    "cloud-security",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/w3bcooki3/pinhole.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://w3bcooki3.github.io/pinhole/",
+  "bugs": {
+    "url": "https://github.com/w3bcooki3/pinhole/issues"
+  },
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -9,7 +28,9 @@
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "dependencies": {
     "@pinhole/collector": "0.2.0",
     "@pinhole/engine": "0.2.0"

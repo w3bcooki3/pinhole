@@ -11,6 +11,7 @@ import { ICON } from './graph.js';
 Object.assign(ICON, {
   chev: 'M9 6l6 6-6 6',
   chevl: 'M15 6l-6 6 6 6',
+  compare: 'M7 4v13M4 14l3 3 3-3M17 20V7M14 10l3-3 3 3',
   home: 'M4 11 12 4l8 7v9h-5v-6H9v6H4z',
   graph: 'M6 6m-2 0a2 2 0 1 0 4 0 2 2 0 1 0-4 0M18 6m-2 0a2 2 0 1 0 4 0 2 2 0 1 0-4 0M12 18m-2 0a2 2 0 1 0 4 0 2 2 0 1 0-4 0M7.5 7.5l3.5 8.5M16.5 7.5 13 16M8 6h8',
   list: 'M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01',

@@ -1,0 +1,5 @@
+# Keep line endings as LF in the repository and in checkouts. The CloudShell
+# script must run under bash, and the web build embeds it byte for byte.
+* text=auto eol=lf
+*.png binary
+*.woff2 binary

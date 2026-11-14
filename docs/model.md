@@ -152,3 +152,51 @@ AWS CLI commands are printed for each change. Pinhole never runs them.
 | Global Accelerator | `global_accelerator_managed` interfaces |
 | CloudFront | security group rules using the CloudFront origin-facing prefix list |
 | Data outside the snapshot | peer VPCs in other accounts or Regions, transit gateway route tables without routes, failed API calls |
+
+## Comparing snapshots
+
+`pinhole diff` and the console's Compare page analyse both snapshots in full and compare the results, not the raw files.
+
+- **Exposure** is compared per resource, protocol and listener, over every port. Each port range is reported as new, wider (more internet sources than before), narrower, changed, or closed. Sources inside private address space were never internet exposure, so restricting a rule to `10.0.0.0/8` and then opening it to `0.0.0.0/0` shows as new, not wider.
+- **Attack chains** are compared by target and impact. A chain is reported closed only if it is gone and its target is not now reachable from the internet directly; a target that became directly exposed is shown as new exposure, which is worse.
+- **Configuration** is compared by AWS ID: security groups and their rules, network ACL entries and subnet associations, non-local routes, public IPs per interface, the security groups attached to each interface, internet gateway attachments, load balancers and listeners.
+- Snapshots must be of the same account and region; IDs do not line up otherwise.
+
+## Terraform plans
+
+`pinhole plan` reads `terraform show -json PLANFILE` and turns the network changes in it into the same changes the simulator uses, against a snapshot. It then compares exposure and attack chains before and after.
+
+Mapped exactly, when every value is known at plan time and the resources are in the snapshot:
+
+| Terraform resource | Becomes |
+|---|---|
+| `aws_vpc_security_group_ingress_rule`, `aws_vpc_security_group_egress_rule` | rule added or removed (matched by rule ID, or by content) |
+| `aws_security_group_rule` | one rule per CIDR, prefix list or source group, added or removed (matched by content) |
+| `aws_security_group`, `aws_default_security_group` | inline `ingress` and `egress` blocks compared before and after; deleting the group removes its rules |
+| `aws_network_acl_rule` | entry added or removed |
+| `aws_network_acl`, `aws_default_network_acl` | inline entries compared by rule number |
+| `aws_route` | route added or removed |
+| `aws_route_table`, `aws_default_route_table` | inline routes compared by destination |
+| `aws_network_interface_sg_attachment` | security group attached or detached |
+| `aws_instance`, `aws_network_interface` (updates) | `vpc_security_group_ids` / `security_groups` changes |
+| `aws_eip_association` | public IP added or removed |
+
+Security groups the plan creates get a placeholder ID (`sg-plan1`, `sg-plan2`, ...). Where a rule, an attachment or a source group is unknown until apply, Pinhole follows the plan's `configuration` references, through module outputs, to the resource it comes from; if that is a security group the plan creates, the placeholder is used. A new group with its rules, attached to an existing instance in the same plan, is therefore checked end to end. A reference that could mean several instances (`count` or `for_each` without an index) is not resolved.
+
+Listed as not analysed, with the reason: values known only after apply that do not lead to a security group the plan creates (for example a route to a gateway the plan creates); resources not in the snapshot (another account, region or VPC); IPv6 rules and routes; new instances and interfaces; and other network resource types (load balancers, listeners, subnets, gateways, peering, endpoints). Everything outside networking is counted and ignored.
+
+Every mapped change passes the same validation as a hand-written `--changes` file before it is used.
+
+## IPv6
+
+IPv6 addresses in a VPC are global unicast addresses: they need no public IP or NAT to be reachable ([IP addressing](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-ip-addressing.html)). An interface is exposed over IPv6 when:
+
+- its VPC has an internet gateway attached;
+- the subnet's network ACL allows the request in by an IPv6 rule (rules are evaluated in number order; IPv4 rules never match IPv6 traffic; the IPv6 `*` rule is number 32768);
+- a security group on the interface allows it by an IPv6 CIDR rule (security group references and IPv4 rules never match internet IPv6 traffic);
+- the subnet's longest-prefix IPv6 route for the client's address targets that internet gateway. A route to an [egress-only internet gateway](https://docs.aws.amazon.com/vpc/latest/userguide/egress-only-internet-gateway.html) carries only connections the instance opens, so it exposes nothing;
+- the network ACL lets the response out to the client's ephemeral ports, checked for the same client operating systems as IPv4.
+
+The analysis is exact over ports and over 128-bit source address ranges. "Every internet address" means global unicast space (`2000::/3`, [IANA](https://www.iana.org/assignments/ipv6-unicast-address-assignments)) outside the VPC's own IPv6 blocks; unique local (`fc00::/7`), link-local and other special ranges are never internet sources. The documentation range `2001:db8::/32` counts as internet so fixtures can use it.
+
+Not analysed for IPv6: ICMPv6, load balancer listeners, prefix lists with IPv6 entries, lateral movement between IPv6 addresses, and IPv6 rules in Terraform plans. IPv6 findings are marked as such in every output.

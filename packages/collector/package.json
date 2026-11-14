@@ -2,6 +2,21 @@
   "name": "@pinhole/collector",
   "version": "0.2.0",
   "description": "Read-only collector that writes a Pinhole snapshot using AWS describe APIs",
+  "keywords": [
+    "aws",
+    "vpc",
+    "read-only",
+    "snapshot"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/w3bcooki3/pinhole.git",
+    "directory": "packages/collector"
+  },
+  "homepage": "https://w3bcooki3.github.io/pinhole/",
+  "bugs": {
+    "url": "https://github.com/w3bcooki3/pinhole/issues"
+  },
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
@@ -12,7 +27,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "dependencies": {
     "@aws-sdk/client-ec2": "^3.600.0",
     "@aws-sdk/client-elastic-load-balancing-v2": "^3.600.0",

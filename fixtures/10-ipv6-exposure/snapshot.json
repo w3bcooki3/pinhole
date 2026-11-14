@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "source": "hand-written fixture",
+  "accountId": "111122223333",
+  "region": "us-east-1",
+  "ec2": {
+    "Vpcs": [{ "VpcId": "vpc-1", "CidrBlock": "10.0.0.0/16", "Ipv6CidrBlockAssociationSet": [{ "Ipv6CidrBlock": "2600:1f18:aaaa:ff00::/56" }] }],
+    "Subnets": [
+      { "SubnetId": "subnet-dual", "VpcId": "vpc-1", "CidrBlock": "10.0.1.0/24", "AvailabilityZone": "us-east-1a" },
+      { "SubnetId": "subnet-egress-only", "VpcId": "vpc-1", "CidrBlock": "10.0.2.0/24", "AvailabilityZone": "us-east-1a" }
+    ],
+    "InternetGateways": [{ "InternetGatewayId": "igw-1", "Attachments": [{ "VpcId": "vpc-1", "State": "available" }] }],
+    "EgressOnlyInternetGateways": [{ "EgressOnlyInternetGatewayId": "eigw-1", "Attachments": [{ "VpcId": "vpc-1", "State": "attached" }] }],
+    "RouteTables": [
+      {
+        "RouteTableId": "rtb-dual", "VpcId": "vpc-1",
+        "Associations": [{ "Main": false, "SubnetId": "subnet-dual" }],
+        "Routes": [
+          { "DestinationCidrBlock": "10.0.0.0/16", "GatewayId": "local", "State": "active", "Origin": "CreateRouteTable" },
+          { "DestinationIpv6CidrBlock": "2600:1f18:aaaa:ff00::/56", "GatewayId": "local", "State": "active", "Origin": "CreateRouteTable" },
+          { "DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "igw-1", "State": "active", "Origin": "CreateRoute" },
+          { "DestinationIpv6CidrBlock": "::/0", "GatewayId": "igw-1", "State": "active", "Origin": "CreateRoute" }
+        ]
+      },
+      {
+        "RouteTableId": "rtb-egress-only", "VpcId": "vpc-1",
+        "Associations": [{ "Main": true }, { "Main": false, "SubnetId": "subnet-egress-only" }],
+        "Routes": [
+          { "DestinationCidrBlock": "10.0.0.0/16", "GatewayId": "local", "State": "active", "Origin": "CreateRouteTable" },
+          { "DestinationIpv6CidrBlock": "2600:1f18:aaaa:ff00::/56", "GatewayId": "local", "State": "active", "Origin": "CreateRouteTable" },
+          { "DestinationIpv6CidrBlock": "::/0", "EgressOnlyInternetGatewayId": "eigw-1", "State": "active", "Origin": "CreateRoute" }
+        ]
+      }
+    ],
+    "NetworkAcls": [
+      {
+        "NetworkAclId": "acl-dual", "VpcId": "vpc-1", "IsDefault": false,
+        "Associations": [{ "SubnetId": "subnet-dual" }],
+        "Entries": [
+          { "RuleNumber": 100, "Protocol": "6", "RuleAction": "allow", "Egress": false, "Ipv6CidrBlock": "::/0", "PortRange": { "From": 22, "To": 22 } },
+          { "RuleNumber": 110, "Protocol": "6", "RuleAction": "allow", "Egress": false, "Ipv6CidrBlock": "::/0", "PortRange": { "From": 443, "To": 443 } },
+          { "RuleNumber": 120, "Protocol": "6", "RuleAction": "deny", "Egress": false, "Ipv6CidrBlock": "2001:db8:dead::/48", "PortRange": { "From": 5432, "To": 5432 } },
+          { "RuleNumber": 130, "Protocol": "6", "RuleAction": "allow", "Egress": false, "Ipv6CidrBlock": "::/0", "PortRange": { "From": 5432, "To": 5432 } },
+          { "RuleNumber": 100, "Protocol": "6", "RuleAction": "allow", "Egress": true, "Ipv6CidrBlock": "::/0", "PortRange": { "From": 49152, "To": 65535 } },
+          { "RuleNumber": 32767, "Protocol": "-1", "RuleAction": "deny", "Egress": false, "CidrBlock": "0.0.0.0/0" },
+          { "RuleNumber": 32768, "Protocol": "-1", "RuleAction": "deny", "Egress": false, "Ipv6CidrBlock": "::/0" },
+          { "RuleNumber": 32767, "Protocol": "-1", "RuleAction": "deny", "Egress": true, "CidrBlock": "0.0.0.0/0" },
+          { "RuleNumber": 32768, "Protocol": "-1", "RuleAction": "deny", "Egress": true, "Ipv6CidrBlock": "::/0" }
+        ]
+      },
+      {
+        "NetworkAclId": "acl-default", "VpcId": "vpc-1", "IsDefault": true,
+        "Associations": [{ "SubnetId": "subnet-egress-only" }],
+        "Entries": [
+          { "RuleNumber": 100, "Protocol": "-1", "RuleAction": "allow", "Egress": false, "CidrBlock": "0.0.0.0/0" },
+          { "RuleNumber": 101, "Protocol": "-1", "RuleAction": "allow", "Egress": false, "Ipv6CidrBlock": "::/0" },
+          { "RuleNumber": 100, "Protocol": "-1", "RuleAction": "allow", "Egress": true, "CidrBlock": "0.0.0.0/0" },
+          { "RuleNumber": 101, "Protocol": "-1", "RuleAction": "allow", "Egress": true, "Ipv6CidrBlock": "::/0" }
+        ]
+      }
+    ],
+    "SecurityGroups": [{ "GroupId": "sg-dual", "GroupName": "dual-stack", "VpcId": "vpc-1" }],
+    "SecurityGroupRules": [
+      { "SecurityGroupRuleId": "sgr-ssh-v6-office", "GroupId": "sg-dual", "IsEgress": false, "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22, "CidrIpv6": "2001:db8:abcd::/48", "Description": "SSH from the office IPv6 range" },
+      { "SecurityGroupRuleId": "sgr-https-v6", "GroupId": "sg-dual", "IsEgress": false, "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "CidrIpv6": "::/0" },
+      { "SecurityGroupRuleId": "sgr-pg-v6", "GroupId": "sg-dual", "IsEgress": false, "IpProtocol": "tcp", "FromPort": 5432, "ToPort": 5432, "CidrIpv6": "::/0" },
+      { "SecurityGroupRuleId": "sgr-alt-v6", "GroupId": "sg-dual", "IsEgress": false, "IpProtocol": "tcp", "FromPort": 8080, "ToPort": 8080, "CidrIpv6": "::/0" },
+      { "SecurityGroupRuleId": "sgr-mysql-ula", "GroupId": "sg-dual", "IsEgress": false, "IpProtocol": "tcp", "FromPort": 3306, "ToPort": 3306, "CidrIpv6": "fd00::/8" },
+      { "SecurityGroupRuleId": "sgr-ssh-v4", "GroupId": "sg-dual", "IsEgress": false, "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22, "CidrIpv4": "0.0.0.0/0" },
+      { "SecurityGroupRuleId": "sgr-out", "GroupId": "sg-dual", "IsEgress": true, "IpProtocol": "-1", "FromPort": -1, "ToPort": -1, "CidrIpv6": "::/0" }
+    ],
+    "NetworkInterfaces": [
+      {
+        "NetworkInterfaceId": "eni-dual", "SubnetId": "subnet-dual", "VpcId": "vpc-1", "InterfaceType": "interface",
+        "PrivateIpAddresses": [{ "PrivateIpAddress": "10.0.1.10", "Primary": true }],
+        "Ipv6Addresses": [{ "Ipv6Address": "2600:1f18:aaaa:ff01::10" }],
+        "Groups": [{ "GroupId": "sg-dual" }], "Attachment": { "InstanceId": "i-dual", "DeviceIndex": 0 }
+      },
+      {
+        "NetworkInterfaceId": "eni-egress-only", "SubnetId": "subnet-egress-only", "VpcId": "vpc-1", "InterfaceType": "interface",
+        "PrivateIpAddresses": [{ "PrivateIpAddress": "10.0.2.10", "Primary": true }],
+        "Ipv6Addresses": [{ "Ipv6Address": "2600:1f18:aaaa:ff02::10" }],
+        "Groups": [{ "GroupId": "sg-dual" }]
+      },
+      {
+        "NetworkInterfaceId": "eni-ipv4-only", "SubnetId": "subnet-dual", "VpcId": "vpc-1", "InterfaceType": "interface",
+        "PrivateIpAddresses": [{ "PrivateIpAddress": "10.0.1.20", "Primary": true }],
+        "Groups": [{ "GroupId": "sg-dual" }]
+      }
+    ],
+    "Instances": [{ "InstanceId": "i-dual", "State": { "Name": "running" }, "Tags": [{ "Key": "Name", "Value": "dual-stack-web" }], "NetworkInterfaces": [{ "NetworkInterfaceId": "eni-dual", "Attachment": { "DeviceIndex": 0 } }] }]
+  }
+}

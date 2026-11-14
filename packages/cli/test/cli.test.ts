@@ -67,6 +67,131 @@ describe('pinhole CLI', () => {
     expect(safeForTerminal('web\u001b[2J')).toBe('web\ufffd[2J');
   });
 
+  it('writes SARIF 2.1.0 for code scanning, with stable fingerprints and severities', async () => {
+    const f9 = fx('09-lateral-movement');
+    const r = await cli('exposure', f9, '--format', 'sarif');
+    expect(r.code).toBe(0);
+    const sarif = JSON.parse(r.stdout);
+    expect(sarif.version).toBe('2.1.0');
+    const run0 = sarif.runs[0];
+    expect(run0.tool.driver.name).toBe('Pinhole');
+    expect(run0.tool.driver.rules.map((x: { id: string }) => x.id)).toContain('pinhole/admin');
+    const ssh = run0.results.find((x: { ruleId: string }) => x.ruleId === 'pinhole/admin');
+    expect(ssh.level).toBe('error');
+    expect(ssh.properties['security-severity']).toBe('9.5');
+    expect(ssh.message.text).toBe('Anyone on the internet can open SSH (tcp/22) on bastion (i-bastion, eni-bastion) at 52.0.0.10. Allowed by acl-default #100, sgr-bastion-ssh-world.');
+    expect(ssh.locations[0].logicalLocations[0].fullyQualifiedName).toBe('111122223333/us-east-1/vpc-1/eni-bastion');
+    // Every result points at a rule that exists, by index too.
+    for (const x of run0.results) expect(run0.tool.driver.rules[x.ruleIndex].id).toBe(x.ruleId);
+    const again = JSON.parse((await cli('exposure', f9, '--format', 'sarif')).stdout);
+    expect(again.runs[0].results[0].partialFingerprints).toEqual(run0.results[0].partialFingerprints);
+    const high = JSON.parse((await cli('exposure', f9, '--format', 'sarif', '--min-severity', 'high')).stdout);
+    expect(high.runs[0].results).toHaveLength(1);
+  });
+
+  it('writes a Markdown table', async () => {
+    const r = await cli('exposure', fx('09-lateral-movement'), '--format', 'markdown');
+    expect(r.stdout).toMatch(/\*\*2 services reachable from the internet:\*\* 1 critical, 0 high, 0 medium, 1 low\./);
+    expect(r.stdout).toMatch(/\| critical \| bastion \(i-bastion, eni-bastion\) \| tcp\/22 SSH \| any address \| acl-default #100, sgr-bastion-ssh-world \|/);
+  });
+
+  it('checks collect regions before calling AWS', async () => {
+    const bad = await cli('collect', '--region', 'us-east-1,us east 1');
+    expect(bad.code).toBe(1);
+    expect(bad.stderr).toMatch(/"us east 1" is not a region name/);
+    const two = await cli('collect', '--region', 'us-east-1,eu-west-1', '--out', 'x.json');
+    expect(two.code).toBe(1);
+    expect(two.stderr).toMatch(/with several regions use --out-dir/);
+  });
+
+  describe('plan', () => {
+    const f9 = fx('09-lateral-movement');
+    const tf = join(here, '../../../fixtures/plans/09-plan.json');
+
+    it('shows what a Terraform plan would open and close, and what it could not check', async () => {
+      const r = await cli('plan', f9, tf);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toMatch(/Analysed: 4 changes from 3 resources\./);
+      expect(r.stdout).toMatch(/aws_vpc_security_group_ingress_rule\.web_8443 \(create\)\n    Add inbound rule to sg-web \(web\): tcp 8443 from 0\.0\.0\.0\/0/);
+      expect(r.stdout).toMatch(/\[HIGH\] NEW web .* tcp\/8443 from 0\.0\.0\.0\/0/);
+      expect(r.stdout).toMatch(/narrower bastion .* tcp\/22: now 203\.0\.113\.0\/24 \(was 0\.0\.0\.0\/0\)/);
+      expect(r.stdout).toMatch(/closed web .* tcp\/443/);
+      expect(r.stdout).toMatch(/Not analysed: 2\. Check these yourself\./);
+      expect(r.stdout).toMatch(/This plan opens 1 new or wider internet exposure and 0 new attack chains\./);
+    });
+
+    it('fails a pipeline at a level, and writes Markdown and JSON', async () => {
+      expect((await cli('plan', f9, tf, '--fail-on', 'high')).code).toBe(2);
+      expect((await cli('plan', f9, tf, '--fail-on', 'critical')).code).toBe(0);
+      const md = (await cli('plan', f9, tf, '--format', 'markdown')).stdout;
+      expect(md).toMatch(/\*\*This plan opens 1 new or wider internet exposure and 0 new attack chains\.\*\*/);
+      expect(md).toMatch(/2 resource changes not analysed/);
+      const j = JSON.parse((await cli('plan', f9, tf, '--format', 'json')).stdout);
+      expect(j.mapping.changes).toHaveLength(4);
+      expect(j.exposure.opened).toBe(1);
+    });
+
+    it('explains a file that is not plan JSON', async () => {
+      const r = await cli('plan', f9, f9);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/no "resource_changes"/);
+    });
+  });
+
+  describe('diff', () => {
+    const f9 = fx('09-lateral-movement');
+    const changed = () => {
+      const s = JSON.parse(readFileSync(f9, 'utf8'));
+      s.ec2.SecurityGroupRules = s.ec2.SecurityGroupRules.filter((r: { SecurityGroupRuleId: string }) => r.SecurityGroupRuleId !== 'sgr-bastion-ssh-world');
+      s.ec2.SecurityGroupRules.push({ SecurityGroupRuleId: 'sgr-web-8443', GroupId: 'sg-web', IsEgress: false, IpProtocol: 'tcp', FromPort: 8443, ToPort: 8443, CidrIpv4: '0.0.0.0/0', Description: 'a | b <script>' });
+      const file = join(mkdtempSync(join(tmpdir(), 'pinhole-diff-')), 'after.json');
+      writeFileSync(file, JSON.stringify(s));
+      return file;
+    };
+
+    it('lists new and closed exposure, closed chains and the rule changes', async () => {
+      const r = await cli('diff', f9, changed());
+      expect(r.code).toBe(0);
+      expect(r.stdout).toMatch(/\[HIGH\] NEW web \(i-web, eni-web\) tcp\/8443 from 0\.0\.0\.0\/0/);
+      expect(r.stdout).toMatch(/\[CRITICAL\] closed bastion .* tcp\/22/);
+      expect(r.stdout).toMatch(/Attack chains: 0 new, 3 closed\./);
+      expect(r.stdout).toMatch(/added +security group rule sgr-web-8443 in sg-web \(web\): tcp\/8443 from 0\.0\.0\.0\/0/);
+      expect(r.stdout).toMatch(/removed security group rule sgr-bastion-ssh-world/);
+    });
+
+    it('fails a pipeline on new exposure at or above a level', async () => {
+      expect((await cli('diff', f9, changed(), '--fail-on', 'high')).code).toBe(2);
+      expect((await cli('diff', f9, changed(), '--fail-on', 'critical')).code).toBe(0);
+      expect((await cli('diff', f9, f9, '--fail-on', 'low')).code).toBe(0);
+    });
+
+    it('says so when nothing changed', async () => {
+      expect((await cli('diff', f9, f9)).stdout).toMatch(/No changes\./);
+    });
+
+    it('writes Markdown with table cells escaped, and JSON', async () => {
+      const md = (await cli('diff', f9, changed(), '--format', 'markdown')).stdout;
+      expect(md).toMatch(/\*\*1 new or wider internet exposure and 0 new attack chains\.\*\*/);
+      expect(md).toMatch(/\| high \| opened \| web \(i-web, eni-web\) \| tcp\/8443 \| 0\.0\.0\.0\/0 \| nobody \|/);
+      expect(md).toMatch(/bastion → app → orders-db/);
+      const j = JSON.parse((await cli('diff', f9, changed(), '--format', 'json')).stdout);
+      expect(j.exposure.opened).toBe(1);
+      expect(j.config).toHaveLength(2);
+    });
+
+    it('refuses snapshots of different regions, and wrong arguments', async () => {
+      const s = JSON.parse(readFileSync(f9, 'utf8'));
+      s.region = 'eu-west-1';
+      const file = join(mkdtempSync(join(tmpdir(), 'pinhole-diff-')), 'eu.json');
+      writeFileSync(file, JSON.stringify(s));
+      const r = await cli('diff', f9, file);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/different regions/);
+      expect((await cli('diff', f9)).code).toBe(1);
+      expect((await cli('diff', f9, f9, '--format', 'xml')).code).toBe(1);
+    });
+  });
+
   it('shows load balancer targets in the text report', async () => {
     const r = await cli('exposure', fx('07-alb-private-targets'));
     expect(r.stdout).toMatch(/target i-app1 \(10\.0\.10\.11\) port 8080: reachable \(2\/2 load balancer nodes\)/);

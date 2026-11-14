@@ -10,20 +10,28 @@
 import type { ExposureFinding, ExposureReport } from './exposure.js';
 import type { AttackChain, BlastReport } from './blast.js';
 import { INTERNET, parseCidr, RangeSet } from './ipv4.js';
+import { INTERNET6, RangeSet6 } from './ipv6.js';
 import { hasPorts, normalizeProtocol, protocolName } from './packet.js';
 import { assessPorts, compareSeverity } from './risk.js';
 import type { Severity } from './risk.js';
-import type { Eni, Nacl, NaclEntry, NetworkModel, PortRange, RouteTable, SecurityGroup, SgRule } from './types.js';
+import type { Eni, Nacl, NaclEntry, NetworkModel, PortRange, Route, RouteTable, SecurityGroup, SgRule } from './types.js';
 
 export type Change =
   | { kind: 'revoke-sg-rule'; ruleId: string }
   | { kind: 'edit-sg-rule'; ruleId: string; cidr?: string; fromPort?: number; toPort?: number }
-  | { kind: 'add-sg-rule'; groupId: string; egress: boolean; protocol: string; fromPort?: number; toPort?: number; cidr?: string; referencedGroupId?: string; description?: string }
+  | { kind: 'add-sg-rule'; groupId: string; egress: boolean; protocol: string; fromPort?: number; toPort?: number; cidr?: string; referencedGroupId?: string; prefixListId?: string; description?: string }
   | { kind: 'add-nacl-entry'; naclId: string; egress: boolean; ruleNumber: number; action: 'allow' | 'deny'; protocol: string; cidr: string; fromPort?: number; toPort?: number }
   | { kind: 'remove-nacl-entry'; naclId: string; egress: boolean; ruleNumber: number }
   | { kind: 'remove-route'; routeTableId: string; destination: string }
   | { kind: 'remove-public-ip'; eniId: string; publicIp: string }
-  | { kind: 'detach-sg'; eniId: string; groupId: string };
+  | { kind: 'detach-sg'; eniId: string; groupId: string }
+  | { kind: 'attach-sg'; eniId: string; groupId: string }
+  /** A security group that does not exist yet, such as one a Terraform plan creates. It starts with no rules. */
+  | { kind: 'create-sg'; groupId: string; name: string; vpcId?: string }
+  /** A route to an internet gateway, NAT gateway, peering connection, transit gateway, interface or endpoint. */
+  | { kind: 'add-route'; routeTableId: string; destination: string; targetId: string }
+  /** A public IP that will be attached; `publicIp` may be a placeholder when it is only known after apply. */
+  | { kind: 'add-public-ip'; eniId: string; publicIp: string; elastic?: boolean };
 
 export class ChangeError extends Error {}
 
@@ -50,13 +58,17 @@ export function assertChanges(value: unknown): asserts value is Change[] {
       case 'add-sg-rule':
         str('groupId'); bool('egress'); str('protocol'); port('fromPort'); port('toPort'); str('cidr', true); str('referencedGroupId', true);
         if (o.description !== undefined && (typeof o.description !== 'string' || o.description.length > 255 || /[\u0000-\u001f\u007f-\u009f]/.test(o.description))) bad('"description" must be one line of at most 255 characters');
-        if (o.cidr === undefined && o.referencedGroupId === undefined) bad('needs "cidr" or "referencedGroupId"');
+        str('prefixListId', true);
+        if (o.cidr === undefined && o.referencedGroupId === undefined && o.prefixListId === undefined) bad('needs "cidr", "referencedGroupId" or "prefixListId"');
         break;
       case 'add-nacl-entry': str('naclId'); bool('egress'); ruleNo(); if (o.action !== 'allow' && o.action !== 'deny') bad('"action" must be "allow" or "deny"'); str('protocol'); str('cidr'); port('fromPort'); port('toPort'); break;
       case 'remove-nacl-entry': str('naclId'); bool('egress'); ruleNo(); break;
       case 'remove-route': str('routeTableId'); str('destination'); break;
       case 'remove-public-ip': str('eniId'); str('publicIp'); break;
-      case 'detach-sg': str('eniId'); str('groupId'); break;
+      case 'detach-sg': case 'attach-sg': str('eniId'); str('groupId'); break;
+      case 'create-sg': str('groupId'); str('vpcId', true); if (typeof o.name !== 'string' || o.name.length > 255 || /[\u0000-\u001f\u007f-\u009f]/.test(o.name)) bad('"name" must be one line of at most 255 characters'); break;
+      case 'add-route': str('routeTableId'); str('destination'); str('targetId'); break;
+      case 'add-public-ip': str('eniId'); if (typeof o.publicIp !== 'string' || !/^[A-Za-z0-9.:() -]{1,40}$/.test(o.publicIp)) bad('"publicIp" must be an address or a short label'); if (o.elastic !== undefined) bool('elastic'); break;
       default: bad('unknown "kind"');
     }
   });
@@ -107,7 +119,7 @@ export function applyChanges(model: NetworkModel, changes: Change[]): NetworkMod
       case 'add-sg-rule': {
         const group = out.securityGroups.get(c.groupId);
         if (!group) throw new ChangeError(`Security group ${c.groupId} is not in the snapshot.`);
-        if (!c.cidr && !c.referencedGroupId) throw new ChangeError('A new rule needs a CIDR or a referenced security group.');
+        if (!c.cidr && !c.referencedGroupId && !c.prefixListId) throw new ChangeError('A new rule needs a CIDR, a referenced security group or a prefix list.');
         const protocol = normalizeProtocol(c.protocol);
         const rule: SgRule = {
           id: `sgr-new-${++added}`,
@@ -117,6 +129,7 @@ export function applyChanges(model: NetworkModel, changes: Change[]): NetworkMod
           ...(hasPorts(protocol) ? { fromPort: c.fromPort ?? 0, toPort: c.toPort ?? c.fromPort ?? 65535 } : {}),
           ...(c.cidr ? { cidr: parseCidr(c.cidr) } : {}),
           ...(c.referencedGroupId ? { referencedGroupId: c.referencedGroupId } : {}),
+          ...(c.prefixListId ? { prefixListId: c.prefixListId } : {}),
           ...(c.description ? { description: c.description } : {}),
         };
         setGroup(c.egress ? { ...group, egress: [...group.egress, rule] } : { ...group, ingress: [...group.ingress, rule] });
@@ -154,14 +167,34 @@ export function applyChanges(model: NetworkModel, changes: Change[]): NetworkMod
         tables().set(rt.id, { ...rt, routes } satisfies RouteTable);
         break;
       }
+      case 'create-sg': {
+        if (out.securityGroups.has(c.groupId)) throw new ChangeError(`Security group ${c.groupId} already exists.`);
+        setGroup({ id: c.groupId, name: c.name, vpcId: c.vpcId ?? '', ingress: [], egress: [] });
+        break;
+      }
+      case 'add-route': {
+        const rt = out.routeTables.get(c.routeTableId);
+        if (!rt) throw new ChangeError(`Route table ${c.routeTableId} is not in the snapshot.`);
+        const isPl = c.destination.startsWith('pl-');
+        const routes = rt.routes.filter((r) => (r.destination?.text ?? r.destinationPrefixListId) !== c.destination);
+        routes.push({ ...(isPl ? { destinationPrefixListId: c.destination } : { destination: parseCidr(c.destination) }), target: targetOf(c.targetId), state: 'active', origin: 'static' });
+        tables().set(rt.id, { ...rt, routes } satisfies RouteTable);
+        break;
+      }
       case 'remove-public-ip':
+      case 'add-public-ip':
+      case 'attach-sg':
       case 'detach-sg': {
         const eni = out.enis.get(c.eniId);
         if (!eni) throw new ChangeError(`Interface ${c.eniId} is not in the snapshot.`);
         const next: Eni =
           c.kind === 'remove-public-ip'
             ? { ...eni, publicAddresses: eni.publicAddresses.filter((p) => p.publicIp !== c.publicIp) }
-            : { ...eni, groupIds: eni.groupIds.filter((g) => g !== c.groupId) };
+            : c.kind === 'add-public-ip'
+              ? { ...eni, publicAddresses: [...eni.publicAddresses.filter((p) => p.publicIp !== c.publicIp), { publicIp: c.publicIp, privateIp: eni.privateIps[0] ?? '', elastic: c.elastic ?? false }] }
+              : c.kind === 'attach-sg'
+                ? { ...eni, groupIds: eni.groupIds.includes(c.groupId) ? eni.groupIds : [...eni.groupIds, c.groupId] }
+                : { ...eni, groupIds: eni.groupIds.filter((g) => g !== c.groupId) };
         enis().set(eni.id, next);
         break;
       }
@@ -172,6 +205,10 @@ export function applyChanges(model: NetworkModel, changes: Change[]): NetworkMod
 
 // ------------------------------------------------------------------ text
 
+const pname = (p: string) => {
+  const n = protocolName(normalizeProtocol(p));
+  return n === 'all' ? 'all traffic' : n;
+};
 const portsText = (p: string, from?: number, to?: number) => (hasPorts(normalizeProtocol(p)) ? ` ${from === to ? from : `${from}-${to}`}` : '');
 
 export function describeChange(model: NetworkModel, c: Change): string {
@@ -185,10 +222,12 @@ export function describeChange(model: NetworkModel, c: Change): string {
       const what = [c.cidr !== undefined ? `source ${c.cidr}` : '', c.fromPort !== undefined || c.toPort !== undefined ? `ports ${c.fromPort ?? rule.fromPort}-${c.toPort ?? rule.toPort}` : ''].filter(Boolean).join(', ');
       return `Change rule ${rule.id} in ${group.id} (${group.name}) to ${what}`;
     }
-    case 'add-sg-rule':
-      return `Add ${c.egress ? 'outbound' : 'inbound'} rule to ${c.groupId}: ${c.protocol}${portsText(c.protocol, c.fromPort, c.toPort ?? c.fromPort)} ${c.egress ? 'to' : 'from'} ${c.cidr ?? c.referencedGroupId}`;
+    case 'add-sg-rule': {
+      const g = model.securityGroups.get(c.groupId);
+      return `Add ${c.egress ? 'outbound' : 'inbound'} rule to ${c.groupId}${g && g.name !== c.groupId ? ` (${g.name})` : ''}: ${pname(c.protocol)}${portsText(c.protocol, c.fromPort, c.toPort ?? c.fromPort)} ${c.egress ? 'to' : 'from'} ${c.cidr ?? c.prefixListId ?? c.referencedGroupId}`;
+    }
     case 'add-nacl-entry':
-      return `Add ${c.egress ? 'outbound' : 'inbound'} rule ${c.ruleNumber} to ${c.naclId}: ${c.action} ${c.protocol}${portsText(c.protocol, c.fromPort, c.toPort ?? c.fromPort)} ${c.egress ? 'to' : 'from'} ${c.cidr}`;
+      return `Add ${c.egress ? 'outbound' : 'inbound'} rule ${c.ruleNumber} to ${c.naclId}: ${c.action} ${pname(c.protocol)}${portsText(c.protocol, c.fromPort, c.toPort ?? c.fromPort)} ${c.egress ? 'to' : 'from'} ${c.cidr}`;
     case 'remove-nacl-entry':
       return `Remove ${c.egress ? 'outbound' : 'inbound'} rule ${c.ruleNumber} from ${c.naclId}`;
     case 'remove-route':
@@ -197,6 +236,14 @@ export function describeChange(model: NetworkModel, c: Change): string {
       return `Remove public IP ${c.publicIp} from ${c.eniId}`;
     case 'detach-sg':
       return `Remove security group ${c.groupId} from ${c.eniId}`;
+    case 'attach-sg':
+      return `Attach security group ${c.groupId} to ${c.eniId}`;
+    case 'create-sg':
+      return `Create security group ${c.groupId} (${c.name})`;
+    case 'add-route':
+      return `Add a route to ${c.destination} via ${c.targetId} in ${c.routeTableId}`;
+    case 'add-public-ip':
+      return `Attach ${c.elastic ? 'Elastic IP' : 'public IP'} ${c.publicIp} to ${c.eniId}`;
   }
 }
 
@@ -211,6 +258,12 @@ export function ruleText(r: SgRule): string {
 export const shellQuote = (s: string) => (/^[A-Za-z0-9_./:@=,+-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
 const q = shellQuote;
 const protoArg = (p: string) => (p === 'all' || p === '-1' ? '-1' : p);
+/** Route target type from its ID prefix, as AWS assigns them. */
+function targetOf(id: string): Route['target'] {
+  const t: [string, Route['target']['type']][] = [['igw-', 'igw'], ['nat-', 'nat'], ['pcx-', 'pcx'], ['tgw-', 'tgw'], ['eni-', 'eni'], ['i-', 'instance'], ['vpce-', 'vpce'], ['vgw-', 'vgw'], ['eigw-', 'eigw']];
+  if (id === 'local') return { type: 'local', id };
+  return { type: t.find(([p]) => id.startsWith(p))?.[1] ?? 'other', id };
+}
 /** A number for a command line: anything else becomes 0, which AWS rejects, rather than text a shell would run. */
 const int = (n: unknown) => (Number.isSafeInteger(n) ? String(n) : '0');
 /** Text inside a "#" comment must stay on that line, or a pasted command block would run the rest. */
@@ -248,7 +301,7 @@ export function cliFor(model: NetworkModel, c: Change): string[] {
       const perm = {
         IpProtocol: protoArg(c.protocol),
         ...(hasPorts(normalizeProtocol(c.protocol)) ? { FromPort: c.fromPort ?? 0, ToPort: c.toPort ?? c.fromPort ?? 65535 } : {}),
-        ...(c.cidr ? { IpRanges: [{ CidrIp: c.cidr, ...(c.description ? { Description: c.description } : {}) }] } : { UserIdGroupPairs: [{ GroupId: c.referencedGroupId }] }),
+        ...(c.cidr ? { IpRanges: [{ CidrIp: c.cidr, ...(c.description ? { Description: c.description } : {}) }] } : c.prefixListId ? { PrefixListIds: [{ PrefixListId: c.prefixListId }] } : { UserIdGroupPairs: [{ GroupId: c.referencedGroupId }] }),
       };
       return [`aws ec2 authorize-security-group-${c.egress ? 'egress' : 'ingress'}${region} --group-id ${q(c.groupId)} --ip-permissions ${q(JSON.stringify([perm]))}`];
     }
@@ -270,6 +323,21 @@ export function cliFor(model: NetworkModel, c: Change): string[] {
         ? [`# Find the association ID, then disassociate the Elastic IP:`, `aws ec2 describe-addresses${region} --public-ips ${q(c.publicIp)} --query 'Addresses[0].AssociationId' --output text`, `aws ec2 disassociate-address${region} --association-id <association-id>`]
         : [`# ${oneLine(c.publicIp)} is an auto-assigned public IP. It is released when the instance stops, or by replacing the interface; there is no single CLI call to remove it.`];
     }
+    case 'attach-sg': {
+      const eni = model.enis.get(c.eniId);
+      const all = [...new Set([...(eni?.groupIds ?? []), c.groupId])];
+      return [`aws ec2 modify-network-interface-attribute${region} --network-interface-id ${q(c.eniId)} --groups ${all.map(q).join(' ')}`];
+    }
+    case 'add-route': {
+      const t = targetOf(c.targetId);
+      const flag = t.type === 'nat' ? '--nat-gateway-id' : t.type === 'pcx' ? '--vpc-peering-connection-id' : t.type === 'tgw' ? '--transit-gateway-id' : t.type === 'eni' ? '--network-interface-id' : t.type === 'instance' ? '--instance-id' : t.type === 'vpce' ? '--vpc-endpoint-id' : t.type === 'eigw' ? '--egress-only-internet-gateway-id' : '--gateway-id';
+      const dest = c.destination.startsWith('pl-') ? '--destination-prefix-list-id' : '--destination-cidr-block';
+      return [`aws ec2 create-route${region} --route-table-id ${q(c.routeTableId)} ${dest} ${q(c.destination)} ${flag} ${q(c.targetId)}`];
+    }
+    case 'create-sg':
+      return [`# ${oneLine(c.groupId)} (${oneLine(c.name)}) is created by the plan; its real ID is assigned on apply.`];
+    case 'add-public-ip':
+      return [`# Attach the public IP with the change that introduces it (Elastic IP association or the instance setting).`];
     case 'detach-sg': {
       const eni = model.enis.get(c.eniId);
       const keep = (eni?.groupIds ?? []).filter((g) => g !== c.groupId);
@@ -286,6 +354,7 @@ export type DiffStatus = 'closed' | 'opened' | 'narrowed' | 'widened' | 'changed
 
 export interface ExposureDelta {
   status: DiffStatus;
+  family?: 'ipv6';
   resourceId: string;
   resourceName: string;
   protocol: string;
@@ -313,10 +382,11 @@ export interface ExposureDiff {
 }
 
 const toSet = (labels: string[]) => (labels.some((l) => l.startsWith('0.0.0.0/0 (')) ? INTERNET : RangeSet.fromCidrs(labels));
+const toSet6 = (labels: string[]) => (labels.some((l) => l.startsWith('::/0 (')) ? INTERNET6 : RangeSet6.fromCidrs(labels));
 
 interface Seg {
   ports?: PortRange;
-  set: RangeSet;
+  set: RangeSet | RangeSet6;
   labels: string[];
   name: string;
 }
@@ -325,8 +395,8 @@ function index(report: ExposureReport): Map<string, Seg[]> {
   const m = new Map<string, Seg[]>();
   const add = (key: string, s: Seg) => (m.get(key) ?? m.set(key, []).get(key)!).push(s);
   for (const f of report.findings) {
-    const key = `${f.resourceId}|${f.protocol}|${f.listener ? f.listener.port : ''}`;
-    add(key, { ...(hasPorts(normalizeProtocol(f.protocol)) || f.protocol === 'icmp' ? { ports: f.ports } : {}), set: toSet(f.sourceRanges), labels: f.sourceRanges, name: f.resourceName });
+    const key = `${f.resourceId}|${f.protocol}|${f.listener ? f.listener.port : ''}|${f.family ?? ''}`;
+    add(key, { ...(hasPorts(normalizeProtocol(f.protocol)) || f.protocol === 'icmp' ? { ports: f.ports } : {}), set: f.family === 'ipv6' ? toSet6(f.sourceRanges) : toSet(f.sourceRanges), labels: f.sourceRanges, name: f.resourceName });
   }
   return m;
 }
@@ -343,7 +413,7 @@ export function diffExposure(before: ExposureReport, after: ExposureReport, blas
   const b = index(after);
   const deltas: ExposureDelta[] = [];
   for (const key of new Set([...a.keys(), ...b.keys()])) {
-    const [resourceId, protocol, listener] = key.split('|') as [string, string, string];
+    const [resourceId, protocol, listener, family] = key.split('|') as [string, string, string, string];
     const sa = a.get(key) ?? [];
     const sb = b.get(key) ?? [];
     const name = (sa[0] ?? sb[0])!.name;
@@ -357,9 +427,9 @@ export function diffExposure(before: ExposureReport, after: ExposureReport, blas
       let status: DiffStatus | undefined;
       if (x && !y) status = 'closed';
       else if (!x && y) status = 'opened';
-      else if (x && y && !x.set.equals(y.set)) {
-        const lost = !x.set.subtract(y.set).isEmpty();
-        const gained = !y.set.subtract(x.set).isEmpty();
+      else if (x && y && !(x.set as RangeSet).equals(y.set as RangeSet)) {
+        const lost = !(x.set as RangeSet).subtract(y.set as RangeSet).isEmpty();
+        const gained = !(y.set as RangeSet).subtract(x.set as RangeSet).isEmpty();
         status = lost && !gained ? 'narrowed' : gained && !lost ? 'widened' : 'changed';
       }
       if (!status) {
@@ -380,6 +450,7 @@ export function diffExposure(before: ExposureReport, after: ExposureReport, blas
         protocol,
         ...(seg.ports ? { ports: seg.ports } : {}),
         ...(listener ? { listenerPort: Number(listener) } : {}),
+        ...(family === 'ipv6' ? { family: 'ipv6' as const } : {}),
         severity: assessPorts(protocol, seg.ports).severity,
         before: beforeLabels,
         after: afterLabels,
@@ -389,7 +460,10 @@ export function diffExposure(before: ExposureReport, after: ExposureReport, blas
   }
   deltas.sort((x, y) => compareSeverity(x.severity, y.severity) || x.resourceName.localeCompare(y.resourceName));
   const ids = (r: BlastReport) => new Set(r.chains.map((c) => c.id));
-  const chainsClosed = blast ? blast.before.chains.filter((c) => !ids(blast.after).has(c.id)) : [];
+  // A chain whose target the internet now reaches directly is not closed: it is
+  // folded into the new exposure, which is worse. Only report real closures.
+  const hiddenAfter = new Set(blast?.after.hidden ?? []);
+  const chainsClosed = blast ? blast.before.chains.filter((c) => !ids(blast.after).has(c.id) && !hiddenAfter.has(c.id)) : [];
   const hiddenBefore = new Set(blast?.before.hidden ?? []);
   const fresh = blast ? blast.after.chains.filter((c) => !ids(blast.before).has(c.id)) : [];
   const chainsOpened = fresh.filter((c) => !hiddenBefore.has(c.id));

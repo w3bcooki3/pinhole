@@ -1,0 +1,83 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "aws_vpc_security_group_ingress_rule.web_8443",
+      "mode": "managed",
+      "type": "aws_vpc_security_group_ingress_rule",
+      "name": "web_8443",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": { "security_group_id": "sg-web", "ip_protocol": "tcp", "from_port": 8443, "to_port": 8443, "cidr_ipv4": "0.0.0.0/0", "description": "admin UI" },
+        "after_unknown": { "id": true, "security_group_rule_id": true, "arn": true }
+      }
+    },
+    {
+      "address": "aws_security_group.bastion",
+      "mode": "managed",
+      "type": "aws_security_group",
+      "name": "bastion",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "id": "sg-bastion",
+          "ingress": [{ "cidr_blocks": ["0.0.0.0/0"], "description": "", "from_port": 22, "ipv6_cidr_blocks": [], "prefix_list_ids": [], "protocol": "tcp", "security_groups": [], "self": false, "to_port": 22 }],
+          "egress": [{ "cidr_blocks": ["0.0.0.0/0"], "description": "", "from_port": 0, "ipv6_cidr_blocks": [], "prefix_list_ids": [], "protocol": "-1", "security_groups": [], "self": false, "to_port": 0 }]
+        },
+        "after": {
+          "id": "sg-bastion",
+          "ingress": [{ "cidr_blocks": ["203.0.113.0/24"], "description": "office", "from_port": 22, "ipv6_cidr_blocks": [], "prefix_list_ids": [], "protocol": "tcp", "security_groups": [], "self": false, "to_port": 22 }],
+          "egress": [{ "cidr_blocks": ["0.0.0.0/0"], "description": "", "from_port": 0, "ipv6_cidr_blocks": [], "prefix_list_ids": [], "protocol": "-1", "security_groups": [], "self": false, "to_port": 0 }]
+        },
+        "after_unknown": {}
+      }
+    },
+    {
+      "address": "aws_network_acl_rule.block_https",
+      "mode": "managed",
+      "type": "aws_network_acl_rule",
+      "name": "block_https",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": { "network_acl_id": "acl-default", "rule_number": 50, "egress": false, "protocol": "tcp", "rule_action": "deny", "cidr_block": "0.0.0.0/0", "from_port": 443, "to_port": 443 },
+        "after_unknown": { "id": true }
+      }
+    },
+    {
+      "address": "aws_security_group_rule.new_group_ssh",
+      "mode": "managed",
+      "type": "aws_security_group_rule",
+      "name": "new_group_ssh",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": { "type": "ingress", "protocol": "tcp", "from_port": 22, "to_port": 22, "cidr_blocks": ["0.0.0.0/0"] },
+        "after_unknown": { "id": true, "security_group_id": true }
+      }
+    },
+    {
+      "address": "aws_lb_listener.public",
+      "mode": "managed",
+      "type": "aws_lb_listener",
+      "name": "public",
+      "change": { "actions": ["create"], "before": null, "after": { "port": 80 }, "after_unknown": { "arn": true } }
+    },
+    {
+      "address": "aws_s3_bucket.logs",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "logs",
+      "change": { "actions": ["create"], "before": null, "after": { "bucket": "logs" }, "after_unknown": { "id": true } }
+    },
+    {
+      "address": "data.aws_vpc.main",
+      "mode": "data",
+      "type": "aws_vpc",
+      "name": "main",
+      "change": { "actions": ["read"], "before": null, "after": {}, "after_unknown": {} }
+    }
+  ]
+}

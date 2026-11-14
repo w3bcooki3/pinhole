@@ -1,0 +1,73 @@
+{
+  "description": "IPv6 addresses need no public IP: an interface in a subnet whose ::/0 route points at an internet gateway is reachable over IPv6 wherever the network ACL and security groups allow it. An egress-only internet gateway carries outbound traffic only.",
+  "docs": [
+    "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-ip-addressing.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/egress-only-internet-gateway.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/custom-network-acl.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html"
+  ],
+  "exposure": {
+    "exposed": [
+      {
+        "resource": "eni-dual",
+        "protocol": "tcp",
+        "port": 22,
+        "returnPath": "partial",
+        "family": "ipv6",
+        "sources": [
+          "2001:db8:abcd::/48"
+        ]
+      },
+      {
+        "resource": "eni-dual",
+        "protocol": "tcp",
+        "port": 443,
+        "returnPath": "partial",
+        "family": "ipv6",
+        "sources": [
+          "::/0 (every internet address)"
+        ]
+      },
+      {
+        "resource": "eni-dual",
+        "protocol": "tcp",
+        "port": 5432,
+        "returnPath": "partial",
+        "family": "ipv6",
+        "notFrom": [
+          "2001:db8:dead::/48"
+        ],
+        "from": [
+          "2001:db8:abcd::/48",
+          "2001:db8:beef::/48",
+          "2a00::/12"
+        ]
+      }
+    ],
+    "notExposed": [
+      {
+        "resource": "eni-dual",
+        "protocol": "tcp",
+        "port": 8080
+      },
+      {
+        "resource": "eni-dual",
+        "protocol": "tcp",
+        "port": 3306
+      },
+      {
+        "resource": "eni-egress-only",
+        "protocol": "tcp",
+        "port": 443
+      },
+      {
+        "resource": "eni-ipv4-only",
+        "protocol": "tcp",
+        "port": 443
+      }
+    ],
+    "exactResources": [
+      "eni-dual"
+    ]
+  }
+}

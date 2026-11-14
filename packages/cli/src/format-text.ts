@@ -46,7 +46,7 @@ function returnText(f: ExposureFinding): string {
 function findingBlock(f: ExposureFinding, verbose: boolean): string[] {
   const lines: string[] = [];
   const why = f.reasons.length ? ` (${f.reasons.join('; ')})` : '';
-  lines.push(`[${f.severity.toUpperCase()}] ${portText(f)}${why}`);
+  lines.push(`[${f.severity.toUpperCase()}] ${portText(f)}${f.family === 'ipv6' ? ' over IPv6' : ''}${why}`);
   lines.push(`  resource: ${f.resourceName}`);
   if (f.kind === 'load-balancer') lines.push(`  arn:      ${f.resourceId}`);
   lines.push(`  public:   ${f.publicIps.join(', ') || '(none)'}`);

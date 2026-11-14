@@ -2,6 +2,23 @@
   "name": "@pinhole/engine",
   "version": "0.2.0",
   "description": "Pure, I/O-free evaluation of AWS VPC reachability (security groups, network ACLs, routing, load balancers)",
+  "keywords": [
+    "aws",
+    "vpc",
+    "security-groups",
+    "network-acl",
+    "reachability",
+    "routing"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/w3bcooki3/pinhole.git",
+    "directory": "packages/engine"
+  },
+  "homepage": "https://w3bcooki3.github.io/pinhole/",
+  "bugs": {
+    "url": "https://github.com/w3bcooki3/pinhole/issues"
+  },
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
@@ -12,6 +29,8 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "sideEffects": false
 }

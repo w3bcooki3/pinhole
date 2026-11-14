@@ -24,6 +24,37 @@ const fixture = (name: string) => readFileSync(join(root, 'fixtures', name, 'sna
 const text = (doc: Document, sel: string) => doc.querySelector(sel)?.textContent ?? '';
 
 describe('web console', () => {
+  it('compares two snapshots of one account and region, and uses only the latest elsewhere', () => {
+    const { doc, api } = page();
+    // The demo has an older copy of prod us-east-1: it is kept for Compare and left out of the dashboard.
+    expect(text(doc, '#total')).toBe('19');
+    expect(text(doc, '.chip-older')).toBe('+1 older');
+    api.go('compare');
+    expect(text(doc, '#cmp-verdict')).toMatch(/^2 new or wider internet exposures, no new attack chains, 1 closed or narrower, 3 configuration changes\./);
+    const exp = text(doc, '#cmp-exposure');
+    expect(exp).toMatch(/New.*win-jump-01.*tcp\/3389.*0\.0\.0\.0\/0/);
+    // 10.0.0.0/8 is not the internet, so analytics-db is newly exposed, not wider.
+    expect(exp).toMatch(/New.*analytics-db.*tcp\/5432.*0\.0\.0\.0\/0/);
+    // The chain to analytics-db is not "closed": the database is now directly exposed, which is worse.
+    expect(doc.getElementById('cmp-chains')).toBeNull();
+    expect(text(doc, '#cmp-config')).toMatch(/Changed.*sgr-000003427.*tcp\/5432 from 10\.0\.0\.0\/8.*tcp\/5432 from 0\.0\.0\.0\/0/);
+    expect(exp).toMatch(/Closed.*grafana-ops.*tcp\/9090/);
+    expect(text(doc, '#cmp-config')).toMatch(/Removed.*security group rule.*sgr-0prometheus01/);
+
+    // Two snapshots of different scopes only: nothing to compare.
+    api.loadText(fixture('06-public-ip-without-igw-route'), 'a.json');
+    api.go('compare');
+    expect(text(doc, '#main, main')).toMatch(/Load two snapshots of one account and region/);
+
+    // Load the same scope again, later and with a new open port: Compare picks it up.
+    const later = JSON.parse(fixture('06-public-ip-without-igw-route'));
+    later.collectedAt = '2030-01-01T00:00:00Z';
+    later.ec2.SecurityGroupRules.push({ SecurityGroupRuleId: 'sgr-new-22', GroupId: later.ec2.SecurityGroupRules[0].GroupId, IsEgress: false, IpProtocol: 'tcp', FromPort: 22, ToPort: 22, CidrIpv4: '0.0.0.0/0' });
+    api.loadText(JSON.stringify(later), 'b.json');
+    api.go('compare');
+    expect(text(doc, '#cmp-config')).toMatch(/Added.*sgr-new-22/);
+  });
+
   it('is one file with no external resources and a no-network content security policy', () => {
     expect(html).toMatch(/http-equiv="Content-Security-Policy" content="default-src 'none'/);
     // Scripts are allowed only by the hash of the one inline script.
@@ -193,10 +224,10 @@ describe('web console', () => {
   it('reports coverage gaps on the coverage page', () => {
     const { doc, api } = page();
     const snap = JSON.parse(fixture('06-public-ip-without-igw-route'));
-    snap.ec2.Vpcs[0].Ipv6CidrBlockAssociationSet = [{ Ipv6CidrBlock: '2600:1f18::/56' }];
+    snap.ec2.RouteTables[0].Routes.push({ DestinationCidrBlock: '10.99.0.0/16', NetworkInterfaceId: 'eni-appliance', State: 'active', Origin: 'CreateRoute' });
     api.loadText(JSON.stringify(snap), 'x.json');
     api.go('coverage');
-    expect(text(doc, '#notes')).toMatch(/IPv6/);
+    expect(text(doc, '#notes')).toMatch(/appliance or NAT instance/);
   });
 
   describe('0.2 pages', () => {

@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { normalize, evaluatePath, analyzeExposure, analyzeBlastRadius, analyzeHygiene, applyChanges, diffExposure, findFixes, reachServices, serviceLabel } from '../src/index.js';
 import type { Change, Endpoint, ExposureFinding, PathResult } from '../src/index.js';
+import { INTERNET6, RangeSet6 } from '../src/ipv6.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../../../fixtures');
 
@@ -31,7 +32,7 @@ interface Expected {
   docs: string[];
   paths?: PathCase[];
   exposure?: {
-    exposed?: { resource: string; protocol: string; port: number; returnPath?: string }[];
+    exposed?: { resource: string; protocol: string; port: number; returnPath?: string; family?: string; sources?: string[]; from?: string[]; notFrom?: string[] }[];
     notExposed?: { resource: string; protocol: string; port: number }[];
     exactResources?: string[];
     lbTargets?: { lb: string; listenerPort: number; target: string; port: number; verdict: string }[];
@@ -104,6 +105,11 @@ describe('fixtures', () => {
             const f = report.findings.find((x) => covers(x, e.resource, e.protocol, e.port));
             expect(f, `expected ${e.resource} ${e.protocol}/${e.port} exposed${summary}`).toBeDefined();
             if (e.returnPath) expect(f?.returnPath, summary).toBe(e.returnPath);
+            if (e.family) expect(f?.family, summary).toBe(e.family);
+            if (e.sources) expect(f?.sourceRanges, summary).toEqual(e.sources);
+            const set = f?.family === 'ipv6' ? (f.sourceRanges[0]?.startsWith('::/0 (') ? INTERNET6 : RangeSet6.fromCidrs(f.sourceRanges)) : undefined;
+            for (const c of e.from ?? []) expect(set && RangeSet6.fromCidrs([c]).subtract(set).isEmpty(), `${c} should be a source${summary}`).toBe(true);
+            for (const c of e.notFrom ?? []) expect(set && RangeSet6.fromCidrs([c]).intersect(set).isEmpty(), `${c} should not be a source${summary}`).toBe(true);
           }
           for (const e of exp.notExposed ?? []) {
             const f = report.findings.find((x) => covers(x, e.resource, e.protocol, e.port));

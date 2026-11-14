@@ -13,13 +13,14 @@ import type { Category, Row, Severity, Snap } from './data.js';
 import { iconFor, iconSvg, renderGraph } from './graph.js';
 import { ALL, boxHead, btn, empty, linkBtn, sevPill, sevVar, softVar } from './ui.js';
 import { reportDoc, reportHtml, REPORT_CSS } from './report.js';
+import { comparePage } from './compare.js';
 import { askPage, blastPage, fixesSection, hygienePage, openPalette, planBox, simulatorPage } from './pages.js';
 import type { Ctx } from './pages.js';
 import type { Change } from '@pinhole/engine';
 
 
-type Route = 'dashboard' | 'graph' | 'blast' | 'issues' | 'resources' | 'hygiene' | 'coverage' | 'simulator' | 'ask' | 'report' | 'connect';
-const ROUTES: Route[] = ['dashboard', 'graph', 'blast', 'issues', 'resources', 'hygiene', 'coverage', 'simulator', 'ask', 'report', 'connect'];
+type Route = 'dashboard' | 'graph' | 'blast' | 'issues' | 'resources' | 'hygiene' | 'coverage' | 'simulator' | 'compare' | 'ask' | 'report' | 'connect';
+const ROUTES: Route[] = ['dashboard', 'graph', 'blast', 'issues', 'resources', 'hygiene', 'coverage', 'simulator', 'compare', 'ask', 'report', 'connect'];
 const PAGES: { route: Route; label: string; icon: string }[] = [
   { route: 'dashboard', label: 'Dashboard', icon: 'home' },
   { route: 'graph', label: 'Attack graph', icon: 'graph' },
@@ -29,6 +30,7 @@ const PAGES: { route: Route; label: string; icon: string }[] = [
   { route: 'hygiene', label: 'Rule hygiene', icon: 'broom' },
   { route: 'coverage', label: 'Coverage', icon: 'shield' },
   { route: 'simulator', label: 'Simulator', icon: 'flask' },
+  { route: 'compare', label: 'Compare snapshots', icon: 'compare' },
   { route: 'ask', label: 'Reachability query', icon: 'route' },
   { route: 'report', label: 'Report', icon: 'file' },
   { route: 'connect', label: 'Connect an account', icon: 'plug' },
@@ -36,7 +38,12 @@ const PAGES: { route: Route; label: string; icon: string }[] = [
 type CatFilter = Category | 'world' | '';
 
 const st = {
+  /** Every loaded snapshot, including older ones of the same account and region. */
+  all: [] as Snap[],
+  /** The latest snapshot of each account and region: what every analysis page uses. */
   snaps: [] as Snap[],
+  cmpOld: '',
+  cmpNew: '',
   demo: true,
   route: 'dashboard' as Route,
   sel: '' as string,
@@ -65,14 +72,18 @@ const st = {
 let rows: Row[] = [];
 
 const port = (r: Row) => D.service(r.f).split('/')[1] ?? D.service(r.f);
-const pathTitle = (r: Row) => `${D.shortName(r.f)} on ${D.service(r.f)}`;
+const pathTitle = (r: Row) => `${D.shortName(r.f)} on ${D.service(r.f)}${r.f.family === 'ipv6' ? ' over IPv6' : ''}`;
 const scopeOf = (r: Row) => `${r.snap.account} / ${r.snap.region}`;
 
 // ---------------------------------------------------------------- data in
 
-function setSnaps(snaps: Snap[], demo: boolean) {
+function setSnaps(all: Snap[], demo: boolean) {
+  st.all = all;
+  const snaps = D.latestPerScope(all);
   st.snaps = snaps;
   st.demo = demo;
+  st.cmpOld = '';
+  st.cmpNew = '';
   rows = D.rowsOf(snaps);
   st.sel = '';
   st.cat = '';
@@ -92,7 +103,7 @@ function setSnaps(snaps: Snap[], demo: boolean) {
 function addSnaps(list: Snap[], errors: string[]) {
   st.error = errors.join(' ');
   if (list.length) {
-    const keep = st.demo ? [] : st.snaps.filter((x) => !list.some((n) => n.key === x.key));
+    const keep = st.demo ? [] : st.all.filter((x) => !list.some((n) => n.key === x.key));
     setSnaps([...keep, ...list], false);
     st.route = 'dashboard';
     toast(`Loaded ${D.plural(list.length, 'snapshot')}`);
@@ -400,7 +411,7 @@ function dashboard(): HTMLElement {
       { class: 'box summary s12', id: 'summary' },
       h('div', {}, h('div', { class: 'k' }, 'Internet exposures'), h('div', { class: 'v', id: 'total' }, String(rows.length)), bar, legend),
       cell('Exposed resources', String(res.length), `${D.plural(lbs, 'load balancer')}, ${D.plural(res.length - lbs, 'interface')}`, () => go('resources')),
-      cell('Open to any address', String(world), 'Exposures open to 0.0.0.0/0', toIssues({ cat: 'world' })),
+      cell('Open to any address', String(world), 'Exposures open to 0.0.0.0/0 or ::/0', toIssues({ cat: 'world' })),
       cell('Attack chains', String(chainRows.length), chainRows.length ? `${chainRows.filter((c) => c.c.severity === 'critical').length} critical, reaching ${new Set(chainRows.map((c) => `${c.snap.key}|${c.c.targetId}`)).size} resources` : 'No lateral movement found', () => go('blast')),
       cell('Coverage notes', String(warn), warn ? 'Configuration not fully analysed' : 'Everything was analysed', () => go('coverage')),
     ),
@@ -462,7 +473,7 @@ function dashboard(): HTMLElement {
                 { class: 'click', tabindex: 0 },
                 h('td', { class: 'first' }, sevPill(r.f.severity)),
                 h('td', { style: 'max-width:0;width:40%' }, chain(r)),
-                h('td', {}, h('span', { class: 'mono' }, D.service(r.f)), D.serviceName(r.f) ? h('span', { class: 'faint' }, `  ${D.serviceName(r.f)}`) : null),
+                h('td', {}, h('span', { class: 'mono' }, D.service(r.f)), r.f.family === 'ipv6' ? h('span', { class: 'tag v6' }, 'IPv6') : null, D.serviceName(r.f) ? h('span', { class: 'faint' }, `  ${D.serviceName(r.f)}`) : null),
                 h('td', { class: 'mono hide-sm' }, D.openTo(r.f)),
                 h('td', { class: 'last mono faint hide-sm nowrap' }, `${r.snap.account} ${r.snap.region}`),
               ),
@@ -657,7 +668,7 @@ function issuesPage(): HTMLElement {
             { class: 'click', tabindex: 0, 'aria-selected': String(st.sel === r.id) },
             h('td', { class: 'first' }, sevPill(r.f.severity)),
             h('td', {}, h('div', { style: 'font-weight:600' }, D.shortName(r.f)), h('div', { class: 'faint', style: 'font-size:0.75rem' }, D.kind(r.f))),
-            h('td', {}, h('span', { class: 'mono' }, D.service(r.f)), h('div', { class: 'faint', style: 'font-size:0.75rem' }, D.serviceName(r.f))),
+            h('td', {}, h('span', { class: 'mono' }, D.service(r.f)), r.f.family === 'ipv6' ? h('span', { class: 'tag v6' }, 'IPv6') : null, h('div', { class: 'faint', style: 'font-size:0.75rem' }, D.serviceName(r.f))),
             h('td', { class: 'mono' }, D.openTo(r.f)),
             h('td', { class: 'mono faint hide-sm' }, `${r.snap.account} ${r.snap.region}`),
           ),
@@ -958,7 +969,9 @@ function render() {
   if (st.demo) scope.append(h('span', { class: 'scope-chip' }, 'Demo environment'));
   else
     for (const x of st.snaps)
-      scope.append(h('span', { class: 'scope-chip chip-snap', title: x.name }, h('span', { class: 'k' }, x.account), x.region, on(h('button', { type: 'button', 'aria-label': `Remove ${x.account} ${x.region}` }, iconSvg('x', 12)), 'click', () => { setSnaps(st.snaps.filter((y) => y !== x), false); render(); })));
+      scope.append(h('span', { class: 'scope-chip chip-snap', title: x.name }, h('span', { class: 'k' }, x.account), x.region, on(h('button', { type: 'button', 'aria-label': `Remove ${x.account} ${x.region}` }, iconSvg('x', 12)), 'click', () => { setSnaps(st.all.filter((y) => y.account !== x.account || y.region !== x.region), false); render(); })));
+    const older = st.all.length - st.snaps.length;
+    if (older > 0) scope.append(on(h('button', { type: 'button', class: 'scope-chip chip-older', title: 'Older snapshots of the same account and region are kept for Compare and left out of every other page.' }, `+${older} older`), 'click', () => go('compare')));
   const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? '');
 
   let view: HTMLElement;
@@ -972,6 +985,7 @@ function render() {
     case 'resources': view = resourcesPage(); break;
     case 'coverage': view = coveragePage(); break;
     case 'report': view = reportPage(); break;
+    case 'compare': view = comparePage({ st, go: (r, p = {}) => go(r as Route, p as Partial<typeof st>) }); break;
     case 'connect': view = connectPage(); break;
     default: view = dashboard();
   }
@@ -985,7 +999,7 @@ function render() {
   const isFull = st.route === 'graph' || st.route === 'simulator';
 
   const ribbon = st.demo
-    ? h('div', { class: 'ribbon', id: 'demo', role: 'note' }, h('b', {}, 'Demo environment'), h('span', {}, 'Sample data from five snapshots. Load your own to replace it.'), h('span', { class: 'sp' }), on(h('button', { type: 'button' }, 'Load snapshots'), 'click', pick), on(h('button', { type: 'button' }, 'Connect an account'), 'click', () => go('connect')))
+    ? h('div', { class: 'ribbon', id: 'demo', role: 'note' }, h('b', {}, 'Demo environment'), h('span', {}, `Sample data from ${D.plural(st.all.length, 'snapshot')}. Load your own to replace it.`), h('span', { class: 'sp' }), on(h('button', { type: 'button' }, 'Load snapshots'), 'click', pick), on(h('button', { type: 'button' }, 'Connect an account'), 'click', () => go('connect')))
     : null;
   root.replaceChildren(
     h(
@@ -1012,6 +1026,7 @@ function render() {
           link('coverage', 'shield', 'Coverage', warn),
           h('div', { class: 'grp' }, 'Tools'),
           link('simulator', 'flask', 'Simulator', st.changes.length),
+          link('compare', 'compare', 'Compare', st.all.length - st.snaps.length),
           link('ask', 'route', 'Reachability query'),
           link('report', 'file', 'Report'),
           link('connect', 'plug', 'Connect an account'),

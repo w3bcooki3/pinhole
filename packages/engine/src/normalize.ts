@@ -6,6 +6,7 @@
  * route targets classified by type, NACL entries sorted.
  */
 import { isIpv4Cidr, parseCidr } from './ipv4.js';
+import { parseCidr6 } from './ipv6.js';
 import { normalizeProtocol } from './packet.js';
 import type { RawAction, RawIpPermission, RawRoute, Snapshot } from './snapshot.js';
 import { assertSnapshot } from './snapshot.js';
@@ -19,6 +20,7 @@ import type {
   SgRule,
   TargetGroup,
   Warning,
+  Route6,
 } from './types.js';
 
 /**
@@ -206,8 +208,17 @@ export function normalize(input: unknown): NetworkModel {
   // ---- Route tables
   for (const rt of ec2.RouteTables ?? []) {
     const routes: Route[] = [];
+    const routes6: Route6[] = [];
     for (const r of rt.Routes ?? []) {
-      if (!r.DestinationCidrBlock && !r.DestinationPrefixListId) continue; // IPv6-only route
+      if (r.DestinationIpv6CidrBlock && !r.DestinationCidrBlock) {
+        try {
+          routes6.push({ destination: parseCidr6(r.DestinationIpv6CidrBlock).text, target: r.EgressOnlyInternetGatewayId ? { type: 'eigw', id: r.EgressOnlyInternetGatewayId } : classifyTarget(r), state: r.State === 'blackhole' ? 'blackhole' : 'active' });
+        } catch {
+          warnings.push({ code: 'bad-cidr', message: `Could not parse IPv6 CIDR "${r.DestinationIpv6CidrBlock}".`, resourceIds: [rt.RouteTableId] });
+        }
+        continue;
+      }
+      if (!r.DestinationCidrBlock && !r.DestinationPrefixListId) continue;
       const destination = tryCidr(r.DestinationCidrBlock, warnings, rt.RouteTableId);
       if (r.DestinationCidrBlock && !destination) continue;
       routes.push({
@@ -226,6 +237,7 @@ export function normalize(input: unknown): NetworkModel {
       subnetIds: assoc.map((a) => a.SubnetId).filter((x): x is string => !!x),
       gatewayIds: assoc.map((a) => a.GatewayId).filter((x): x is string => !!x),
       routes,
+      routes6,
     });
   }
 
@@ -391,6 +403,7 @@ export function normalize(input: unknown): NetworkModel {
       groupIds: (n.Groups ?? []).map((g) => g.GroupId).filter((x): x is string => !!x),
       ...(n.Attachment?.InstanceId ? { instanceId: n.Attachment.InstanceId } : {}),
       hasIpv6: (n.Ipv6Addresses ?? []).length > 0,
+      ipv6Addresses: (n.Ipv6Addresses ?? []).map((a) => a.Ipv6Address).filter((x): x is string => !!x),
     });
   }
   for (const i of ec2.Instances ?? []) {

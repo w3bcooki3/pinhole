@@ -19,6 +19,7 @@ import type { ExposureFinding, ExposureReport } from './exposure.js';
 import { hasPorts, normalizeProtocol, protocolName } from './packet.js';
 import { compareSeverity } from './risk.js';
 import { serviceLabel } from './reach.js';
+import { INTERNET6, RangeSet6 } from './ipv6.js';
 import { INTERNET, RangeSet } from './ipv4.js';
 import { analyzeBlastRadius, findingKey } from './blast.js';
 import type { AttackChain, BlastReport } from './blast.js';
@@ -95,6 +96,11 @@ function allowingRules(model: NetworkModel, f: ExposureFinding): string[] {
     for (const r of model.securityGroups.get(gid)?.ingress ?? []) {
       if (r.protocol !== '-1' && r.protocol !== proto) continue;
       if (hasPorts(proto) && r.protocol !== '-1' && r.fromPort !== undefined && r.fromPort !== -1 && ((r.toPort ?? r.fromPort) < f.ports.from || r.fromPort > f.ports.to)) continue;
+      if (f.family === 'ipv6') {
+        // IPv6 findings come only from IPv6 rules that admit some internet address.
+        if (r.ipv6CidrText && !INTERNET6.intersect(RangeSet6.fromCidrs([r.ipv6CidrText])).isEmpty()) out.push(r.id);
+        continue;
+      }
       const sources = r.cidr ? [r.cidr] : r.prefixListId ? model.prefixLists.get(r.prefixListId)?.entries ?? [] : [];
       if (sources.some((c) => !INTERNET.intersect(RangeSet.of([c])).isEmpty())) out.push(r.id);
     }

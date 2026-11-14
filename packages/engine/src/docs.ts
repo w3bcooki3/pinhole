@@ -27,6 +27,7 @@ export const DOCS = {
   gwlbRouting: 'https://docs.aws.amazon.com/vpc/latest/userguide/gwlb-route.html',
   networkFirewall: 'https://docs.aws.amazon.com/network-firewall/latest/developerguide/what-is-aws-network-firewall.html',
   egressOnlyIgw: 'https://docs.aws.amazon.com/vpc/latest/userguide/egress-only-internet-gateway.html',
+  ipv6Addressing: 'https://docs.aws.amazon.com/vpc/latest/userguide/vpc-ip-addressing.html',
   classicElb: 'https://docs.aws.amazon.com/elasticloadbalancing/latest/classic/introduction.html',
   globalAccelerator: 'https://docs.aws.amazon.com/global-accelerator/latest/dg/introduction-how-it-works.html',
   cloudfrontPrefixList: 'https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/LocationsOfEdgeServers.html',

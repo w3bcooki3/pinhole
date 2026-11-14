@@ -28,3 +28,7 @@ export type { Snapshot } from './snapshot.js';
 export { DOCS } from './docs.js';
 export { parseIpv4, formatIpv4, parseCidr, RangeSet, INTERNET } from './ipv4.js';
 export type * from './types.js';
+export { diffSnapshots, DriftError } from './drift.js';
+export type { ConfigChange, ConfigKind, SnapshotDiff } from './drift.js';
+export { mapTerraformPlan, PlanError } from './terraform.js';
+export type { PlanMapping, PlanResourceResult } from './terraform.js';

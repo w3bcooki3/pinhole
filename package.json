@@ -2,6 +2,23 @@
   "name": "pinhole-monorepo",
   "private": true,
   "description": "Offline AWS network reachability analysis",
+  "keywords": [
+    "aws",
+    "vpc",
+    "security-groups",
+    "network-acl",
+    "reachability",
+    "attack-surface",
+    "cloud-security"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/w3bcooki3/pinhole.git"
+  },
+  "homepage": "https://w3bcooki3.github.io/pinhole/",
+  "bugs": {
+    "url": "https://github.com/w3bcooki3/pinhole/issues"
+  },
   "license": "MIT",
   "type": "module",
   "workspaces": [
@@ -21,7 +38,8 @@
     "fixture-count": "node scripts/fixture-count.mjs",
     "build:web": "node scripts/build-web.mjs",
     "typecheck:web": "tsc -p packages/web/tsconfig.json",
-    "bench": "node scripts/bench-engine.mjs"
+    "bench": "node scripts/bench-engine.mjs",
+    "check": "npm run build && npm run typecheck:web && npm test && node scripts/fixture-count.mjs --check"
   },
   "devDependencies": {
     "@fontsource/geist-mono": "^5.3.0",

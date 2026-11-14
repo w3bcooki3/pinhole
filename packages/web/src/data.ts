@@ -136,6 +136,21 @@ export function parseFile(text: string, name: string): Snap {
   return analyse(value, name);
 }
 
+/**
+ * The latest snapshot of each account and region, in load order. Older ones of
+ * the same scope would otherwise double every finding; they are for Compare.
+ */
+export function latestPerScope(all: Snap[]): Snap[] {
+  const best = new Map<string, Snap>();
+  for (const s of all) {
+    const k = `${s.account}/${s.region}`;
+    const cur = best.get(k);
+    if (!cur || (s.collectedAt ?? '') >= (cur.collectedAt ?? '')) best.set(k, s);
+  }
+  const keep = new Set(best.values());
+  return all.filter((s) => keep.has(s));
+}
+
 export const demoSnaps = (): Snap[] => __DEMO__.map((d) => analyse(d.snapshot, d.name));
 export const rowsOf = (snaps: Snap[]): Row[] =>
   snaps.flatMap((s) => s.findings.map((f, i) => ({ id: `${s.key}#${i}`, f, snap: s }))).sort(compareRows);
@@ -161,8 +176,9 @@ export const riskList = (f: ExposureFinding, max = 4) => (f.reasons.length > max
 export const riskText = (f: ExposureFinding) => riskList(f).join('; ');
 export const kind = (f: ExposureFinding) => (f.kind === 'load-balancer' ? (f.resourceName.startsWith('NLB') ? 'Network Load Balancer' : 'Application Load Balancer') : 'EC2 network interface');
 export const shortKind = (f: ExposureFinding) => (f.kind === 'load-balancer' ? (f.resourceName.startsWith('NLB') ? 'NLB' : 'ALB') : 'ENI');
-export const openTo = (f: ExposureFinding) => (f.sourceRanges[0]?.startsWith('0.0.0.0/0') ? '0.0.0.0/0' : f.sources.join(', '));
-export const isWorld = (f: ExposureFinding) => !!f.sourceRanges[0]?.startsWith('0.0.0.0/0');
+/** Every internet address, IPv4 (0.0.0.0/0) or IPv6 (::/0). */
+export const isWorld = (f: ExposureFinding) => /^(0\.0\.0\.0\/0|::\/0) \(/.test(f.sourceRanges[0] ?? '');
+export const openTo = (f: ExposureFinding) => (isWorld(f) ? (f.family === 'ipv6' ? '::/0' : '0.0.0.0/0') : f.sources.join(', '));
 export const entryPoint = (f: ExposureFinding) => (f.kind === 'load-balancer' ? f.resourceName : f.trace.find((h) => h.stage === 'igw')?.resourceId ?? 'internet gateway');
 
 export const STAGE: Record<string, string> = {
@@ -441,10 +457,10 @@ export const STALE_DAYS = 7;
 
 /** One plain sentence: who can open what, where. */
 export function sentence(f: ExposureFinding): string {
-  const who = isWorld(f) ? 'Anyone on the internet' : `Clients in ${f.sources.join(', ')}`;
+  const who = isWorld(f) ? `Anyone on the internet${f.family === 'ipv6' ? ' over IPv6' : ''}` : `Clients in ${f.sources.join(', ')}`;
   const what = serviceName(f) ? `${serviceName(f)} (${service(f)})` : service(f);
   const where = f.kind === 'load-balancer' ? `the ${kind(f).toLowerCase()} ${shortName(f)}` : shortName(f);
-  const ip = f.publicIps.length ? ` at ${f.publicIps.join(', ')}` : '';
+  const ip = f.publicIps.length ? ` at ${f.family === 'ipv6' ? 'IPv6 address ' : ''}${f.publicIps.join(', ')}` : '';
   const back = f.returnPath === 'partial' ? ' Responses get back for some client port ranges only.' : '';
   return `${who} can open ${what} on ${where}${ip}.${back}`;
 }

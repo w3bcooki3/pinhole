@@ -1,0 +1,175 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "module.access.aws_security_group.admin",
+      "module_address": "module.access",
+      "mode": "managed",
+      "type": "aws_security_group",
+      "name": "admin",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "name": "admin-access",
+          "vpc_id": "vpc-1",
+          "ingress": [
+            {
+              "cidr_blocks": [
+                "0.0.0.0/0"
+              ],
+              "description": "temporary",
+              "from_port": 22,
+              "ipv6_cidr_blocks": [],
+              "prefix_list_ids": [],
+              "protocol": "tcp",
+              "security_groups": [],
+              "self": false,
+              "to_port": 22
+            }
+          ],
+          "egress": []
+        },
+        "after_unknown": {
+          "id": true,
+          "arn": true,
+          "owner_id": true,
+          "ingress": [
+            {
+              "cidr_blocks": [
+                false
+              ],
+              "ipv6_cidr_blocks": [],
+              "prefix_list_ids": [],
+              "security_groups": []
+            }
+          ],
+          "egress": []
+        }
+      }
+    },
+    {
+      "address": "module.access.aws_vpc_security_group_ingress_rule.rdp",
+      "module_address": "module.access",
+      "mode": "managed",
+      "type": "aws_vpc_security_group_ingress_rule",
+      "name": "rdp",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "ip_protocol": "tcp",
+          "from_port": 3389,
+          "to_port": 3389,
+          "cidr_ipv4": "0.0.0.0/0"
+        },
+        "after_unknown": {
+          "id": true,
+          "arn": true,
+          "security_group_rule_id": true,
+          "security_group_id": true
+        }
+      }
+    },
+    {
+      "address": "aws_instance.web",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "web",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "id": "i-web",
+          "vpc_security_group_ids": [
+            "sg-web"
+          ],
+          "associate_public_ip_address": true
+        },
+        "after": {
+          "id": "i-web",
+          "vpc_security_group_ids": [
+            "sg-web",
+            null
+          ],
+          "associate_public_ip_address": true
+        },
+        "after_unknown": {
+          "vpc_security_group_ids": [
+            false,
+            true
+          ]
+        }
+      }
+    }
+  ],
+  "configuration": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "aws_instance.web",
+          "mode": "managed",
+          "type": "aws_instance",
+          "name": "web",
+          "expressions": {
+            "vpc_security_group_ids": {
+              "references": [
+                "module.access.security_group_id"
+              ]
+            }
+          }
+        }
+      ],
+      "module_calls": {
+        "access": {
+          "source": "./modules/access",
+          "module": {
+            "resources": [
+              {
+                "address": "aws_security_group.admin",
+                "mode": "managed",
+                "type": "aws_security_group",
+                "name": "admin",
+                "expressions": {
+                  "name": {
+                    "constant_value": "admin-access"
+                  }
+                }
+              },
+              {
+                "address": "aws_vpc_security_group_ingress_rule.rdp",
+                "mode": "managed",
+                "type": "aws_vpc_security_group_ingress_rule",
+                "name": "rdp",
+                "expressions": {
+                  "security_group_id": {
+                    "references": [
+                      "aws_security_group.admin.id",
+                      "aws_security_group.admin"
+                    ]
+                  }
+                }
+              }
+            ],
+            "outputs": {
+              "security_group_id": {
+                "expression": {
+                  "references": [
+                    "aws_security_group.admin.id",
+                    "aws_security_group.admin"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

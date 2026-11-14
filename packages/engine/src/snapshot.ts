@@ -470,7 +470,8 @@ function validate(value: unknown, spec: Spec, path: string): unknown {
         if (!Number.isInteger(value) || (value as number) < -1 || (value as number) > 65535) fail(path, 'must be a port number from -1 to 65535');
         return value;
       case 'ruleNo':
-        if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > 32767) fail(path, 'must be a rule number from 1 to 32767');
+        // 32767 is the IPv4 "*" rule, 32768 the IPv6 one.
+        if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > 32768) fail(path, 'must be a rule number from 1 to 32768');
         return value;
     }
   }

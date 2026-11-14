@@ -13,6 +13,7 @@
  * evaluatePath() therefore gives the answer for the whole cell. Adjacent cells
  * with the same answer and the same deciding rules are merged into a finding.
  */
+import { analyzeExposure6 } from './exposure6.js';
 import { DOCS } from './docs.js';
 import { INTERNET, RangeSet, formatIpv4, parseIpv4 } from './ipv4.js';
 import { hasPorts, protocolName } from './packet.js';
@@ -43,6 +44,8 @@ export interface LbTargetResult {
 }
 
 export interface ExposureFinding {
+  /** 'ipv6' for IPv6 findings; absent for IPv4. */
+  family?: 'ipv6';
   kind: 'interface' | 'load-balancer';
   /** ENI ID, or load balancer ARN. */
   resourceId: string;
@@ -474,13 +477,13 @@ function analyseInterfaceCached(model: NetworkModel, eni: Eni, privateIp: string
 function mergeFindings(list: ExposureFinding[]): ExposureFinding[] {
   const byKey = new Map<string, ExposureFinding[]>();
   for (const f of list) {
-    const k = `${f.resourceId}|${f.protocol}|${f.ports.from}-${f.ports.to}|${f.listener?.arn ?? ''}|${f.returnPath}|${f.publicIps.join()}`;
+    const k = `${f.family ?? 'ipv4'}|${f.resourceId}|${f.protocol}|${f.ports.from}-${f.ports.to}|${f.listener?.arn ?? ''}|${f.returnPath}|${f.publicIps.join()}`;
     (byKey.get(k) ?? byKey.set(k, []).get(k)!).push(f);
   }
   const out: ExposureFinding[] = [];
   for (const group of byKey.values()) {
-    if (group.length === 1) {
-      out.push(group[0]!);
+    if (group.length === 1 || group[0]!.family === 'ipv6') {
+      out.push(...group);
       continue;
     }
     const sets = group.map((f) => (f.sourceRanges.some((r) => r.startsWith('0.0.0.0/0 (')) ? INTERNET : RangeSet.fromCidrs(f.sourceRanges)));
@@ -536,6 +539,10 @@ export function analyzeExposure(model: NetworkModel, opts: ExposureOptions = {})
     lbs += 1;
     findings.push(...analyseLoadBalancer(model, lb, counter, warnings));
   }
+
+  const v6 = analyzeExposure6(model, (eni) => NOT_DIRECTLY_EXPOSED.has(eni.interfaceType) || isElbNode(eni), only, warnings);
+  findings.push(...v6.findings);
+  analysed += v6.analysed;
 
   const merged = mergeFindings(findings);
   merged.sort((a, b) => compareSeverity(a.severity, b.severity) || a.resourceName.localeCompare(b.resourceName) || a.protocol.localeCompare(b.protocol) || a.ports.from - b.ports.from);

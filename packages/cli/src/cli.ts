@@ -8,11 +8,14 @@
  *   2  --fail-on threshold reached
  */
 import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { analyzeExposure, normalize, assertSnapshot, SEVERITY_ORDER, SnapshotError } from '@pinhole/engine';
 import type { Severity, Snapshot } from '@pinhole/engine';
 import { formatExposureText } from './format-text.js';
-import { analyzeBlastRadius, assertChanges, ChangeError } from '@pinhole/engine';
+import { analyzeBlastRadius, assertChanges, ChangeError, diffSnapshots, DriftError, mapTerraformPlan, PlanError } from '@pinhole/engine';
+import { diffMarkdown, diffText, newAtOrAbove, tfPlanMarkdown, tfPlanNewAtOrAbove, tfPlanText } from './drift.js';
+import { exposureMarkdown, exposureSarif } from './formats.js';
 import type { Change } from '@pinhole/engine';
 import { blastText, canText, fixesFor, fixText, hygiene, hygieneText, LookupError, plan, planText, shortcutChanges, whatIf, whatIfText } from './advanced.js';
 import { VERSION } from './version.js';
@@ -25,8 +28,8 @@ export interface Io {
 const USAGE = `pinhole ${VERSION}: what can reach what in an AWS network
 
 Usage:
-  pinhole collect  [--profile NAME] [--region REGION] [--out FILE]
-  pinhole exposure SNAPSHOT [--format text|json] [--min-severity LEVEL]
+  pinhole collect  [--profile NAME] [--region REGION[,REGION...]] [--out FILE | --out-dir DIR]
+  pinhole exposure SNAPSHOT [--format text|json|sarif|markdown] [--min-severity LEVEL]
                               [--fail-on LEVEL] [--verbose]
   pinhole can      SNAPSHOT --from WHO --to WHO [--port N] [--protocol tcp|udp|icmp]
   pinhole blast    SNAPSHOT [--depth N] [--min-severity LEVEL] [--fail-on LEVEL]
@@ -34,16 +37,20 @@ Usage:
   pinhole hygiene  SNAPSHOT [--fail-on LEVEL]
   pinhole whatif   SNAPSHOT [--revoke SGR-ID]... [--remove-nacl ACL#ingress#N]...
                             [--remove-public-ip IP]... [--changes FILE.json]
+  pinhole diff     OLD NEW [--format text|json|markdown] [--fail-on LEVEL]
+  pinhole plan     SNAPSHOT PLAN.json [--format text|json|markdown] [--fail-on LEVEL]
   pinhole validate SNAPSHOT
   pinhole --version | --help
 
 Every analysis command also takes --format text|json.
 
-collect   Reads the network configuration of one account and region with
-          read-only describe calls and writes a snapshot file. Uses the
-          standard AWS credential chain, or --profile.
+collect   Reads the network configuration of one account, in one or more
+          regions, with read-only describe calls and writes one snapshot file
+          per region. Uses the standard AWS credential chain, or --profile.
 exposure  Reports every interface and load balancer listener reachable from
           the internet, highest risk first, with the exact path and rules.
+          --format sarif writes SARIF 2.1.0 for GitHub code scanning;
+          --format markdown writes a table for tickets and pull requests.
 can       Whether one resource can reach another, and on which services.
           WHO is an interface ID, instance ID, private IP, instance Name tag,
           a public IP, or "internet". Without --port, lists every service.
@@ -55,6 +62,14 @@ fix       For each finding, the smallest verified change that closes it, as
           Nothing is run; review and run the commands yourself.
 hygiene   Redundant, shadowed, stale, unused and overly broad rules.
 whatif    Exposure and attack chains before and after proposed changes.
+diff      What changed between two snapshots of one account and region:
+          new and closed internet exposure and attack chains, and the rule,
+          route and address changes behind them. --fail-on exits 2 when
+          anything new or wider is at or above LEVEL.
+plan      What a Terraform plan would do to internet exposure and attack
+          chains, before it is applied. PLAN.json is the output of
+          "terraform show -json PLANFILE". Changes that cannot be placed
+          exactly are listed as not analysed, never guessed.
 validate  Loads a snapshot and prints what it contains and any warnings.
 
 LEVEL is one of: ${SEVERITY_ORDER.join(', ')}.
@@ -86,25 +101,39 @@ function severityArg(value: string | undefined, flag: string): Severity | undefi
 class UsageError extends Error {}
 
 async function cmdCollect(args: string[], io: Io): Promise<number> {
-  const { values } = parseArgs({ args, options: { profile: { type: 'string' }, region: { type: 'string' }, out: { type: 'string' } }, strict: true });
-  const region = values.region ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION;
-  if (!region) throw new UsageError('No region: pass --region or set AWS_REGION.');
+  const { values } = parseArgs({ args, options: { profile: { type: 'string' }, region: { type: 'string' }, out: { type: 'string' }, 'out-dir': { type: 'string' } }, strict: true });
+  const given = values.region ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION;
+  if (!given) throw new UsageError('No region: pass --region or set AWS_REGION.');
+  const regions = [...new Set(given.split(',').map((r) => r.trim()).filter(Boolean))];
+  for (const r of regions) if (!/^[a-z]{2}(-[a-z]+)+-\d{1,2}$/.test(r)) throw new UsageError(`"${r}" is not a region name, e.g. us-east-1.`);
+  if (regions.length > 1 && values.out) throw new UsageError('--out names one file; with several regions use --out-dir.');
+  const dir = values['out-dir'] ?? '.';
   // Imported lazily so the analysis commands never load the AWS SDK.
   const { collectSnapshot, sdkSender } = await import('@pinhole/collector');
-  io.stderr(`Collecting ${region} (read-only)...\n`);
-  const snap = await collectSnapshot(sdkSender({ region, ...(values.profile ? { profile: values.profile } : {}) }), {
-    region,
-    toolVersion: VERSION,
-    onProgress: (m) => io.stderr(`  ${m}\n`),
-  });
-  const out = values.out ?? `pinhole-snapshot-${snap.accountId ?? 'unknown'}-${region}.json`;
-  writeFileSync(out, `${JSON.stringify(snap, null, 2)}\n`, { mode: 0o600 });
-  io.stderr(`Wrote ${out}\n`);
-  if (snap.errors?.length) {
-    io.stderr(`warning: ${snap.errors.length} API call(s) failed; see "errors" in the snapshot:\n`);
-    for (const e of snap.errors) io.stderr(`  ${e.api}: ${e.message}\n`);
+  let failed = 0;
+  for (const region of regions) {
+    io.stderr(`Collecting ${region} (read-only)...\n`);
+    try {
+      const snap = await collectSnapshot(sdkSender({ region, ...(values.profile ? { profile: values.profile } : {}) }), {
+        region,
+        toolVersion: VERSION,
+        onProgress: (m) => io.stderr(`  ${m}\n`),
+      });
+      const out = values.out ?? join(dir, `pinhole-snapshot-${snap.accountId ?? 'unknown'}-${region}.json`);
+      writeFileSync(out, `${JSON.stringify(snap, null, 2)}\n`, { mode: 0o600 });
+      io.stderr(`Wrote ${out}\n`);
+      if (snap.errors?.length) {
+        io.stderr(`warning: ${snap.errors.length} API call(s) failed in ${region}; see "errors" in the snapshot:\n`);
+        for (const e of snap.errors) io.stderr(`  ${e.api}: ${e.message}\n`);
+      }
+    } catch (e) {
+      // One region failing (for example, not enabled in the account) does not stop the others.
+      failed++;
+      io.stderr(`error: ${region}: ${(e as Error).message}\n`);
+    }
   }
-  return 0;
+  if (regions.length > 1) io.stderr(`${regions.length - failed} of ${regions.length} regions collected.\n`);
+  return failed ? 1 : 0;
 }
 
 function cmdExposure(args: string[], io: Io): number {
@@ -123,11 +152,16 @@ function cmdExposure(args: string[], io: Io): number {
   if (!file || positionals.length > 1) throw new UsageError('exposure takes exactly one snapshot file.');
   const minSeverity = severityArg(values['min-severity'], '--min-severity');
   const failOn = severityArg(values['fail-on'], '--fail-on');
-  if (values.format !== 'text' && values.format !== 'json') throw new UsageError('--format must be text or json');
+  const fmt = values.format;
+  if (fmt !== 'text' && fmt !== 'json' && fmt !== 'sarif' && fmt !== 'markdown') throw new UsageError('--format must be text, json, sarif or markdown');
 
   const snap = readSnapshot(file);
   const report = analyzeExposure(normalize(snap));
-  if (values.format === 'json') {
+  if (fmt === 'sarif') {
+    io.stdout(exposureSarif(report, snap, file, VERSION, minSeverity));
+  } else if (fmt === 'markdown') {
+    io.stdout(exposureMarkdown(report, snap, minSeverity));
+  } else if (fmt === 'json') {
     const min = SEVERITY_ORDER.indexOf(minSeverity ?? 'info');
     const findings = report.findings.filter((f) => SEVERITY_ORDER.indexOf(f.severity) <= min);
     io.stdout(
@@ -245,6 +279,62 @@ function cmdWhatIf(args: string[], io: Io): number {
   return 0;
 }
 
+function cmdDiff(args: string[], io: Io): number {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, 'fail-on': { type: 'string' } } });
+  if (positionals.length !== 2) throw new UsageError('diff takes two snapshot files: the older one first.');
+  const format = values.format;
+  if (format !== 'text' && format !== 'json' && format !== 'markdown') throw new UsageError('--format must be text, json or markdown');
+  const failOn = severityArg(values['fail-on'], '--fail-on');
+  const [oldFile, newFile] = positionals as [string, string];
+  const a = readSnapshot(oldFile);
+  const b = readSnapshot(newFile);
+  const d = diffSnapshots(normalize(a), normalize(b));
+  const before = { file: oldFile, ...(a.collectedAt ? { collectedAt: a.collectedAt } : {}) };
+  const after = { file: newFile, ...(b.collectedAt ? { collectedAt: b.collectedAt } : {}) };
+  if (format === 'json') io.stdout(json({ tool: { name: 'pinhole', version: VERSION }, before, after, ...d }));
+  else if (format === 'markdown') io.stdout(diffMarkdown(d, before, after));
+  else io.stdout(safeForTerminal(diffText(d, before, after)));
+  if (failOn) {
+    const n = newAtOrAbove(d, failOn);
+    if (n > 0) {
+      io.stderr(`${n} new or wider exposure(s) or attack chain(s) at or above ${failOn}.\n`);
+      return 2;
+    }
+  }
+  return 0;
+}
+
+function cmdPlan(args: string[], io: Io): number {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, 'fail-on': { type: 'string' } } });
+  if (positionals.length !== 2) throw new UsageError('plan takes a snapshot file and a plan file (terraform show -json PLANFILE > plan.json).');
+  const format = values.format;
+  if (format !== 'text' && format !== 'json' && format !== 'markdown') throw new UsageError('--format must be text, json or markdown');
+  const failOn = severityArg(values['fail-on'], '--fail-on');
+  const [snapFile, planFile] = positionals as [string, string];
+  const model = normalize(readSnapshot(snapFile));
+  let raw: unknown;
+  try {
+    const text = readFileSync(planFile, 'utf8');
+    if (text.length > 500_000_000) throw new Error('the file is larger than 500 MB');
+    raw = JSON.parse(text);
+  } catch (e) {
+    throw new PlanError(`Cannot read ${planFile}: ${(e as Error).message}`);
+  }
+  const mapping = mapTerraformPlan(model, raw);
+  const check = { mapping, exposure: whatIf(model, mapping.changes) };
+  if (format === 'json') io.stdout(json({ tool: { name: 'pinhole', version: VERSION }, snapshot: snapFile, plan: planFile, ...check }));
+  else if (format === 'markdown') io.stdout(tfPlanMarkdown(check, model));
+  else io.stdout(safeForTerminal(tfPlanText(check, model, snapFile, planFile)));
+  if (failOn) {
+    const n = tfPlanNewAtOrAbove(check, failOn);
+    if (n > 0) {
+      io.stderr(`The plan opens ${n} new or wider exposure(s) or attack chain(s) at or above ${failOn}.\n`);
+      return 2;
+    }
+  }
+  return 0;
+}
+
 function cmdValidate(args: string[], io: Io): number {
   const { positionals } = parseArgs({ args, allowPositionals: true, options: {}, strict: true });
   const [file] = positionals;
@@ -309,11 +399,15 @@ export async function run(argv: string[], io: Io): Promise<number> {
         return cmdHygiene(rest, io);
       case 'whatif':
         return cmdWhatIf(rest, io);
+      case 'diff':
+        return cmdDiff(rest, io);
+      case 'plan':
+        return cmdPlan(rest, io);
       default:
         throw new UsageError(`Unknown command "${cmd}".`);
     }
   } catch (e) {
-    if (e instanceof LookupError || e instanceof ChangeError) {
+    if (e instanceof LookupError || e instanceof ChangeError || e instanceof DriftError || e instanceof PlanError) {
       io.stderr(`error: ${e.message}\n`);
       return 1;
     }

@@ -127,6 +127,14 @@ export interface Route {
   origin: 'static' | 'propagated' | 'local';
 }
 
+/** An IPv6 route. Kept apart from IPv4 routes, which the IPv4 path walk uses. */
+export interface Route6 {
+  /** Destination CIDR text, e.g. "::/0". */
+  destination: string;
+  target: { type: RouteTargetType; id: string };
+  state: 'active' | 'blackhole';
+}
+
 export interface RouteTable {
   id: string;
   vpcId: string;
@@ -135,6 +143,8 @@ export interface RouteTable {
   /** Gateways (igw-/vgw-) this table is edge-associated with. */
   gatewayIds: string[];
   routes: Route[];
+  /** IPv6 routes (DestinationIpv6CidrBlock). */
+  routes6?: Route6[];
 }
 
 // ---------------------------------------------------------------- Topology
@@ -233,6 +243,8 @@ export interface Eni {
   groupIds: string[];
   instanceId?: string;
   hasIpv6: boolean;
+  /** IPv6 addresses. In a subnet routed to an internet gateway these are reachable from the internet without a public IP. */
+  ipv6Addresses?: string[];
 }
 
 export interface Instance {

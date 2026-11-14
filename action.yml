@@ -1,0 +1,73 @@
+# Run Pinhole in another repository's GitHub Actions workflow.
+#
+#   - uses: w3bcooki3/pinhole@v0.2.0
+#     with:
+#       command: plan                 # exposure, diff or plan
+#       snapshot: snapshots/prod.json
+#       plan: plan.json               # terraform show -json PLANFILE > plan.json
+#       fail-on: high
+#
+# The action never calls AWS. It reads files already in the workspace and
+# writes a Markdown summary to the job page. See the README for examples.
+name: Pinhole
+description: Check AWS network exposure from a snapshot, a snapshot diff or a Terraform plan, offline.
+author: Pinhole contributors
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  command:
+    description: "exposure (one snapshot), diff (baseline and snapshot) or plan (snapshot and Terraform plan JSON)."
+    required: false
+    default: exposure
+  snapshot:
+    description: Path to the snapshot file. For diff, the newer snapshot.
+    required: true
+  baseline:
+    description: For diff, the older snapshot to compare against.
+    required: false
+    default: ""
+  plan:
+    description: For plan, the output of `terraform show -json PLANFILE`.
+    required: false
+    default: ""
+  fail-on:
+    description: "Fail the step when anything (exposure) or anything new (diff, plan) is at or above this level: critical, high, medium, low, info. Empty to never fail."
+    required: false
+    default: high
+  sarif:
+    description: For exposure, also write SARIF 2.1.0 to this path, to upload with github/codeql-action/upload-sarif.
+    required: false
+    default: ""
+  summary:
+    description: Write a Markdown summary to the job page.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 22
+    - name: Build Pinhole
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        npm ci --no-audit --no-fund --ignore-scripts >/dev/null
+        npm run build >/dev/null
+    # Inputs reach the script only as environment variables, never pasted into
+    # the script text, so a value cannot become a shell command.
+    - name: Run Pinhole
+      shell: bash
+      env:
+        PINHOLE: ${{ github.action_path }}/packages/cli/dist/main.js
+        CMD: ${{ inputs.command }}
+        SNAPSHOT: ${{ inputs.snapshot }}
+        BASELINE: ${{ inputs.baseline }}
+        PLAN: ${{ inputs.plan }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        SARIF: ${{ inputs.sarif }}
+        SUMMARY: ${{ inputs.summary }}
+      run: bash "${{ github.action_path }}/scripts/action-run.sh"

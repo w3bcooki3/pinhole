@@ -18,7 +18,6 @@ export function detectOutOfScope(model: NetworkModel): Warning[] {
   const unknownVpce: string[] = [];
   const gwlbVpce: string[] = [];
   const vgw: string[] = [];
-  const eigw: string[] = [];
   for (const rt of model.routeTables.values()) {
     for (const r of rt.routes) {
       const t = r.target;
@@ -29,7 +28,6 @@ export function detectOutOfScope(model: NetworkModel): Warning[] {
         else if (ep.type === 'GatewayLoadBalancer') gwlbVpce.push(`${rt.id} -> ${t.id}`);
       }
       if (t.type === 'vgw') vgw.push(`${rt.id} -> ${t.id}`);
-      if (t.type === 'eigw') eigw.push(`${rt.id} -> ${t.id}`);
     }
     if (rt.gatewayIds.length) {
       add({
@@ -51,9 +49,6 @@ export function detectOutOfScope(model: NetworkModel): Warning[] {
   }
   if (vgw.length) {
     add({ code: 'vpn-or-direct-connect', message: `Routes target virtual private gateways (VPN / Direct Connect); on-premises paths are not modelled: ${vgw.join('; ')}.`, resourceIds: vgw, docUrl: DOCS.vpn });
-  }
-  if (eigw.length) {
-    add({ code: 'egress-only-igw', message: `Egress-only internet gateways are present; IPv6 is not analysed in v1.`, resourceIds: eigw, docUrl: DOCS.egressOnlyIgw });
   }
 
   const gwlbEnis = [...model.enis.values()].filter((e) => e.interfaceType === 'gateway_load_balancer' || e.interfaceType === 'gateway_load_balancer_endpoint');
@@ -81,9 +76,9 @@ export function detectOutOfScope(model: NetworkModel): Warning[] {
     add({ code: 'cloudfront', message: 'Security groups allow the CloudFront origin-facing prefix list. These origins are reachable from CloudFront edge addresses; CloudFront distributions themselves are not modelled.', resourceIds: cfUsed.map((p) => p.id), docUrl: DOCS.cloudfrontPrefixList });
   }
 
-  const ipv6 = [...model.vpcs.values()].filter((v) => v.ipv6CidrTexts.length > 0).map((v) => v.id);
+  const ipv6 = [...model.loadBalancers.values()].filter((lb) => lb.scheme === 'internet-facing' && model.vpcs.get(lb.vpcId)?.ipv6CidrTexts.length).map((lb) => lb.name);
   if (ipv6.length) {
-    add({ code: 'ipv6-not-analysed', message: 'VPCs with IPv6 CIDRs are present. v1 analyses IPv4 only; IPv6 exposure is not reported.', resourceIds: ipv6 });
+    add({ code: 'ipv6-load-balancer', message: 'Internet-facing load balancers in VPCs with IPv6 are analysed for IPv4 only; dual-stack listeners may also be reachable over IPv6.', resourceIds: ipv6 });
   }
 
   for (const t of model.tgwRouteTables.values()) {
