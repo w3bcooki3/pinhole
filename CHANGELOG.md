@@ -25,6 +25,12 @@ All notable changes to this project are recorded here. The format follows
   100%, so nothing is cut off at the edge; on phones the lateral-movement
   graph is laid out top to bottom. Coverage describes what this version
   models today.
+- Accessibility: all text meets WCAG AA contrast in light and dark themes,
+  every clickable row and graph node can be reached and opened from the
+  keyboard with a visible focus ring, headings and landmarks are in order,
+  and animations stop when the system asks for reduced motion. The console
+  follows the system's dark setting until a theme is chosen. The dashboard
+  states its summary in sentences, with the counts as links.
 - Outbound: what each server can send to the internet, through an internet
   gateway (as its public IP) or a NAT gateway (as the gateway's Elastic IP),
   with the security group, routes, firewalls and network ACLs of both subnets,

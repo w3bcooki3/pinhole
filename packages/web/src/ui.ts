@@ -50,7 +50,7 @@ export function boxHead(title: string, note?: string, ...end: Child[]): HTMLElem
   return h('header', {}, h('h2', {}, title), note ? h('span', { class: 'note' }, note) : null, end.length ? h('span', { class: 'end' }, ...end) : null);
 }
 export const empty = (title: string, body: string, ...acts: Child[]) =>
-  h('div', { class: 'empty' }, h('h3', {}, title), h('p', {}, body), acts.length ? h('div', { style: 'display:flex;gap:0.5rem;justify-content:center' }, ...acts) : null);
+  h('div', { class: 'empty' }, h('h2', {}, title), h('p', {}, body), acts.length ? h('div', { style: 'display:flex;gap:0.5rem;justify-content:center' }, ...acts) : null);
 export const ALL = () => new Set<Severity>(D.SEVERITY_ORDER);
 
 /** Short display name: "orders-db (i-db, eni-db)" becomes "orders-db". */

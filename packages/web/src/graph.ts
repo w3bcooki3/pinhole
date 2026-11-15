@@ -191,7 +191,7 @@ export function renderGraph(host: HTMLElement, rows: Row[], opts: GraphOptions =
   pos.set('internet', internetAt[0] ?? { x: COLX[0]!, y: 40 });
   const W = groups.length * STRIDE - (compact ? 80 : 30);
 
-  const svg = s('svg', { role: 'img', 'aria-label': `Attack surface graph with ${D.plural(rows.length, 'exposure')}`, class: 'graph', ...(compact ? { viewBox: `0 0 ${W} ${H}` } : {}) });
+  const svg = s('svg', { role: compact ? 'img' : 'group', 'aria-label': `Attack surface graph with ${D.plural(rows.length, 'exposure')}`, class: 'graph', ...(compact ? { viewBox: `0 0 ${W} ${H}` } : {}) });
   const g = s('g');
   svg.append(g);
   if (!compact) {

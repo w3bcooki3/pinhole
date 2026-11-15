@@ -169,7 +169,7 @@ describe('web console', () => {
     search.dispatchEvent(new w.Event('input'));
     expect(doc.querySelectorAll('table.t tbody tr')).toHaveLength(1);
     api.go('issues', { q: 'nothing-matches-this' });
-    expect(text(doc, '.empty h3')).toBe('No exposures match these filters');
+    expect(text(doc, '.empty h2')).toBe('No exposures match these filters');
     api.go('issues', { q: '', cat: 'admin', sevOn: new w.Set(['critical', 'high', 'medium', 'low', 'info']) });
     expect([...doc.querySelectorAll('table.t tbody tr')].every((r) => /tcp\/(22|3389)(?!\d)/.test(r.textContent ?? ''))).toBe(true);
   });
@@ -191,7 +191,7 @@ describe('web console', () => {
     const { w, doc, api } = page();
     api.go('connect');
     expect(text(doc, 'h1')).toBe('Connect an AWS account');
-    const steps = [...doc.querySelectorAll('#wizard > li h3')].map((x) => x.textContent);
+    const steps = [...doc.querySelectorAll('#wizard > li h2')].map((x) => x.textContent);
     expect(steps).toEqual([
       'Open AWS CloudShell in the account to check',
       'Put the collector script into CloudShell',

@@ -145,7 +145,7 @@ export function renderLateral(host: HTMLElement, model: NetworkModel, blast: Bla
     svgH = H + 70;
   }
 
-  const svg = s('svg', { class: `graph lateral${opts.compact ? ' compact' : ''}`, role: 'img', 'aria-label': 'Lateral movement graph', ...(opts.compact ? { viewBox: `0 0 ${W} ${svgH}` } : {}) });
+  const svg = s('svg', { class: `graph lateral${opts.compact ? ' compact' : ''}`, role: opts.compact ? 'img' : 'group', 'aria-label': 'Lateral movement graph', ...(opts.compact ? { viewBox: `0 0 ${W} ${svgH}` } : {}) });
   const g = s('g');
   svg.append(g);
   const heads = ['Internet', 'Open to the internet', ...Array.from({ length: maxCol - 1 }, (_, i) => `${i + 1} hop${i ? 's' : ''} further`)];

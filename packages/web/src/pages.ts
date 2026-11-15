@@ -794,7 +794,7 @@ export function hygienePage(ctx: Ctx): HTMLElement {
         ? h(
             'table',
             { class: 't hyg' },
-            h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Finding'), h('th', { class: 'hide-sm' }, 'Account and region'), h('th', { class: 'last' }, ''))),
+            h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Finding'), h('th', { class: 'hide-sm' }, 'Account and region'), h('th', { class: 'last' }, h('span', { class: 'sr-only' }, 'Action')))),
             h(
               'tbody',
               {},

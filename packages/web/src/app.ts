@@ -202,11 +202,14 @@ function setTheme(t: 'light' | 'dark') {
     /* storage may be unavailable */
   }
 }
+// A choice made with the button wins; otherwise follow the system setting.
+let savedTheme: string | null = null;
 try {
-  if (localStorage.getItem('pinhole-theme') === 'dark') document.documentElement.dataset.theme = 'dark';
+  savedTheme = localStorage.getItem('pinhole-theme');
 } catch {
-  /* light stays the default */
+  /* storage blocked: follow the system */
 }
+if (savedTheme === 'dark' || (savedTheme !== 'light' && window.matchMedia?.('(prefers-color-scheme: dark)').matches)) document.documentElement.dataset.theme = 'dark';
 
 // ---------------------------------------------------------------- filters
 
@@ -428,21 +431,22 @@ function dashboard(): HTMLElement {
   const world = rows.filter((r) => D.isWorld(r.f)).length;
   const warn = st.snaps.reduce((n, x) => n + x.warnings.length, 0);
   const lbs = res.filter((x) => x.kind.includes('Load')).length;
-  const cell = (k: string, v: string, sub: string, act?: () => void) => {
-    const kids = [h('div', { class: 'k' }, k), h('div', { class: 'v' }, v), h('div', { class: 'sub' }, sub)];
-    return act ? on(h('button', { type: 'button', class: 'cell' }, ...kids), 'click', act) : h('div', {}, ...kids);
-  };
-  page.append(
-    h(
-      'section',
-      { class: 'box summary', id: 'summary' },
-      h('div', {}, h('div', { class: 'k' }, 'Internet exposures'), h('div', { class: 'v', id: 'total' }, String(rows.length)), bar, legend),
-      cell('Exposed resources', String(res.length), `${D.plural(lbs, 'load balancer')}, ${D.plural(res.length - lbs, 'interface')}`, () => go('resources')),
-      cell('Open to any address', String(world), 'Exposures open to 0.0.0.0/0 or ::/0', toIssues({ cat: 'world' })),
-      cell('Attack chains', String(chainRows.length), chainRows.length ? `${chainRows.filter((c) => c.c.severity === 'critical').length} critical, reaching ${new Set(chainRows.map((c) => `${c.snap.key}|${c.c.targetId}`)).size} resources` : 'No lateral movement found', () => go('blast')),
-      cell('Coverage notes', String(warn), warn ? 'Configuration not fully analysed' : 'Everything was analysed', () => go('coverage')),
-    ),
+  const crit = chainRows.filter((c) => c.c.severity === 'critical').length;
+  const targets = new Set(chainRows.map((c) => `${c.snap.key}|${c.c.targetId}`)).size;
+  // A link inside a sentence: the count is the thing you click.
+  const ln = (text: string, act: () => void, id?: string) => on(h('button', { type: 'button', class: 'inl', ...(id ? { id } : {}) }, text), 'click', act);
+  const lead = rows.length
+    ? h('p', { class: 'sum-lead' }, h('button', { type: 'button', class: 'inl' }, h('span', { id: 'total' }, String(rows.length)), rows.length === 1 ? ' service' : ' services'), ` on `, ln(D.plural(res.length, 'resource'), () => go('resources')), ` ${rows.length === 1 ? 'is' : 'are'} reachable from the internet`, world ? h('span', {}, ', ', ln(`${world} of them`, toIssues({ cat: 'world' })), ' from any address') : null, '.')
+    : h('p', { class: 'sum-lead' }, 'Nothing is reachable from the internet', h('span', { id: 'total', hidden: true }, '0'), '.');
+  const first = lead.querySelector('button.inl');
+  if (first) on(first as HTMLElement, 'click', toIssues({ sevOn: ALL() }));
+  const more = h(
+    'p',
+    { class: 'sum-more' },
+    chainRows.length ? h('span', {}, 'If one of those servers is compromised, ', ln(`${D.plural(chainRows.length, 'attack chain')}`, () => go('blast')), ` lead to ${D.plural(targets, 'internal resource')}${crit ? ` (${crit} critical)` : ''}. `) : 'No attack chain leads further in from them. ',
+    warn ? h('span', {}, ln(D.plural(warn, 'coverage note'), () => go('coverage')), ' mark configuration that could not be fully analysed.') : 'Everything loaded was analysed.',
   );
+  page.append(h('section', { class: 'box summary', id: 'summary' }, lead, more, rows.length ? h('div', { class: 'sum-sev' }, bar, legend) : null));
 
   // What to do: the smallest verified set of changes.
   grid.append(planBox(ctx));
@@ -582,7 +586,7 @@ function dashboard(): HTMLElement {
           {},
           ...svcs.map(([k, list]) =>
             on(
-              h('tr', { class: 'click' }, h('td', { class: 'first' }, sevPill(list[0]!.f.severity, D.serviceName(list[0]!.f) || k)), h('td', { class: 'mono' }, k), h('td', { class: 'r last' }, String(new Set(list.map((x) => x.f.resourceId)).size))),
+              h('tr', { class: 'click', tabindex: 0 }, h('td', { class: 'first' }, sevPill(list[0]!.f.severity, D.serviceName(list[0]!.f) || k)), h('td', { class: 'mono' }, k), h('td', { class: 'r last' }, String(new Set(list.map((x) => x.f.resourceId)).size))),
               'click',
               toIssues({ q: k }),
             ),
@@ -658,7 +662,7 @@ function graphPage(): HTMLElement {
   } else {
     canvas.append(h('div', { class: 'ghint' }, empty('Nothing to show', 'Turn on a severity above to see its exposures.')));
   }
-  const wrap = h('div', { class: 'graph-page' }, canvas, ...dock);
+  const wrap = h('div', { class: 'graph-page' }, h('h1', { class: 'sr-only' }, 'Attack graph'), canvas, ...dock);
   draw();
   // Fit again once the canvas has its real size.
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(draw);
@@ -948,7 +952,7 @@ function connectPage(): HTMLElement {
   const rin = h('input', { class: 'rin', id: 'region', value: st.regions, 'aria-label': 'Regions to collect, separated by commas', spellcheck: 'false' }) as HTMLInputElement;
   rin.addEventListener('input', () => { st.regions = rin.value; draw(); });
   draw();
-  const step = (n: number, title: string, body: string, ...extra: Child[]) => h('li', { class: 'wstep' }, h('span', { class: 'n' }, String(n)), h('div', { style: 'min-width:0' }, h('h3', {}, title), h('p', {}, body), ...extra));
+  const step = (n: number, title: string, body: string, ...extra: Child[]) => h('li', { class: 'wstep' }, h('span', { class: 'n' }, String(n)), h('div', { style: 'min-width:0' }, h('h2', {}, title), h('p', {}, body), ...extra));
 
   return h(
     'div',
@@ -1091,7 +1095,7 @@ function renderNow() {
   const isFull = st.route === 'graph' || st.route === 'simulator';
 
   const ribbon = st.demo
-    ? h('div', { class: 'ribbon', id: 'demo', role: 'note' }, h('b', {}, 'Demo environment'), h('span', { class: 'hide-sm' }, `Sample data from ${D.plural(st.all.length, 'snapshot')}. Load your own to replace it.`), h('span', { class: 'sp' }), on(h('button', { type: 'button' }, 'Load snapshots'), 'click', pick), on(h('button', { type: 'button' }, 'Connect an account'), 'click', () => go('connect')))
+    ? h('div', { class: 'ribbon', id: 'demo', role: 'region', 'aria-label': 'Demo environment' }, h('b', {}, 'Demo environment'), h('span', { class: 'hide-sm' }, `Sample data from ${D.plural(st.all.length, 'snapshot')}. Load your own to replace it.`), h('span', { class: 'sp' }), on(h('button', { type: 'button' }, 'Load snapshots'), 'click', pick), on(h('button', { type: 'button' }, 'Connect an account'), 'click', () => go('connect')))
     : null;
   root.replaceChildren(
     h(

@@ -166,7 +166,7 @@ export const REPORT_CSS = `
 .report ol.r-plan li{margin-bottom:1rem;break-inside:avoid}
 .report .r-item{margin-bottom:1.125rem;break-inside:avoid}
 .report .r-sev{font-weight:600;white-space:nowrap}
-.report .r-sev.critical{color:var(--r-crit,#D7263D)}.report .r-sev.high{color:var(--r-high,#C25E00)}.report .r-sev.medium{color:var(--r-warn,#876600)}.report .r-sev.low{color:var(--r-low,#23946A)}.report .r-sev.info{color:#878D9E}
+.report .r-sev.critical{color:var(--r-crit,#C41F36)}.report .r-sev.high{color:var(--r-high,#A9510A)}.report .r-sev.medium{color:var(--r-warn,#876600)}.report .r-sev.low{color:var(--r-low,#17734F)}.report .r-sev.info{color:var(--r-info,#666C7E)}
 @media (max-width:40rem){.report h1{font-size:1.4rem}.report .r-lede{font-size:1rem}}
 @media print{.report{max-width:none;font-size:11pt}.report h2{break-after:avoid}.report .r-tw{overflow:visible}}
 `;
