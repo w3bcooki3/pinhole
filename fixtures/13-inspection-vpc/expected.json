@@ -1,0 +1,19 @@
+{
+  "description": "Centralised inspection: two spoke VPCs reach each other only through a transit gateway route table that sends everything to an inspection VPC, whose attachment subnet routes to an AWS Network Firewall endpoint, which hands the traffic back to the transit gateway. The database's security group allows SSH and PostgreSQL from 10.0.0.0/8; the firewall passes PostgreSQL from the app VPC and drops SSH into the data VPC.",
+  "docs": [
+    "https://docs.aws.amazon.com/network-firewall/latest/developerguide/arch-two-zone-igw.html",
+    "https://docs.aws.amazon.com/vpc/latest/tgw/transit-gateway-appliance-scenario.html",
+    "https://docs.aws.amazon.com/network-firewall/latest/developerguide/suricata-rule-evaluation-order.html"
+  ],
+  "paths": [
+    { "name": "PostgreSQL from the app VPC goes through the inspection firewall", "from": { "eni": "eni-app" }, "to": { "eni": "eni-db" }, "protocol": "tcp", "port": 5432, "expect": { "verdict": "reachable", "returnPath": "all", "via": ["tgw-rtb-spoke", "rtb-i-tgw", "vpce-ins", "inspection", "rtb-i-fw", "tgw-rtb-insp"] } },
+    { "name": "SSH is allowed by the security group but dropped by the firewall", "from": { "eni": "eni-app" }, "to": { "eni": "eni-db" }, "protocol": "tcp", "port": 22, "expect": { "verdict": "blocked", "blockedAt": "firewall" } },
+    { "name": "Traffic no rule mentions passes with the default rule order", "from": { "eni": "eni-db" }, "to": { "eni": "eni-app" }, "protocol": "tcp", "port": 8080, "expect": { "verdict": "reachable", "via": ["inspection"] } }
+  ],
+  "lateral": {
+    "reach": [
+      { "from": "eni-app", "to": "eni-db", "services": ["tcp/5432"] },
+      { "from": "eni-db", "to": "eni-app", "services": ["tcp/8080"] }
+    ]
+  }
+}

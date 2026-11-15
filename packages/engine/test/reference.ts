@@ -74,3 +74,46 @@ export function referenceReach(snap: Raw, eniId: string, client: string, protoco
     return !!r.CidrIpv4 && inCidr(c, r.CidrIpv4);
   });
 }
+
+/**
+ * A reference for AWS Network Firewall, for policies without content
+ * matching: one connection from `client`:`eph` to `server`:`port`.
+ * Written from the developer guide's description of the two engines
+ * (firewall-rules-engines.html, suricata-rule-evaluation-order.html),
+ * sharing no code with the engine.
+ */
+export interface RefStateless { priority: number; action: 'pass' | 'drop' | 'forward'; protocols: number[]; sources: string[]; srcPorts: [number, number][]; dstPorts: [number, number][] }
+export interface RefStateful { action: 'pass' | 'drop' | 'reject' | 'alert'; proto: 'tcp' | 'udp' | 'ip'; src: string; dst: string; dstPort: string; both: boolean }
+export interface RefPolicy { stateless: RefStateless[]; statelessDefault: 'pass' | 'drop' | 'forward'; stateful: RefStateful[]; strict: boolean; defaults: string[]; home: string }
+
+export function referenceFirewall(p: RefPolicy, client: number, server: number, proto: number, port: number, eph: number): boolean {
+  const req = { src: client, sport: eph, dst: server, dport: port };
+  const rep = { src: server, sport: port, dst: client, dport: eph };
+  const inRange = (v: number, list: [number, number][]) => !list.length || list.some(([a, b]) => v >= a && v <= b);
+  const forwarded: (typeof req)[] = [];
+  for (const pkt of [req, rep]) {
+    const rule = [...p.stateless].sort((a, b) => a.priority - b.priority).find((r) => (!r.protocols.length || r.protocols.includes(proto)) && (!r.sources.length || r.sources.some((c) => inCidr(pkt.src, c))) && inRange(pkt.sport, r.srcPorts) && inRange(pkt.dport, r.dstPorts));
+    const action = rule ? rule.action : p.statelessDefault;
+    if (action === 'drop') return false;
+    if (action === 'forward') forwarded.push(pkt);
+  }
+  if (!forwarded.length) return true;
+  const addr = (spec: string, ip: number) => (spec === 'any' ? true : spec === '$HOME_NET' ? inCidr(ip, p.home) : spec === '$EXTERNAL_NET' ? !inCidr(ip, p.home) : inCidr(ip, spec));
+  const portOk = (spec: string, v: number) => {
+    if (spec === 'any') return true;
+    const [a, b] = spec.includes(':') ? spec.split(':').map(Number) : [Number(spec), Number(spec)];
+    return v >= a! && v <= b!;
+  };
+  const protoOk = (r: RefStateful) => r.proto === 'ip' || (r.proto === 'tcp' ? proto === 6 : proto === 17);
+  const matches = (r: RefStateful, pkt: typeof req) =>
+    protoOk(r) && ((addr(r.src, pkt.src) && addr(r.dst, pkt.dst) && portOk(r.dstPort, pkt.dport)) || (r.both && addr(r.dst, pkt.src) && addr(r.src, pkt.dst) && portOk(r.dstPort, pkt.sport)));
+  const rank = { pass: 0, drop: 1, reject: 2, alert: 3 };
+  const rules = p.strict ? p.stateful : [...p.stateful].sort((a, b) => rank[a.action] - rank[b.action]);
+  for (const pkt of forwarded) {
+    for (const r of rules) {
+      if (!matches(r, pkt) || r.action === 'alert') continue;
+      return r.action === 'pass';
+    }
+  }
+  return !(p.strict && p.defaults.some((d) => d === 'aws:drop_strict' || d === 'aws:drop_established'));
+}

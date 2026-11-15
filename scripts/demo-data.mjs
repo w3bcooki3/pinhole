@@ -80,6 +80,8 @@ function edge() {
   };
   return s;
 }
+/** A fixture moved to another account and region, ARNs and zone names included. */
+const moved = (s, account, region) => JSON.parse(JSON.stringify(s).replaceAll('111122223333', account).replaceAll('us-east-1', region));
 const withScope = (s, account, region) => ({ ...s, accountId: account, region, collectedAt: '2026-11-12T09:44:00Z' });
 export const DEMO = [
   { name: 'prod us-east-1', snapshot: richProd() },
@@ -90,6 +92,8 @@ export const DEMO = [
   { name: 'edge us-east-2', snapshot: withScope(edge(), '444455556666', 'us-east-2') },
   { name: 'shared-services eu-central-1', snapshot: linked('account-a/snapshot.json') },
   { name: 'payments eu-central-1', snapshot: linked('account-b/snapshot.json') },
+  { name: 'inspected us-east-1', snapshot: withScope(moved(fx('12-network-firewall'), '777788889999', 'us-east-1'), '777788889999', 'us-east-1') },
+  { name: 'network-hub us-west-1', snapshot: withScope(moved(fx('13-inspection-vpc'), '777788889999', 'us-west-1'), '777788889999', 'us-west-1') },
   { name: 'prod us-east-1, a week earlier', snapshot: richProdEarlier() },
 ];
 

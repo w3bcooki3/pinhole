@@ -59,7 +59,7 @@ function stepper(items: { k: string; v: Child[]; state: 'pass' | 'block' | 'unkn
 function traceStepper(r: PathResult | { hops: PathResult['hops'] }, end?: string): HTMLElement {
   const hops = r.hops.filter((x) => x.stage !== 'scope' || x.decision !== 'info');
   return stepper([
-    ...hops.map((x) => ({ k: D.STAGE[x.stage] ?? x.stage, v: [h('code', {}, D.hopId(x)), ' ', D.hopDetail(x)], state: (x.decision === 'pass' ? 'pass' : x.decision === 'block' ? 'block' : x.decision === 'info' ? 'info' : 'unknown') as 'pass' | 'block' | 'unknown' | 'info' })),
+    ...hops.map((x) => ({ k: D.STAGE[x.stage] ?? x.stage, v: [h('code', {}, D.hopId(x)), ' ', D.hopDetail(x), ...(x.caveat ? [h('div', { class: 'hop-caveat' }, x.caveat)] : [])], state: (x.decision === 'pass' ? 'pass' : x.decision === 'block' ? 'block' : x.decision === 'info' ? 'info' : 'unknown') as 'pass' | 'block' | 'unknown' | 'info' })),
     ...(end ? [{ k: end, v: [], state: 'end' as const }] : []),
   ]);
 }

@@ -25,8 +25,10 @@ import { evaluateSg } from './sg.js';
 import { attachedIgw, eniByPrivateIp, isElbNode, naclForSubnet, primaryIp } from './topology.js';
 import { PROTO_ICMP } from './types.js';
 import type { Eni, NetworkModel, Packet, PortRange, SecurityGroup, Subnet } from './types.js';
-import type { Hop, NaclCheckpoint, Stage, Walk } from './walk.js';
-import { walkRoute } from './walk.js';
+import type { ApplianceCheckpoint, Hop, NaclCheckpoint, Stage, Walk, WalkStep } from './walk.js';
+import { applianceOf, walkRoute } from './walk.js';
+import { evaluateFirewall } from './firewall.js';
+import { lookupRoute } from './routes.js';
 
 export type Endpoint =
   | { eni: string; ip?: string }
@@ -236,6 +238,8 @@ function evaluateReturnNacls(
   checks: NaclCheckpoint[],
   pkt: Packet,
   profiles: EphemeralProfile[],
+  /** Client ports a firewall on the path lets through, when there is one. */
+  limit?: PortRange[],
 ): { hops: Hop[]; profiles?: ReturnProfileResult[]; coverage: ReturnCoverage; blockingHop?: Hop } {
   const hops: Hop[] = [];
   if (!hasPorts(pkt.protocol)) {
@@ -252,7 +256,7 @@ function evaluateReturnNacls(
     from: Math.min(...profiles.map((p) => p.range.from)),
     to: Math.max(...profiles.map((p) => p.range.to)),
   };
-  let allowed: PortRange[] = [span];
+  let allowed: PortRange[] = limit ? intersectRanges([span], limit) : [span];
   let firstBlocking: Hop | undefined;
   for (const c of checks) {
     const subnet = model.subnets.get(c.subnetId);
@@ -287,14 +291,74 @@ function evaluateReturnNacls(
   return { hops, profiles: results, coverage: cov, ...(blocking ? { blockingHop: blocking } : {}) };
 }
 
-function walkHops(model: NetworkModel, walk: Walk, pkt: Packet): { hops: Hop[]; blocking?: Hop } {
-  const hops: Hop[] = [];
-  for (const s of walk.steps) {
-    const h = s.kind === 'hop' ? s.hop : naclHop(model, s.check, pkt);
-    hops.push(h);
-    if (h.decision === 'block' || h.decision === 'unknown') return { hops, blocking: h };
+/**
+ * What an appliance in the path does to the connection. A Network Firewall
+ * is evaluated exactly, for every client source port in `span`; where its
+ * answer depends on the traffic itself, or the appliance is a third party's,
+ * the path goes on with a caveat rather than stopping, so an exposure is
+ * never hidden by a device whose rules cannot be seen.
+ */
+function applianceHop(model: NetworkModel, c: ApplianceCheckpoint, pkt: Packet, span: PortRange): { hop: Hop; allowed?: PortRange[] } {
+  if (c.firewallArn) {
+    const fw = model.firewalls.get(c.firewallArn)!;
+    const r = evaluateFirewall(model, fw, c.srcIp, c.dstIp, Number(pkt.protocol), hasPorts(pkt.protocol) ? pkt.port : undefined, span);
+    const base = { stage: 'firewall' as const, resourceId: fw.name, relatedIds: [fw.arn, c.endpointId], ruleIds: r.ruleIds, docUrl: DOCS.networkFirewall };
+    if (r.verdict === 'block') return { hop: { ...base, decision: 'block', detail: r.detail } };
+    const allowed = [...r.allowed, ...r.unknownPorts];
+    const caveat = r.verdict === 'unknown' || r.unknownPorts.length ? `${fw.name} decides this by the traffic itself (content, host name or application), which a configuration snapshot cannot show.` : undefined;
+    return { hop: { ...base, decision: 'pass', detail: r.detail, ...(caveat ? { caveat } : {}) }, ...(hasPorts(pkt.protocol) ? { allowed } : {}) };
   }
-  return { hops };
+  const svc = c.serviceName ?? 'an endpoint service';
+  return {
+    hop: {
+      stage: 'appliance',
+      decision: 'pass',
+      resourceId: c.endpointId,
+      detail: `${c.endpointId} sends the traffic to a third-party appliance (${svc}) and back.`,
+      caveat: `The appliance behind ${c.endpointId} (${svc}) may block this, but its rules are not visible to AWS APIs; the path assumes it passes.`,
+      docUrl: DOCS.gwlbRouting,
+    },
+  };
+}
+
+function walkHops(model: NetworkModel, walk: Walk | WalkStep[], pkt: Packet, span: PortRange = { from: 1024, to: 65535 }): { hops: Hop[]; blocking?: Hop; limit?: PortRange[]; appliances: string[] } {
+  const hops: Hop[] = [];
+  let limit: PortRange[] | undefined;
+  const appliances: string[] = [];
+  for (const s of Array.isArray(walk) ? walk : walk.steps) {
+    let h: Hop;
+    if (s.kind === 'hop') h = s.hop;
+    else if (s.kind === 'nacl') h = naclHop(model, s.check, pkt);
+    else {
+      const a = applianceHop(model, s.check, pkt, span);
+      h = a.hop;
+      appliances.push(s.check.firewallArn ?? s.check.endpointId);
+      if (a.allowed) limit = limit ? intersectRanges(limit, a.allowed) : a.allowed;
+      if (h.decision === 'pass' && a.allowed && !a.allowed.length) h = { ...h, decision: 'block', detail: `${h.detail} (no client port gets through)` };
+    }
+    hops.push(h);
+    if (h.decision === 'block' || h.decision === 'unknown') return { hops, blocking: h, ...(limit ? { limit } : {}), appliances };
+  }
+  return { hops, ...(limit ? { limit } : {}), appliances };
+}
+
+/** Firewalls (by ARN) and appliances (by endpoint) a walk passes. */
+const appliancesOn = (walk: Walk): string[] => walk.steps.filter((s): s is { kind: 'appliance'; check: ApplianceCheckpoint } => s.kind === 'appliance').map((s) => s.check.firewallArn ?? s.check.endpointId);
+
+/**
+ * A stateful firewall must see both directions of a connection
+ * (https://docs.aws.amazon.com/network-firewall/latest/developerguide/arch-igw-ngw.html).
+ * A Network Firewall on one direction only is a break; a third-party
+ * appliance on one direction only is a caveat.
+ */
+function symmetryHop(model: NetworkModel, forward: string[], back: string[]): Hop | undefined {
+  const one = [...forward.filter((x) => !back.includes(x)), ...back.filter((x) => !forward.includes(x))];
+  if (!one.length) return undefined;
+  const fw = one.map((x) => model.firewalls.get(x)).find((f) => f);
+  if (fw) {
+    return { stage: 'firewall', decision: 'block', resourceId: fw.name, relatedIds: [fw.arn], detail: `Only one direction of the connection passes ${fw.name}; its stateful engine drops traffic it did not see start (asymmetric routing). Route both directions through the same firewall endpoint.`, docUrl: DOCS.networkFirewall };
+  }
+  return { stage: 'appliance', decision: 'pass', resourceId: one[0]!, detail: `Only one direction of the connection passes ${one[0]}.`, caveat: `Only one direction passes the appliance behind ${one[0]}; a stateful appliance drops such connections.`, docUrl: DOCS.gwlbRouting };
 }
 
 // ------------------------------------------------------------------ evaluation
@@ -425,29 +489,71 @@ export function evaluatePath(model: NetworkModel, query: PathQuery, options: Eva
       return finish('blocked', h);
     }
     hops.push({ stage: 'igw', decision: 'pass', resourceId: igwId, detail: `${igwId} attached to ${dst.subnet.vpcId}`, docUrl: DOCS.igw });
+    const span: PortRange = { from: Math.min(...profiles.map((p) => p.range.from)), to: Math.max(...profiles.map((p) => p.range.to)) };
+
+    // Inbound: the gateway's own route table (ingress routing) may send the
+    // packet through a firewall or appliance before it reaches the subnet.
+    let inbound: WalkStep[] = [{ kind: 'nacl', check: { subnetId: dst.subnet.id, egress: false, peerIp: src.ip, stage: 'dest-nacl-ingress' } }];
     const edge = [...model.routeTables.values()].find((rt) => rt.gatewayIds.includes(igwId));
     if (edge) {
-      const h: Hop = { stage: 'scope', decision: 'unknown', resourceId: edge.id, detail: `${igwId} has a gateway route table (${edge.id}); ingress routing through an appliance is not modelled in v1.`, docUrl: DOCS.gatewayRouteTables };
-      hops.push(h);
-      return finish('unknown', h);
+      const m = lookupRoute(edge, dstPrivate, model.prefixLists);
+      const target = m?.route.target;
+      // A gateway route table always holds the VPC's local route, even when a snapshot leaves it out.
+      if (m && m.route.state !== 'active') {
+        const h: Hop = { stage: 'ingress-route', decision: 'block', resourceId: edge.id, detail: `${edge.id} (the route table of ${igwId}) sends ${mapping.privateIp} to a blackhole route.`, docUrl: DOCS.gatewayRouteTables };
+        hops.push(h);
+        return finish('blocked', h);
+      }
+      if (m && target?.type === 'vpce' && applianceOf(model, target.id)) {
+        hops.push({ stage: 'ingress-route', decision: 'pass', resourceId: edge.id, relatedIds: [target.id], detail: `${edge.id} (the route table of ${igwId}): ${m.matchedCidr.text} -> ${target.id}`, docUrl: DOCS.gatewayRouteTables });
+        const app = applianceOf(model, target.id)!;
+        const epSubnet = app.subnetId ? model.subnets.get(app.subnetId) : undefined;
+        if (!epSubnet) {
+          const h: Hop = { stage: 'appliance', decision: 'unknown', resourceId: target.id, detail: `The subnet of endpoint ${target.id} is not in the snapshot.`, docUrl: DOCS.gwlbRouting };
+          hops.push(h);
+          return finish('unknown', h);
+        }
+        const on = walkRoute(model, epSubnet, src.ip, dstPrivate, 1);
+        inbound = [
+          { kind: 'nacl', check: { subnetId: epSubnet.id, egress: false, peerIp: src.ip, stage: 'appliance-nacl' } },
+          { kind: 'appliance', check: { endpointId: target.id, ...(app.firewallArn ? { firewallArn: app.firewallArn } : {}), ...(app.serviceName ? { serviceName: app.serviceName } : {}), subnetId: epSubnet.id, srcIp: src.ip, dstIp: dstPrivate } },
+          ...on.steps,
+        ];
+        if (on.end.kind !== 'delivered' || on.end.subnet.id !== dst.subnet.id) {
+          const r = walkHops(model, inbound, pkt, span);
+          hops.push(...r.hops);
+          if (r.blocking) return finish(r.blocking.decision === 'block' ? 'blocked' : 'unknown', r.blocking);
+          const h: Hop = on.end.kind === 'blocked' || on.end.kind === 'unknown'
+            ? { stage: on.end.stage, decision: on.end.kind === 'blocked' ? 'block' : 'unknown', resourceId: on.end.resourceId, detail: on.end.detail }
+            : { stage: 'route', decision: 'block', resourceId: epSubnet.id, detail: `After ${target.id}, ${mapping.privateIp} is routed ${on.end.kind === 'egress' ? `to ${on.end.target.id}` : `to ${on.end.subnet.id}`}, not to ${dst.subnet.id}.`, docUrl: DOCS.gwlbRouting };
+          hops.push(h);
+          return finish(h.decision === 'block' ? 'blocked' : 'unknown', h);
+        }
+      } else if (m && target?.type !== 'local') {
+        const h: Hop = { stage: 'ingress-route', decision: 'unknown', resourceId: edge.id, relatedIds: target ? [target.id] : [], detail: `${edge.id} (the route table of ${igwId}) sends ${mapping.privateIp} to ${target?.id}, which is not an inspection endpoint Pinhole follows.`, docUrl: DOCS.gatewayRouteTables };
+        hops.push(h);
+        return finish('unknown', h);
+      } else {
+        hops.push({ stage: 'ingress-route', decision: 'pass', resourceId: edge.id, detail: `${edge.id} (the route table of ${igwId}): ${m ? m.matchedCidr.text : 'the VPC CIDR'} -> local`, docUrl: DOCS.gatewayRouteTables });
+      }
     }
-    const inNacl = naclHop(model, { subnetId: dst.subnet.id, egress: false, peerIp: src.ip, stage: 'dest-nacl-ingress' }, pkt);
-    hops.push(inNacl);
-    if (inNacl.decision !== 'pass') return finish(inNacl.decision === 'block' ? 'blocked' : 'unknown', inNacl);
+    const inPath = walkHops(model, inbound, pkt, span);
+    hops.push(...inPath.hops);
+    if (inPath.blocking) return finish(inPath.blocking.decision === 'block' ? 'blocked' : 'unknown', inPath.blocking);
     const sgPeer: SgPeer = { ip: src.ip, relation: { kind: 'external' }, ...(options.sourceGroupIdsOverride ? { groupIds: options.sourceGroupIdsOverride } : {}) };
     const sgr = sgHop(model, 'dest-sg-ingress', dstEni, 'ingress', sgPeer, pkt);
     hops.push(sgr.hop);
     warnings.push(...sgr.warnings);
     if (sgr.hop.decision !== 'pass') return finish(sgr.hop.decision === 'block' ? 'blocked' : 'unknown', sgr.hop);
 
-    // Return: the subnet's route for the client must lead to the same IGW.
+    // Return: the subnet's route for the client must lead, through the same appliances, to the same IGW.
     const back = walkRoute(model, dst.subnet, dstPrivate, src.ip);
     const routeHop = back.steps.find((s) => s.kind === 'hop' && s.hop.stage === 'route');
     if (back.end.kind !== 'egress' || back.end.target.type !== 'igw' || back.end.target.id !== igwId) {
       const via = back.end.kind === 'egress' ? back.end.target.id : back.end.kind === 'blocked' || back.end.kind === 'unknown' ? back.end.detail : 'a VPC destination';
       // A NAT gateway rewrites the source address, so the client never sees a
-      // reply from the address it connected to: blocked. An appliance, firewall
-      // endpoint or VPN gateway may forward the reply on: not modelled, unknown.
+      // reply from the address it connected to: blocked. A VPN gateway or an
+      // instance may forward the reply on: not modelled, unknown.
       const definite = back.end.kind === 'blocked' || (back.end.kind === 'egress' && (back.end.target.type === 'nat' || back.end.target.type === 'igw'));
       const h: Hop = {
         stage: 'return-route',
@@ -459,10 +565,16 @@ export function evaluatePath(model: NetworkModel, query: PathQuery, options: Eva
       hops.push(h);
       return finish(h.decision === 'unknown' ? 'unknown' : 'blocked', h);
     }
-    if (routeHop?.kind === 'hop') hops.push({ ...routeHop.hop, stage: 'return-route' });
-    const ret = evaluateReturnNacls(model, [{ subnetId: dst.subnet.id, egress: true, peerIp: src.ip, stage: 'return-nacl' }], pkt, profiles);
+    for (const st of back.steps) if (st.kind === 'hop') hops.push({ ...st.hop, stage: st.hop.stage === 'route' ? 'return-route' : st.hop.stage });
+    const sym = symmetryHop(model, inPath.appliances, appliancesOn(back));
+    if (sym) {
+      hops.push(sym);
+      if (sym.decision === 'block') return finish('blocked', sym);
+    }
+    const checks = back.steps.filter((x): x is { kind: 'nacl'; check: NaclCheckpoint } => x.kind === 'nacl').map((x) => ({ ...x.check, stage: 'return-nacl' as Stage }));
+    const ret = evaluateReturnNacls(model, checks, pkt, profiles, inPath.limit);
     hops.push(...ret.hops);
-    if (ret.coverage === 'none') return finish(ret.blockingHop?.decision === 'unknown' ? 'unknown' : 'blocked', ret.blockingHop);
+    if (ret.coverage === 'none') return finish(ret.blockingHop?.decision === 'unknown' ? 'unknown' : 'blocked', ret.blockingHop ?? inPath.hops.find((h) => h.stage === 'firewall'));
     return finish('reachable', undefined, { returnPath: ret.coverage, ...(ret.profiles ? { returnProfiles: ret.profiles } : {}) });
   }
 
@@ -476,7 +588,8 @@ export function evaluatePath(model: NetworkModel, query: PathQuery, options: Eva
   warnings.push(...egr.warnings);
   if (egr.hop.decision !== 'pass') return finish(egr.hop.decision === 'block' ? 'blocked' : 'unknown', egr.hop);
 
-  const fw = walkHops(model, forward, pkt);
+  const span: PortRange = { from: Math.min(...profiles.map((p) => p.range.from)), to: Math.max(...profiles.map((p) => p.range.to)) };
+  const fw = walkHops(model, forward, pkt, span);
   hops.push(...fw.hops);
   if (fw.blocking) return finish(fw.blocking.decision === 'block' ? 'blocked' : 'unknown', fw.blocking);
   if (forward.end.kind === 'blocked') return finish('blocked', forward.end);
@@ -520,9 +633,14 @@ export function evaluatePath(model: NetworkModel, query: PathQuery, options: Eva
     return finish(h.decision === 'unknown' ? 'unknown' : 'blocked', h);
   }
   hops.push(...routeHops);
+  const sym = symmetryHop(model, fw.appliances, appliancesOn(back));
+  if (sym) {
+    hops.push(sym);
+    if (sym.decision === 'block') return finish('blocked', sym);
+  }
   const checks = back.steps.filter((s): s is { kind: 'nacl'; check: NaclCheckpoint } => s.kind === 'nacl').map((s) => s.check);
-  const ret = evaluateReturnNacls(model, checks, pkt, profiles);
+  const ret = evaluateReturnNacls(model, checks, pkt, profiles, fw.limit);
   hops.push(...ret.hops);
-  if (ret.coverage === 'none') return finish(ret.blockingHop?.decision === 'unknown' ? 'unknown' : 'blocked', ret.blockingHop);
+  if (ret.coverage === 'none') return finish(ret.blockingHop?.decision === 'unknown' ? 'unknown' : 'blocked', ret.blockingHop ?? fw.hops.find((h) => h.stage === 'firewall'));
   return finish('reachable', undefined, { returnPath: ret.coverage, ...(ret.profiles ? { returnProfiles: ret.profiles } : {}) });
 }

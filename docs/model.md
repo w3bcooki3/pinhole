@@ -60,7 +60,7 @@ Source: [How transit gateways work](https://docs.aws.amazon.com/vpc/latest/tgw/h
 - The source VPC needs an available attachment to the transit gateway named by the route.
 - Only resources in Availability Zones where the attachment has a subnet can reach the transit gateway.
 - The attachment's associated route table decides. Longest prefix first; for the same prefix: static, prefix list, then propagated. Blackhole routes drop.
-- On the destination side, the transit gateway uses its interface in the destination's AZ, or in another AZ if there is none there. Traffic is then routed by that attachment subnet's route table. If that table sends the destination anywhere other than `local`, the path goes through an appliance and the result is `unknown`.
+- On the destination side, the transit gateway uses its interface in the destination's AZ, or in another AZ if there is none there. Traffic is then routed by that attachment subnet's route table. If that table sends the destination to an inspection endpoint, the path goes through the appliance and on from the endpoint's subnet (centralised inspection: back to the transit gateway, whose route table for the inspection VPC's attachment then decides). Anything else is `unknown`.
 - NACLs are evaluated as in the AWS table:
   - instance to TGW: instance subnet outbound (destination IP), then TGW subnet inbound (source IP); if the two are the same subnet, both rule sets of that NACL;
   - TGW to instance: TGW subnet outbound (destination IP), then instance subnet inbound (source IP); if the two are the same subnet, none.
@@ -75,7 +75,7 @@ An interface is reachable from an internet address on a port when all of these h
 
 1. The interface has a public IPv4 address or Elastic IP, mapped to one of its private IPs.
 2. An internet gateway is attached to the VPC.
-3. The internet gateway has no gateway route table. If it has one, the result is `unknown` (ingress routing through an appliance).
+3. If the internet gateway has a gateway route table (ingress routing), its route for the interface's private address decides: `local` goes straight on; a Network Firewall or Gateway Load Balancer endpoint sends the packet through the appliance (see below) and on by the endpoint subnet's route table; anything else is `unknown`.
 4. The subnet NACL allows the request inbound from the client.
 5. A security group rule allows the request.
 6. The subnet's route for the client's address points at that internet gateway. If it points at a NAT gateway instead, the response never reaches the client from the right address.
@@ -205,16 +205,39 @@ The attack graph has a source (the internet), `controls(eni)` nodes, `reaches(je
 
 ## Differential testing
 
-`packages/engine/test/fuzz.test.ts` and `reference.ts`. A seeded generator builds random networks: one VPC, two subnets, an internet gateway attached or not, main and subnet route tables with default and more-specific routes to the gateway, a NAT gateway or a blackhole, default and subnet network ACLs with random entries, three security groups with random rules, and public addresses on some interfaces. For every interface, client address, protocol and port in a fixed list, the reference evaluator answers from the snapshot JSON directly, and the engine answers twice: `evaluatePath` and the exposure report's exact `sourceRanges`. Any disagreement fails with the seed and the snapshot. Compaction is fuzzed against a direct rule matcher in the same way.
+`packages/engine/test/fuzz.test.ts` and `reference.ts`. A seeded generator builds random networks: one VPC, two subnets, an internet gateway attached or not, main and subnet route tables with default and more-specific routes to the gateway, a NAT gateway or a blackhole, default and subnet network ACLs with random entries, three security groups with random rules, and public addresses on some interfaces. For every interface, client address, protocol and port in a fixed list, the reference evaluator answers from the snapshot JSON directly, and the engine answers twice: `evaluatePath` and the exposure report's exact `sourceRanges`. Any disagreement fails with the seed and the snapshot. Compaction is fuzzed against a direct rule matcher in the same way. Network Firewall is fuzzed against `referenceFirewall`: random stateless rules (protocols, sources, source and destination ports, any action) and default actions, random Suricata rules (any action, protocol, addresses including variables, ports and ranges, either direction) in either rule order with any strict default action, decided for three clients, two protocols, three ports and five client ports each.
+
+## Firewalls and appliances
+
+`packages/engine/src/firewall.ts`, and the appliance steps in `walk.ts` and `path.ts`.
+
+**Following the route.** A route whose target is a Network Firewall endpoint (from `DescribeFirewall`'s sync states) or a Gateway Load Balancer endpoint hands the packet to the appliance. The walk adds an appliance checkpoint, crosses into the endpoint's subnet (its network ACL inbound, unless it is the same subnet), and routes on from the endpoint subnet's route table, crossing its network ACL outbound. This covers ingress routing on the internet gateway, subnet routes through the firewall (for replies, and between subnets), and a transit gateway attachment subnet that sends traffic to an endpoint (centralised inspection). More than four appliances in one direction is reported as a routing loop.
+
+**Deciding the connection.** Network Firewall is evaluated on the connection: the request (client to server) and the reply (server to client), for each cell of the client's ephemeral port range cut at every port any rule mentions.
+
+- Stateless: each packet goes through the policy's stateless groups in priority order and their rules in priority order; the first match passes, drops or forwards it; otherwise the stateless default action applies. A rule matching on TCP flags gives `unknown`. A dropped request or reply blocks the connection.
+- Stateful: the forwarded packets, request first, go through the stateful rules. In default action order, all pass rules come first, then drop, reject and alert; in strict order, groups by priority and rules as written. The first pass, drop or reject decides (a `DROP_TO_ALERT` override makes a group's drops alerts). If nothing decides, strict order applies `aws:drop_strict` or `aws:drop_established` as a drop; otherwise the flow passes.
+- Headers: protocol (`ip`, `tcp`, `udp`, `icmp`; application protocols such as `http` or `tls` match only TCP or UDP and are conditional), addresses and ports with lists, ranges, negation and variables, `->` or `<>`, and `flow:to_server` / `to_client`. `HOME_NET` defaults to the firewall VPC's CIDRs; policy variables override it; `EXTERNAL_NET` is everything else.
+- Domain lists generate rules from `HOME_NET` to `EXTERNAL_NET` with `flow:to_server`: pass (allow list) or drop (deny list) for the listed hosts, and, for an allow list, drop for other TLS or HTTP.
+- Anything else a rule matches on (content, host names, flowbits, application protocols) makes it conditional. The evaluator follows both outcomes; if they differ, the connection is `unknown` inside the firewall, and the path continues with a caveat on the hop and the finding.
+- A rule group whose rules are not in the snapshot makes the stateful result `unknown` (with a caveat). AWS managed groups are skipped: they drop known-malicious traffic only.
+
+The client ports the firewall allows are intersected with the network ACLs' return coverage, so a firewall that passes replies only to some ephemeral ports gives `returnPath: partial`.
+
+**Symmetry.** The firewalls and appliances on the forward walk and the return walk are compared. A Network Firewall on one direction only is a block (its stateful engine drops flows it did not see start); a third-party appliance on one direction only is a caveat.
+
+**Third-party appliances.** A Gateway Load Balancer endpoint that is not a Network Firewall endpoint is followed and assumed to pass, with a caveat naming the endpoint service.
+
+**Cells.** Exposure and service reachability also cut addresses and ports at firewall rule boundaries and at the network ACL and route table entries of every endpoint subnet, so each cell is decided the same way throughout.
 
 ## Out of scope, detected and warned about
 
 | Detected | How |
 |---|---|
-| AWS Network Firewall | route targets `vpce-...` that are not in `DescribeVpcEndpoints` |
-| Gateway Load Balancer | `GatewayLoadBalancer` endpoints, `gateway` load balancers, GWLB interface types |
+| Endpoints not in the snapshot | route targets `vpce-...` that are neither firewall endpoints nor in `DescribeVpcEndpoints` (usually a firewall collected without the Network Firewall permissions) |
+| Third-party appliances | routes to `GatewayLoadBalancer` endpoints that are not Network Firewall endpoints (followed, assumed to pass) |
 | Appliances and NAT instances | routes to an interface or instance |
-| Ingress routing | route tables associated with an internet or virtual private gateway |
+| Ingress routing elsewhere | gateway route tables that send traffic to something other than `local` or an inspection endpoint |
 | VPN / Direct Connect | routes to a virtual private gateway |
 | IPv6 | VPC IPv6 CIDRs, egress-only internet gateways |
 | Global Accelerator | `global_accelerator_managed` interfaces |

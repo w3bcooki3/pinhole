@@ -7,6 +7,21 @@ All notable changes to this project are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- AWS Network Firewall and Gateway Load Balancer appliances in the path.
+  Routes to firewall and appliance endpoints are followed: ingress routing on
+  the internet gateway, replies through the firewall, east-west inspection,
+  and centralised inspection through a transit gateway. Network Firewall
+  policies are evaluated per connection and per client port: stateless rules
+  for the request and the reply, stateful 5-tuple rules, Suricata rules and
+  domain lists in default or strict order with the strict default actions,
+  rule group overrides and variables. Asymmetric routing through a firewall is
+  reported as blocked. Rules that match on content, and third-party
+  appliances whose rules are not visible, are followed and marked with a
+  caveat on the path and the finding, never hidden. The collector and the
+  CloudShell script read firewalls, policies and rule groups with four new
+  read-only permissions. Fixtures 12 (firewall at the internet edge) and 13
+  (inspection VPC behind a transit gateway), and a differential test against
+  a separate firewall reference.
 - Fixes say what they break inside the network. Every candidate fix is
   checked, exactly, for the connections it would cut into and out of the
   interfaces it touches. Losing a load balancer's targets, a health check or a

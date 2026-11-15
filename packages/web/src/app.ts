@@ -314,6 +314,7 @@ function detail(r: Row, back: { label: string; act: () => void }, extra: Child[]
             h('dt', {}, 'Public IPs'), h('dd', { class: 'mono' }, f.publicIps.join(', ') || 'none'),
             h('dt', {}, 'Source range'), h('dd', { class: 'mono' }, f.sourceRanges.slice(0, 6).join(', ') + (f.sourceRanges.length > 6 ? ` and ${f.sourceRanges.length - 6} more` : '')),
             h('dt', {}, 'Responses'), h('dd', {}, f.returnPath === 'all' ? 'Allowed for all client port ranges' : f.returnPath === 'partial' ? 'Allowed for some client port ranges' : 'Blocked'),
+            ...(f.inspectedBy?.length ? [h('dt', {}, 'Inspected by'), h('dd', {}, f.inspectedBy.join(', '))] : []),
             h('dt', {}, 'Snapshot'), h('dd', {}, r.snap.name),
           ),
         )),
@@ -321,6 +322,7 @@ function detail(r: Row, back: { label: string; act: () => void }, extra: Child[]
       h(
         'div',
         { class: 'dcol' },
+        ...(f.caveats?.length ? [o(1, h('div', { class: 'box dbox caveat-box', role: 'note' }, h('div', { class: 'pad' }, h('strong', {}, 'Not decided exactly'), ...f.caveats.map((c) => h('p', { class: 'dim', style: 'margin:0.25rem 0 0' }, c)))))] : []),
         o(1, sec('Why it matters', whyChips(f), fp && fp.reachable.length ? h('p', { class: 'dim', style: 'margin:0.75rem 0 0' }, `If this server is compromised, it can reach ${D.plural(fp.reachable.length, 'other resource')} inside the network${fp.dataStores ? `, ${D.plural(fp.dataStores, 'data store')} among them` : ''}.`) : null)),
         o(2, h('div', { class: 'box dbox' }, fixesSection(ctx, r))),
         chains.length
@@ -361,7 +363,8 @@ function sevSegments(list: Severity[]): HTMLElement {
 function chain(r: Row): HTMLElement {
   const sep = () => h('span', { class: 'sep' }, iconSvg('chev', 12));
   const entry = D.entryPoint(r.f).replace(/ \(.*\)$/, '');
-  const parts = r.f.kind === 'load-balancer' ? ['Internet', entry] : ['Internet', entry, D.shortName(r.f)];
+  const via = r.f.inspectedBy ?? [];
+  const parts = r.f.kind === 'load-balancer' ? ['Internet', entry] : ['Internet', entry, ...via, D.shortName(r.f)];
   const el = h('span', { class: 'chain' });
   parts.forEach((x, i) => {
     if (i) el.append(sep());

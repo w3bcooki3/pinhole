@@ -23,6 +23,10 @@ const STAGE_LABEL: Record<string, string> = {
   'dest-vpc-route': 'route (dest VPC)',
   scope: 'note',
   resolve: 'resolve',
+  'ingress-route': 'gateway route',
+  'appliance-nacl': 'endpoint NACL',
+  firewall: 'network firewall',
+  appliance: 'appliance',
 };
 
 function portText(f: ExposureFinding): string {
@@ -34,7 +38,7 @@ function portText(f: ExposureFinding): string {
 function hopLine(h: Hop): string {
   const label = (STAGE_LABEL[h.stage] ?? h.stage).padEnd(16);
   const decision = h.decision === 'pass' ? 'ok  ' : h.decision === 'info' ? '    ' : h.decision.toUpperCase().padEnd(4);
-  return `      ${label} ${decision} ${h.detail}`;
+  return `      ${label} ${decision} ${h.detail}${h.caveat ? `\n      ${''.padEnd(16)} NOTE ${h.caveat}` : ''}`;
 }
 
 function returnText(f: ExposureFinding): string {
@@ -57,6 +61,8 @@ function findingBlock(f: ExposureFinding, verbose: boolean): string[] {
     lines.push(`  sources:  ${f.sourceRanges.slice(0, 4).join(', ')} and ${f.sourceRanges.length - 4} more (use --verbose)`);
   }
   lines.push(`  return:   ${returnText(f)}`);
+  if (f.inspectedBy?.length) lines.push(`  inspected by: ${f.inspectedBy.join(', ')}`);
+  for (const c of f.caveats ?? []) lines.push(`  note:     ${c}`);
   const sample = f.trace.find((h) => h.stage === 'dest-nacl-ingress')?.detail.match(/from (\S+)$/)?.[1];
   lines.push(`  path${sample ? ` (sample client ${sample})` : ''}:`);
   for (const h of f.trace) lines.push(hopLine(h));

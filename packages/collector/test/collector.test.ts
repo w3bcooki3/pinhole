@@ -32,7 +32,7 @@ const findingKeys = (s: unknown) =>
     .sort();
 
 describe('collectSnapshot', () => {
-  for (const name of ['04-blackhole-routes', '07-alb-private-targets', '08-nlb-client-ip-preservation']) {
+  for (const name of ['04-blackhole-routes', '07-alb-private-targets', '08-nlb-client-ip-preservation', '12-network-firewall', '13-inspection-vpc']) {
     it(`reproduces fixture ${name} through paginated API calls`, async () => {
       const original = fixture(name);
       const { send, calls } = fakeSend(original);
@@ -87,7 +87,7 @@ describe('collectSnapshot', () => {
 describe('IAM policy', () => {
   const policy = JSON.parse(readFileSync(join(repo, 'docs/iam-policy.json'), 'utf8'));
   const actions: string[] = policy.Statement.flatMap((s: { Action: string[] }) => s.Action);
-  const prefix = { ec2: 'ec2', elbv2: 'elasticloadbalancing', sts: 'sts' } as const;
+  const prefix = { ec2: 'ec2', elbv2: 'elasticloadbalancing', 'network-firewall': 'network-firewall', sts: 'sts' } as const;
 
   it('grants every operation the collector can call (sts:GetCallerIdentity needs no permission)', () => {
     for (const { service, operation } of COLLECTOR_OPERATIONS) {
@@ -128,7 +128,7 @@ describe('scripts/cloudshell-collect.sh', () => {
     return { snap: JSON.parse(readFileSync(out, 'utf8')) as Snapshot, calls: readFileSync(log, 'utf8').trim().split('\n') };
   }
 
-  for (const name of ['04-blackhole-routes', '07-alb-private-targets', '08-nlb-client-ip-preservation']) {
+  for (const name of ['04-blackhole-routes', '07-alb-private-targets', '08-nlb-client-ip-preservation', '12-network-firewall', '13-inspection-vpc']) {
     it.skipIf(!hasJq)(`builds an equivalent snapshot for ${name}`, () => {
       const { snap, calls } = runScript(name);
       expect(snap.source).toBe('aws-cli');

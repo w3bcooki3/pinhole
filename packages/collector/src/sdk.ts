@@ -4,6 +4,7 @@
  * Only read-only commands are imported. Credentials come from the standard
  * provider chain, or from a named profile in ~/.aws/config when given.
  */
+import { NetworkFirewallClient, ListFirewallsCommand, DescribeFirewallCommand, DescribeFirewallPolicyCommand, DescribeRuleGroupCommand } from '@aws-sdk/client-network-firewall';
 import {
   EC2Client,
   DescribeVpcsCommand,
@@ -74,6 +75,12 @@ const COMMANDS: Record<Service, Record<string, CommandCtor>> = {
     DescribeTargetHealth: DescribeTargetHealthCommand,
     DescribeTargetGroupAttributes: DescribeTargetGroupAttributesCommand,
   },
+  'network-firewall': {
+    ListFirewalls: ListFirewallsCommand,
+    DescribeFirewall: DescribeFirewallCommand,
+    DescribeFirewallPolicy: DescribeFirewallPolicyCommand,
+    DescribeRuleGroup: DescribeRuleGroupCommand,
+  },
   sts: {
     GetCallerIdentity: GetCallerIdentityCommand,
   },
@@ -90,6 +97,7 @@ export function sdkSender(opts: { region: string; profile?: string }): Send {
   const clients: Record<Service, { send: (cmd: any) => Promise<any> }> = {
     ec2: new EC2Client(config),
     elbv2: new ElasticLoadBalancingV2Client(config),
+    'network-firewall': new NetworkFirewallClient(config),
     sts: new STSClient(config),
   };
   return async (service, operation, input) => {

@@ -33,6 +33,7 @@
   "dependencies": {
     "@aws-sdk/client-ec2": "^3.600.0",
     "@aws-sdk/client-elastic-load-balancing-v2": "^3.600.0",
+    "@aws-sdk/client-network-firewall": "^3.1169.0",
     "@aws-sdk/client-sts": "^3.600.0",
     "@aws-sdk/credential-providers": "^3.600.0",
     "@pinhole/engine": "0.2.0"

@@ -23,6 +23,7 @@ import { CLIENT_PROFILES, ELB_PROFILES, evaluateClientPreservedTarget, evaluateP
 import type { RiskAssessment, Severity } from './risk.js';
 import { assessPorts, compareSeverity } from './risk.js';
 import { detectOutOfScope } from './scope.js';
+import { inspectionBoundaries } from './firewall.js';
 import { attachedIgw, displayName, eniByPrivateIp, isElbNode, naclForSubnet, routeTableForSubnet } from './topology.js';
 import { PROTO_ICMP, PROTO_TCP, PROTO_UDP } from './types.js';
 import type { Eni, IpRange, Listener, LoadBalancer, NetworkModel, PortRange, ProtocolNumber, SgRule, TargetGroup, Warning } from './types.js';
@@ -66,6 +67,10 @@ export interface ExposureFinding {
   reasons: string[];
   /** Hops for one representative packet. */
   trace: Hop[];
+  /** Firewalls and appliances the traffic passes on the way in (names, or endpoint IDs for third-party appliances). */
+  inspectedBy?: string[];
+  /** Parts of the path that let traffic through without deciding it exactly: a third-party appliance, a firewall rule that depends on content. */
+  caveats?: string[];
   /** For load balancers: what is reachable behind this listener. */
   listener?: { arn: string; port: number; protocol: string };
   targets?: LbTargetResult[];
@@ -105,6 +110,10 @@ function addressCells(model: NetworkModel, eni: Eni, limit: RangeSet): IpRange[]
       if (rule.prefixListId) for (const c of model.prefixLists.get(rule.prefixListId)?.entries ?? []) addCuts(cuts, c);
     }
   }
+  // Firewalls and the subnets of appliance endpoints can decide by address too.
+  const insp = inspectionBoundaries(model);
+  for (const r of [...insp.addrs, ...insp.routes]) addCuts(cuts, r);
+  for (const acl of insp.acls) for (const e of acl.entries) if (e.cidr) addCuts(cuts, e.cidr);
   const subnet = model.subnets.get(eni.subnetId);
   if (subnet) {
     for (const e of naclForSubnet(model, subnet)?.entries ?? []) if (e.cidr) addCuts(cuts, e.cidr);
@@ -139,6 +148,9 @@ function portCells(model: NetworkModel, eni: Eni, protocol: ProtocolNumber, with
   for (const e of subnet ? naclForSubnet(model, subnet)?.entries ?? [] : []) {
     if (!e.egress && e.protocol === protocol && e.portRange) add(e.portRange.from, e.portRange.to);
   }
+  const insp = inspectionBoundaries(model);
+  for (const r of insp.ports) add(r.from, r.to);
+  for (const acl of insp.acls) for (const e of acl.entries) if (e.protocol === protocol && e.portRange) add(e.portRange.from, e.portRange.to);
   const sorted = [...cuts].sort((a, b) => a - b);
   const out: PortRange[] = [];
   for (let i = 0; i + 1 < sorted.length; i++) out.push({ from: sorted[i]!, to: sorted[i + 1]! - 1 });
@@ -292,7 +304,15 @@ function toFinding(model: NetworkModel, g: CellGroup, base: { kind: ExposureFind
     severity: risk.severity,
     reasons: risk.reasons,
     trace: g.sample.hops,
+    ...inspection(g.sample.hops),
   };
+}
+
+/** Firewalls and appliances the path passes, and what could not be decided exactly. */
+export function inspection(hops: Hop[]): { inspectedBy?: string[]; caveats?: string[] } {
+  const by = [...new Set(hops.filter((h) => (h.stage === 'firewall' || h.stage === 'appliance') && h.decision === 'pass').map((h) => h.resourceId))];
+  const caveats = [...new Set(hops.map((h) => h.caveat).filter((c): c is string => !!c))];
+  return { ...(by.length ? { inspectedBy: by } : {}), ...(caveats.length ? { caveats } : {}) };
 }
 
 // ------------------------------------------------------------------ load balancers

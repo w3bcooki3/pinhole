@@ -3,7 +3,7 @@
  *
  * Every call goes through a `Send` function. In production it is backed by
  * the AWS SDK (sdk.ts); in tests by a fake. The collector refuses to send any
- * operation whose name does not start with Describe, Get or Search, so a
+ * operation whose name does not start with Describe, Get, List or Search, so a
  * mutating call cannot slip in through a future edit.
  *
  * Failures of individual calls (typically AccessDenied for one API) do not
@@ -13,10 +13,10 @@
 import { SNAPSHOT_SCHEMA_VERSION } from '@pinhole/engine';
 import type { Snapshot } from '@pinhole/engine';
 
-export type Service = 'ec2' | 'elbv2' | 'sts';
+export type Service = 'ec2' | 'elbv2' | 'network-firewall' | 'sts';
 export type Send = (service: Service, operation: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>;
 
-export const READ_ONLY_OPERATION = /^(Describe|Get|Search)[A-Z]/;
+export const READ_ONLY_OPERATION = /^(Describe|Get|List|Search)[A-Z]/;
 
 export interface CollectOptions {
   region: string;
@@ -180,6 +180,32 @@ export async function collectSnapshot(send: Send, opts: CollectOptions): Promise
   elbv2.TargetHealth = health;
   elbv2.TargetGroupAttributes = attrs;
 
+  // AWS Network Firewall: each firewall, its policy, and the policy's rule groups.
+  // AWS managed rule groups are not described: their rules are not published.
+  const networkFirewall: NonNullable<Snapshot['networkFirewall']> = {};
+  const firewalls = await c.all('network-firewall', 'ListFirewalls', 'Firewalls');
+  if (firewalls?.length) {
+    const described: Json[] = [];
+    for (const f of firewalls) {
+      const d = await c.one('network-firewall', 'DescribeFirewall', { FirewallArn: f.FirewallArn });
+      if (d) described.push({ Firewall: d.Firewall, FirewallStatus: d.FirewallStatus });
+    }
+    networkFirewall.Firewalls = described;
+    const policies: Record<string, Json> = {};
+    for (const arn of new Set<string>(described.map((d) => d.Firewall?.FirewallPolicyArn).filter(Boolean))) {
+      const p = await c.one('network-firewall', 'DescribeFirewallPolicy', { FirewallPolicyArn: arn });
+      if (p) policies[arn] = { FirewallPolicyResponse: p.FirewallPolicyResponse, FirewallPolicy: p.FirewallPolicy };
+    }
+    networkFirewall.FirewallPolicies = policies;
+    const groups: Record<string, Json> = {};
+    const refs = Object.values(policies).flatMap((p: Json) => [...(p.FirewallPolicy?.StatelessRuleGroupReferences ?? []), ...(p.FirewallPolicy?.StatefulRuleGroupReferences ?? [])]);
+    for (const arn of new Set<string>(refs.map((r: Json) => r.ResourceArn).filter((a: string) => a && !a.includes(':aws-managed:')))) {
+      const g = await c.one('network-firewall', 'DescribeRuleGroup', { RuleGroupArn: arn });
+      if (g) groups[arn] = { RuleGroupResponse: g.RuleGroupResponse, RuleGroup: g.RuleGroup };
+    }
+    networkFirewall.RuleGroups = groups;
+  }
+
   const snapshot: Snapshot = {
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     source: 'aws-sdk',
@@ -189,6 +215,7 @@ export async function collectSnapshot(send: Send, opts: CollectOptions): Promise
     region: opts.region,
     ec2,
     elbv2,
+    ...(networkFirewall.Firewalls ? { networkFirewall } : {}),
     ...(c.errors.length ? { errors: c.errors } : {}),
   };
   return clean(snapshot);

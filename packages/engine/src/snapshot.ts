@@ -223,7 +223,46 @@ export interface RawVpcEndpoint {
   VpcEndpointType?: string;
   ServiceName?: string;
   VpcId?: string;
+  SubnetIds?: string[];
 }
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/** DescribeFirewall output (Firewall and FirewallStatus). */
+export interface RawFirewallDescription {
+  Firewall?: { FirewallName?: string; FirewallArn?: string; FirewallPolicyArn?: string; VpcId?: string; SubnetMappings?: { SubnetId?: string }[] };
+  FirewallStatus?: { Status?: string; SyncStates?: Record<string, { Attachment?: { SubnetId?: string; EndpointId?: string; Status?: string } }> };
+}
+/** DescribeFirewallPolicy output. */
+export interface RawFirewallPolicyDescription {
+  FirewallPolicyResponse?: { FirewallPolicyName?: string; FirewallPolicyArn?: string };
+  FirewallPolicy?: {
+    StatelessRuleGroupReferences?: { ResourceArn?: string; Priority?: number }[];
+    StatelessDefaultActions?: string[];
+    StatelessFragmentDefaultActions?: string[];
+    StatefulRuleGroupReferences?: { ResourceArn?: string; Priority?: number; Override?: { Action?: string } }[];
+    StatefulDefaultActions?: string[];
+    StatefulEngineOptions?: { RuleOrder?: string };
+    PolicyVariables?: { RuleVariables?: Record<string, { Definition?: string[] }> };
+  };
+}
+/** DescribeRuleGroup output. */
+export interface RawRuleGroupDescription {
+  RuleGroupResponse?: { RuleGroupName?: string; RuleGroupArn?: string; Type?: string };
+  RuleGroup?: {
+    RuleVariables?: { IPSets?: Record<string, { Definition?: string[] }>; PortSets?: Record<string, { Definition?: string[] }> };
+    RulesSource?: {
+      RulesString?: string;
+      RulesSourceList?: { Targets?: string[]; TargetTypes?: string[]; GeneratedRulesType?: string };
+      StatefulRules?: { Action?: string; Header?: { Protocol?: string; Source?: string; SourcePort?: string; Direction?: string; Destination?: string; DestinationPort?: string }; RuleOptions?: { Keyword?: string; Settings?: string[] }[] }[];
+      StatelessRulesAndCustomActions?: {
+        StatelessRules?: { Priority?: number; RuleDefinition?: { Actions?: string[]; MatchAttributes?: any } }[];
+        CustomActions?: { ActionName?: string }[];
+      };
+    };
+    StatefulRuleOptions?: { RuleOrder?: string };
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 export interface RawLoadBalancer {
   LoadBalancerArn: string;
@@ -315,6 +354,12 @@ export interface Snapshot {
     /** DescribeTargetGroupAttributes output, keyed by target group ARN. */
     TargetGroupAttributes?: Record<string, { Key?: string; Value?: string }[]>;
   };
+  /** AWS Network Firewall: firewalls, and the policies and rule groups they use, keyed by ARN. */
+  networkFirewall?: {
+    Firewalls?: RawFirewallDescription[];
+    FirewallPolicies?: Record<string, RawFirewallPolicyDescription>;
+    RuleGroups?: Record<string, RawRuleGroupDescription>;
+  };
   /** API calls that failed during collection. */
   errors?: { api: string; message: string }[];
 }
@@ -335,7 +380,7 @@ export function assertSnapshot(value: unknown): asserts value is Snapshot {
       `Unsupported snapshot schemaVersion ${JSON.stringify(v.schemaVersion)}; this build reads version ${SNAPSHOT_SCHEMA_VERSION}.`,
     );
   }
-  for (const key of ['ec2', 'elbv2'] as const) {
+  for (const key of ['ec2', 'elbv2', 'networkFirewall'] as const) {
     if (v[key] !== undefined && (typeof v[key] !== 'object' || v[key] === null || Array.isArray(v[key]))) {
       throw new SnapshotError(`Snapshot field "${key}" must be an object.`);
     }
@@ -358,7 +403,7 @@ export function assertSnapshot(value: unknown): asserts value is Snapshot {
 // compatibility.
 
 type Spec =
-  | 'str' | 'text' | 'msg' | 'bool' | 'port' | 'portAny' | 'int' | 'ruleNo'
+  | 'str' | 'text' | 'msg' | 'rules' | 'bool' | 'port' | 'portAny' | 'int' | 'ruleNo'
   | { arr: Spec; max?: number }
   | { obj: Record<string, Spec>; req?: string[] }
   | { map: Spec }
@@ -374,7 +419,8 @@ const RESERVED = new Set(['__proto__', 'constructor', 'prototype']);
 const arr = (of: Spec, max = MAX_ITEMS): Spec => ({ arr: of, max });
 const obj = (o: Record<string, Spec>, req: string[] = []): Spec => ({ obj: o, req });
 const id = (prefix: string): Spec => ({ re: new RegExp(`^${prefix}-[0-9a-zA-Z][0-9a-zA-Z-]{0,79}$`), what: `an ID starting with "${prefix}-"` });
-const ARN: Spec = { re: /^arn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:\d{0,12}:[\x21-\x7e]{1,1900}$/, what: 'an ARN' };
+// AWS managed resources (Network Firewall managed rule groups) put "aws-managed" where the account goes.
+const ARN: Spec = { re: /^arn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:(\d{0,12}|aws-managed):[\x21-\x7e]{1,1900}$/, what: 'an ARN' };
 const TAGS = arr(obj({ Key: 'text', Value: 'text' }));
 const PERM = obj({
   IpProtocol: 'str', FromPort: 'portAny', ToPort: 'portAny',
@@ -421,7 +467,7 @@ const SNAPSHOT: Spec = obj({
       Ipv6Addresses: arr(obj({ Ipv6Address: 'str' })), Status: 'str',
     }, ['NetworkInterfaceId', 'SubnetId', 'VpcId'])),
     Instances: arr(obj({ InstanceId: id('i'), State: obj({ Name: 'str' }), NetworkInterfaces: arr(obj({ NetworkInterfaceId: 'str', Attachment: obj({ DeviceIndex: 'int' }) })), Tags: TAGS }, ['InstanceId'])),
-    VpcEndpoints: arr(obj({ VpcEndpointId: id('vpce'), VpcEndpointType: 'str', ServiceName: 'text', VpcId: 'str' }, ['VpcEndpointId'])),
+    VpcEndpoints: arr(obj({ VpcEndpointId: id('vpce'), VpcEndpointType: 'str', ServiceName: 'text', VpcId: 'str', SubnetIds: arr('str') }, ['VpcEndpointId'])),
   }),
   elbv2: obj({
     LoadBalancers: arr(obj({ LoadBalancerArn: ARN, LoadBalancerName: 'text', Type: 'str', Scheme: 'str', VpcId: 'str', AvailabilityZones: arr(obj({ SubnetId: 'str', ZoneName: 'str' })), SecurityGroups: arr('str'), IpAddressType: 'str' }, ['LoadBalancerArn'])),
@@ -430,6 +476,52 @@ const SNAPSHOT: Spec = obj({
     TargetGroups: arr(obj({ TargetGroupArn: ARN, TargetGroupName: 'text', Protocol: 'str', Port: 'port', TargetType: 'str', VpcId: 'str', HealthCheckPort: 'str', LoadBalancerArns: arr(ARN) }, ['TargetGroupArn'])),
     TargetHealth: { map: arr(obj({ Target: obj({ Id: 'str', Port: 'port', AvailabilityZone: 'str' }), TargetHealth: obj({ State: 'str' }) })) },
     TargetGroupAttributes: { map: arr(obj({ Key: 'str', Value: 'text' })) },
+  }),
+  networkFirewall: obj({
+    Firewalls: arr(obj({
+      Firewall: obj({ FirewallName: 'text', FirewallArn: ARN, FirewallPolicyArn: ARN, VpcId: 'str', SubnetMappings: arr(obj({ SubnetId: 'str' })) }),
+      FirewallStatus: obj({ Status: 'str', SyncStates: { map: obj({ Attachment: obj({ SubnetId: 'str', EndpointId: 'str', Status: 'str' }) }) } }),
+    })),
+    FirewallPolicies: { map: obj({
+      FirewallPolicyResponse: obj({ FirewallPolicyName: 'text', FirewallPolicyArn: ARN }),
+      FirewallPolicy: obj({
+        StatelessRuleGroupReferences: arr(obj({ ResourceArn: ARN, Priority: 'int' })),
+        StatelessDefaultActions: arr('str'), StatelessFragmentDefaultActions: arr('str'),
+        StatefulRuleGroupReferences: arr(obj({ ResourceArn: ARN, Priority: 'int', Override: obj({ Action: 'str' }) })),
+        StatefulDefaultActions: arr('str'), StatefulEngineOptions: obj({ RuleOrder: 'str' }),
+        PolicyVariables: obj({ RuleVariables: { map: obj({ Definition: arr('str') }) } }),
+      }),
+    }) },
+    RuleGroups: { map: obj({
+      RuleGroupResponse: obj({ RuleGroupName: 'text', RuleGroupArn: ARN, Type: 'str' }),
+      RuleGroup: obj({
+        RuleVariables: obj({ IPSets: { map: obj({ Definition: arr('str') }) }, PortSets: { map: obj({ Definition: arr('str') }) } }),
+        RulesSource: obj({
+          RulesString: 'rules',
+          RulesSourceList: obj({ Targets: arr('str'), TargetTypes: arr('str'), GeneratedRulesType: 'str' }),
+          StatefulRules: arr(obj({
+            Action: 'str',
+            Header: obj({ Protocol: 'str', Source: 'str', SourcePort: 'str', Direction: 'str', Destination: 'str', DestinationPort: 'str' }),
+            RuleOptions: arr(obj({ Keyword: 'str', Settings: arr('text') })),
+          })),
+          StatelessRulesAndCustomActions: obj({
+            StatelessRules: arr(obj({
+              Priority: 'int',
+              RuleDefinition: obj({
+                Actions: arr('str'),
+                MatchAttributes: obj({
+                  Sources: arr(obj({ AddressDefinition: 'str' })), Destinations: arr(obj({ AddressDefinition: 'str' })),
+                  SourcePorts: arr(obj({ FromPort: 'portAny', ToPort: 'portAny' })), DestinationPorts: arr(obj({ FromPort: 'portAny', ToPort: 'portAny' })),
+                  Protocols: arr('int'), TCPFlags: arr(obj({ Flags: arr('str'), Masks: arr('str') })),
+                }),
+              }),
+            })),
+            CustomActions: arr(obj({ ActionName: 'str' })),
+          }),
+        }),
+        StatefulRuleOptions: obj({ RuleOrder: 'str' }),
+      }),
+    }) },
   }),
   // Error text comes from AWS and may hold any character; it is only ever shown as text.
   errors: arr(obj({ api: 'text', message: 'msg' }), 10_000),
@@ -459,6 +551,11 @@ function validate(value: unknown, spec: Spec, path: string): unknown {
         return CONTROL.test(value) ? value.replace(CONTROL_ALL, '\ufffd') : value;
       case 'msg':
         if (typeof value !== 'string' || value.length > 16_384) fail(path, 'must be text of reasonable length');
+        return value;
+      case 'rules':
+        // Suricata rules: lines of text (Network Firewall allows up to 2 MB).
+        if (typeof value !== 'string' || value.length > 2_000_000) fail(path, 'must be rule text of at most 2 MB');
+        if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)) fail(path, 'contains control characters');
         return value;
       case 'bool':
         if (typeof value !== 'boolean') fail(path, 'must be true or false');

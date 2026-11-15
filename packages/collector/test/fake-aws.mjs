@@ -60,6 +60,13 @@ export function respond(snap, service, op, input, pageSize = 1) {
     case 'elbv2:DescribeTargetGroups': return page('TargetGroups', elb.TargetGroups);
     case 'elbv2:DescribeTargetHealth': return { TargetHealthDescriptions: (elb.TargetHealth ?? {})[input.TargetGroupArn] ?? [] };
     case 'elbv2:DescribeTargetGroupAttributes': return { Attributes: (elb.TargetGroupAttributes ?? {})[input.TargetGroupArn] ?? [] };
+    case 'network-firewall:ListFirewalls': return page('Firewalls', (snap.networkFirewall?.Firewalls ?? []).map((f) => ({ FirewallName: f.Firewall.FirewallName, FirewallArn: f.Firewall.FirewallArn })));
+    case 'network-firewall:DescribeFirewall': {
+      const f = (snap.networkFirewall?.Firewalls ?? []).find((x) => x.Firewall.FirewallArn === input.FirewallArn);
+      return { UpdateToken: 'token', ...f };
+    }
+    case 'network-firewall:DescribeFirewallPolicy': return { UpdateToken: 'token', ...(snap.networkFirewall?.FirewallPolicies ?? {})[input.FirewallPolicyArn] };
+    case 'network-firewall:DescribeRuleGroup': return { UpdateToken: 'token', ...(snap.networkFirewall?.RuleGroups ?? {})[input.RuleGroupArn] };
     default: throw new Error(`fake-aws: unexpected call ${service}:${op}`);
   }
 }

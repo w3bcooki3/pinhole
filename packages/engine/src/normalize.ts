@@ -5,6 +5,7 @@
  * evaluator can assume clean data: numeric protocol strings, parsed CIDRs,
  * route targets classified by type, NACL entries sorted.
  */
+import { normalizeFirewalls } from './firewall.js';
 import { isIpv4Cidr, parseCidr } from './ipv4.js';
 import { parseCidr6 } from './ipv6.js';
 import { normalizeProtocol } from './packet.js';
@@ -158,6 +159,9 @@ export function normalize(input: unknown): NetworkModel {
     listeners: [],
     targetGroups: new Map(),
     vpcEndpoints: new Map(),
+    firewalls: new Map(),
+    firewallPolicies: new Map(),
+    firewallRuleGroups: new Map(),
     warnings,
   };
 
@@ -436,8 +440,9 @@ export function normalize(input: unknown): NetworkModel {
   }
 
   for (const e of ec2.VpcEndpoints ?? []) {
-    model.vpcEndpoints.set(e.VpcEndpointId, { id: e.VpcEndpointId, type: e.VpcEndpointType ?? 'unknown', serviceName: e.ServiceName ?? '', vpcId: e.VpcId ?? '' });
+    model.vpcEndpoints.set(e.VpcEndpointId, { id: e.VpcEndpointId, type: e.VpcEndpointType ?? 'unknown', serviceName: e.ServiceName ?? '', vpcId: e.VpcId ?? '', ...(e.SubnetIds?.length ? { subnetIds: e.SubnetIds } : {}) });
   }
+  normalizeFirewalls(snap, model, warnings);
 
   // ---- Load balancers
   for (const lb of elb.LoadBalancers ?? []) {

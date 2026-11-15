@@ -316,6 +316,91 @@ export interface VpcEndpoint {
   type: 'Interface' | 'Gateway' | 'GatewayLoadBalancer' | string;
   serviceName: string;
   vpcId: string;
+  /** Subnets the endpoint has an interface in (Interface and Gateway Load Balancer endpoints). */
+  subnetIds?: string[];
+}
+
+/**
+ * AWS Network Firewall. Traffic reaches it through its endpoints, one Gateway
+ * Load Balancer endpoint (vpce-) per Availability Zone, when a route sends it
+ * there.
+ */
+export interface Firewall {
+  arn: string;
+  name: string;
+  vpcId: string;
+  policyArn: string;
+  endpoints: { az: string; endpointId: string; subnetId: string; status?: string }[];
+}
+
+export type StatelessAction = 'pass' | 'drop' | 'forward';
+
+export interface StatelessRule {
+  priority: number;
+  /** The standard action; custom actions only publish metrics and are kept for display. */
+  action: StatelessAction;
+  customActions: string[];
+  /** Empty means any. */
+  sources: Cidr[];
+  destinations: Cidr[];
+  sourcePorts: PortRange[];
+  destinationPorts: PortRange[];
+  /** IP protocol numbers; empty means any. */
+  protocols: number[];
+  /** The rule matches on TCP flags, so it decides some packets of a connection and not others. */
+  tcpFlags: boolean;
+}
+
+export type StatefulAction = 'pass' | 'drop' | 'reject' | 'alert';
+
+/** One stateful rule, from a 5-tuple rule or a line of Suricata. Addresses and ports are kept as written and resolved against variables when evaluated. */
+export interface StatefulRule {
+  action: StatefulAction;
+  /** Lower case: tcp, udp, icmp, ip, or an application protocol (http, tls, dns, ssh, ...). */
+  protocol: string;
+  src: string;
+  srcPort: string;
+  dst: string;
+  dstPort: string;
+  /** <> in Suricata, ANY direction in a 5-tuple rule. */
+  bidirectional: boolean;
+  /** Set when the rule also matches on something the snapshot cannot decide (content, host name, flow state): the reason. */
+  conditional?: string;
+  sid?: string;
+  text: string;
+}
+
+export interface FirewallRuleGroup {
+  arn: string;
+  name: string;
+  type: 'stateless' | 'stateful';
+  /** False when the rules could not be read (AWS managed groups, or DescribeRuleGroup failed). */
+  known: boolean;
+  /** AWS managed (threat signatures, domain lists): drop known-bad traffic only. */
+  managed: boolean;
+  stateless: StatelessRule[];
+  stateful: StatefulRule[];
+  /** STRICT_ORDER or DEFAULT_ACTION_ORDER, for stateful groups. */
+  ruleOrder?: string;
+  /** A domain list group: which hosts, for which protocols, allowed or denied. */
+  domainList?: { targets: string[]; types: string[]; allow: boolean };
+  ipSets: Record<string, string[]>;
+  portSets: Record<string, string[]>;
+  /** Rules that could not be parsed, with the reason. */
+  unparsed: { text: string; reason: string }[];
+}
+
+export interface FirewallPolicy {
+  arn: string;
+  name: string;
+  statelessGroups: { arn: string; priority: number }[];
+  statelessDefault: string[];
+  statelessFragmentDefault: string[];
+  statefulGroups: { arn: string; priority?: number; override?: string }[];
+  statefulDefault: string[];
+  ruleOrder: 'DEFAULT_ACTION_ORDER' | 'STRICT_ORDER';
+  /** Policy variables (HOME_NET), which override the rule groups' own. */
+  ipSets: Record<string, string[]>;
 }
 
 /** Everything the evaluator knows about one account and region. */
@@ -340,6 +425,9 @@ export interface NetworkModel {
   listeners: Listener[];
   targetGroups: Map<string, TargetGroup>;
   vpcEndpoints: Map<string, VpcEndpoint>;
+  firewalls: Map<string, Firewall>;
+  firewallPolicies: Map<string, FirewallPolicy>;
+  firewallRuleGroups: Map<string, FirewallRuleGroup>;
   /** Raw route-table entries the normaliser could not interpret, etc. */
   warnings: Warning[];
 }

@@ -30,7 +30,11 @@
         "elasticloadbalancing:DescribeRules",
         "elasticloadbalancing:DescribeTargetGroups",
         "elasticloadbalancing:DescribeTargetHealth",
-        "elasticloadbalancing:DescribeTargetGroupAttributes"
+        "elasticloadbalancing:DescribeTargetGroupAttributes",
+        "network-firewall:ListFirewalls",
+        "network-firewall:DescribeFirewall",
+        "network-firewall:DescribeFirewallPolicy",
+        "network-firewall:DescribeRuleGroup"
       ],
       "Resource": "*"
     }

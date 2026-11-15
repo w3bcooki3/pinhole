@@ -16,6 +16,7 @@ import { hasPorts, protocolName } from './packet.js';
 import { assessPorts, categorize, isPivotService, serviceName } from './risk.js';
 import type { ServiceCategory, Severity } from './risk.js';
 import { isElbNode, naclForSubnet } from './topology.js';
+import { inspectionBoundaries } from './firewall.js';
 import { PROTO_ALL, PROTO_ICMP, PROTO_TCP, PROTO_UDP } from './types.js';
 import type { Eni, NetworkModel, PortRange, ProtocolNumber, SgRule } from './types.js';
 
@@ -138,6 +139,10 @@ export function reachServices(model: NetworkModel, srcId: string, dstId: string,
       for (const gid of src.groupIds) for (const r of model.securityGroups.get(gid)?.egress ?? []) if (r.protocol === protocol) cuts(set, r.fromPort, r.toPort, within);
       // Only the source and destination subnets' network ACLs are on the path.
       for (const n of acls) for (const e of n.entries) if (e.protocol === protocol && e.portRange) cuts(set, e.portRange.from, e.portRange.to, within);
+      // Firewalls, and the network ACLs of appliance endpoint subnets, on an inspection path.
+      const insp = inspectionBoundaries(model);
+      for (const r of insp.ports) cuts(set, r.from, r.to, within);
+      for (const n of insp.acls) for (const e of n.entries) if (e.protocol === protocol && e.portRange) cuts(set, e.portRange.from, e.portRange.to, within);
       const sorted = [...set].sort((a, b) => a - b);
       cells = [];
       for (let i = 0; i + 1 < sorted.length; i++) cells.push({ from: sorted[i]!, to: sorted[i + 1]! - 1 });

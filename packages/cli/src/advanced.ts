@@ -67,7 +67,7 @@ const name = (model: NetworkModel, eniId: string) => {
 };
 
 function hopsText(r: PathResult, indent = '    '): string[] {
-  return r.hops.map((h) => `${indent}${h.decision === 'pass' ? 'ok ' : h.decision === 'block' ? 'NO ' : '?? '} ${h.stage}: ${h.detail}`);
+  return r.hops.flatMap((h) => [`${indent}${h.decision === 'pass' ? 'ok ' : h.decision === 'block' ? 'NO ' : '?? '} ${h.stage}: ${h.detail}`, ...(h.caveat ? [`${indent}    note: ${h.caveat}`] : [])]);
 }
 
 // ------------------------------------------------------------------ can

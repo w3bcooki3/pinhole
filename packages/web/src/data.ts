@@ -256,9 +256,11 @@ export const STAGE: Record<string, string> = {
   'return-route': 'Return route', 'return-nacl': 'Network ACL (outbound)', 'source-sg-egress': 'Security group (outbound)', 'source-nacl-egress': 'Network ACL (outbound)',
   route: 'Route', peering: 'Peering', 'tgw-attachment': 'TGW attachment', 'tgw-route': 'TGW route', 'tgw-nacl': 'TGW subnet ACL',
   'dest-vpc-route': 'Route in VPC', scope: 'Note', resolve: 'Lookup',
+  'ingress-route': 'Gateway route table', 'appliance-nacl': 'Endpoint subnet ACL', firewall: 'Network Firewall', appliance: 'Appliance',
 };
 export const SHORT_STAGE: Record<string, string> = {
   'public-ip': 'public ip', igw: 'igw', 'dest-nacl-ingress': 'nacl in', 'dest-sg-ingress': 'sg', 'return-route': 'route back', 'return-nacl': 'nacl out',
+  'ingress-route': 'gw route', firewall: 'firewall', appliance: 'appliance',
 };
 
 export function hopId(h: Hop): string {
@@ -290,6 +292,11 @@ export function hopDetail(h: Hop): string {
       return (m = /^[^:]+: (.*)$/.exec(d)) ? m[1]!.replace(' -> ', ' → ') : d;
     case 'return-nacl':
       return (m = /ports (.+?) of /.exec(d)) ? `client ports ${m[1]}` : d;
+    case 'firewall':
+      // "edge: a to b: request and reply: <stateless default>; <stateful decision>" -> the decision.
+      return d.replace(/^[^:]+: \S+ to \S+: /, '').replace(/^request and reply: no stateless rule matches; the default action forwards it to the stateful engine; /, '');
+    case 'ingress-route':
+      return d.replace(/^\S+ \(the route table of ([\w-]+)\): /, '$1 route table: ').replace(' -> ', ' → ');
     default:
       return d;
   }

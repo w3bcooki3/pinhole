@@ -2,10 +2,10 @@
  * Detects configuration that v1 does not model, so reports can say where
  * results may be incomplete instead of silently being wrong.
  *
- * Out of scope for v1: AWS Network Firewall, Gateway Load Balancer, IPv6
- * (including egress-only internet gateways), Global Accelerator, CloudFront,
- * Classic Load Balancers, VPN/Direct Connect paths, and ingress routing
- * through appliances.
+ * Out of scope: the rules inside third-party appliances behind Gateway Load
+ * Balancer endpoints (followed, assumed to pass, and marked), routes to
+ * instances or interfaces acting as appliances, Global Accelerator,
+ * CloudFront, Classic Load Balancers and VPN/Direct Connect paths.
  */
 import { DOCS } from './docs.js';
 import type { NetworkModel, Warning } from './types.js';
@@ -23,16 +23,19 @@ export function detectOutOfScope(model: NetworkModel): Warning[] {
       const t = r.target;
       if (t.type === 'eni' || t.type === 'instance') middlebox.push(`${rt.id} -> ${t.id}`);
       if (t.type === 'vpce') {
+        const fw = [...model.firewalls.values()].some((f) => f.endpoints.some((e) => e.endpointId === t.id));
         const ep = model.vpcEndpoints.get(t.id);
+        if (fw) continue;
         if (!ep) unknownVpce.push(`${rt.id} -> ${t.id}`);
         else if (ep.type === 'GatewayLoadBalancer') gwlbVpce.push(`${rt.id} -> ${t.id}`);
       }
       if (t.type === 'vgw') vgw.push(`${rt.id} -> ${t.id}`);
     }
-    if (rt.gatewayIds.length) {
+    const unfollowed = rt.routes.filter((r) => r.target.type !== 'local' && !(r.target.type === 'vpce' && (model.vpcEndpoints.get(r.target.id)?.type === 'GatewayLoadBalancer' || [...model.firewalls.values()].some((f) => f.endpoints.some((e) => e.endpointId === r.target.id)))));
+    if (rt.gatewayIds.length && unfollowed.length) {
       add({
         code: 'gateway-route-table',
-        message: `${rt.id} is a gateway route table for ${rt.gatewayIds.join(', ')}. Traffic entering through that gateway may be steered through an appliance; exposure through it is reported as unknown.`,
+        message: `${rt.id} is a gateway route table for ${rt.gatewayIds.join(', ')} and sends traffic to ${unfollowed.map((r) => r.target.id).join(', ')}, which Pinhole does not follow; exposure through it is reported as unknown.`,
         resourceIds: [rt.id, ...rt.gatewayIds],
         docUrl: DOCS.gatewayRouteTables,
       });
@@ -42,19 +45,18 @@ export function detectOutOfScope(model: NetworkModel): Warning[] {
     add({ code: 'middlebox-route', message: `Routes send traffic to a network interface or instance (appliance or NAT instance); paths through them are not followed: ${middlebox.join('; ')}.`, resourceIds: middlebox, docUrl: DOCS.gwlbRouting });
   }
   if (unknownVpce.length) {
-    add({ code: 'network-firewall-or-unknown-endpoint', message: `Routes target VPC endpoints that are not in the snapshot; these are usually AWS Network Firewall endpoints. Inspection is not modelled: ${unknownVpce.join('; ')}.`, resourceIds: unknownVpce, docUrl: DOCS.networkFirewall });
+    add({ code: 'network-firewall-or-unknown-endpoint', message: `Routes target VPC endpoints that are not in the snapshot; these are usually AWS Network Firewall endpoints, collected with the network-firewall permissions. Paths through them are not followed: ${unknownVpce.join('; ')}.`, resourceIds: unknownVpce, docUrl: DOCS.networkFirewall });
   }
   if (gwlbVpce.length) {
-    add({ code: 'gateway-load-balancer', message: `Routes target Gateway Load Balancer endpoints; inspection is not modelled: ${gwlbVpce.join('; ')}.`, resourceIds: gwlbVpce, docUrl: DOCS.gwlbRouting });
+    add({ code: 'third-party-appliance', message: `Routes send traffic to third-party appliances through Gateway Load Balancer endpoints. Paths through them are followed, but their rules are not visible to AWS APIs, so they are assumed to pass and marked on every path: ${gwlbVpce.join('; ')}.`, resourceIds: gwlbVpce, docUrl: DOCS.gwlbRouting });
   }
   if (vgw.length) {
     add({ code: 'vpn-or-direct-connect', message: `Routes target virtual private gateways (VPN / Direct Connect); on-premises paths are not modelled: ${vgw.join('; ')}.`, resourceIds: vgw, docUrl: DOCS.vpn });
   }
 
-  const gwlbEnis = [...model.enis.values()].filter((e) => e.interfaceType === 'gateway_load_balancer' || e.interfaceType === 'gateway_load_balancer_endpoint');
   const gwlbs = [...model.loadBalancers.values()].filter((l) => l.type === 'gateway');
-  if (gwlbEnis.length || gwlbs.length) {
-    add({ code: 'gateway-load-balancer', message: 'Gateway Load Balancers or their endpoints are present; traffic inspection through them is not modelled.', resourceIds: [...gwlbs.map((l) => l.arn), ...gwlbEnis.map((e) => e.id)], docUrl: DOCS.gwlbRouting });
+  if (gwlbs.length) {
+    add({ code: 'gateway-load-balancer', message: 'Gateway Load Balancers are present; the appliances behind them are not analysed.', resourceIds: gwlbs.map((l) => l.arn), docUrl: DOCS.gwlbRouting });
   }
   const ga = [...model.enis.values()].filter((e) => e.interfaceType === 'global_accelerator_managed');
   if (ga.length) {

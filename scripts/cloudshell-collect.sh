@@ -134,6 +134,34 @@ for tg in $(jq -r '.TargetGroups[]?.TargetGroupArn' "${WORK}/tgs.json"); do
   fi
 done
 
+# AWS Network Firewall: each firewall, its policy, and the policy's own rule
+# groups (AWS managed groups do not publish their rules).
+echo '[]' > "${WORK}/nfw.json"
+echo '{}' > "${WORK}/nfwpol.json"
+echo '{}' > "${WORK}/nfwrg.json"
+call "${WORK}/nfwlist.json" network-firewall list-firewalls
+for fw in $(jq -r '.Firewalls[]?.FirewallArn' "${WORK}/nfwlist.json"); do
+  f="${WORK}/fw-$(echo "${fw}" | md5sum | cut -c1-12).json"
+  call "${f}" network-firewall describe-firewall --firewall-arn "${fw}"
+  if jq -e 'has("Firewall")' "${f}" >/dev/null; then
+    jq -s '.[0] + [.[1] | {Firewall, FirewallStatus}]' "${WORK}/nfw.json" "${f}" > "${WORK}/tmp.json" && mv "${WORK}/tmp.json" "${WORK}/nfw.json"
+  fi
+done
+for pol in $(jq -r '[.[].Firewall.FirewallPolicyArn] | unique | .[]' "${WORK}/nfw.json"); do
+  f="${WORK}/pol-$(echo "${pol}" | md5sum | cut -c1-12).json"
+  call "${f}" network-firewall describe-firewall-policy --firewall-policy-arn "${pol}"
+  if jq -e 'has("FirewallPolicy")' "${f}" >/dev/null; then
+    jq --arg id "${pol}" --slurpfile r "${f}" '. + {($id): ($r[0] | {FirewallPolicyResponse, FirewallPolicy})}' "${WORK}/nfwpol.json" > "${WORK}/tmp.json" && mv "${WORK}/tmp.json" "${WORK}/nfwpol.json"
+  fi
+done
+for rg in $(jq -r '[.[].FirewallPolicy | (.StatelessRuleGroupReferences // [])[], (.StatefulRuleGroupReferences // [])[] | .ResourceArn | select(contains(":aws-managed:") | not)] | unique | .[]' "${WORK}/nfwpol.json"); do
+  f="${WORK}/rg-$(echo "${rg}" | md5sum | cut -c1-12).json"
+  call "${f}" network-firewall describe-rule-group --rule-group-arn "${rg}"
+  if jq -e 'has("RuleGroup")' "${f}" >/dev/null; then
+    jq --arg id "${rg}" --slurpfile r "${f}" '. + {($id): ($r[0] | {RuleGroupResponse, RuleGroup})}' "${WORK}/nfwrg.json" > "${WORK}/tmp.json" && mv "${WORK}/tmp.json" "${WORK}/nfwrg.json"
+  fi
+done
+
 OUT="${2:-pinhole-snapshot-${ACCOUNT}-${REGION}.json}"
 
 # Assemble. Keys mirror the API response fields; see packages/engine/src/snapshot.ts.
@@ -152,6 +180,7 @@ jq -n \
   --slurpfile lbs "${WORK}/lbs.json" --slurpfile listeners "${WORK}/listeners.json" \
   --slurpfile rules "${WORK}/rules.json" --slurpfile tgs "${WORK}/tgs.json" \
   --slurpfile health "${WORK}/health.json" --slurpfile tgattrs "${WORK}/tgattrs.json" \
+  --slurpfile nfw "${WORK}/nfw.json" --slurpfile nfwpol "${WORK}/nfwpol.json" --slurpfile nfwrg "${WORK}/nfwrg.json" \
   --slurpfile errors <(jq -s '.' "${ERRORS}") \
   '{
     schemaVersion: 1,
@@ -190,7 +219,8 @@ jq -n \
       TargetHealth: $health[0],
       TargetGroupAttributes: $tgattrs[0]
     }
-  } + (if ($errors[0] | length) > 0 then {errors: $errors[0]} else {} end)' > "${OUT}"
+  } + (if ($nfw[0] | length) > 0 then {networkFirewall: {Firewalls: $nfw[0], FirewallPolicies: $nfwpol[0], RuleGroups: $nfwrg[0]}} else {} end)
+    + (if ($errors[0] | length) > 0 then {errors: $errors[0]} else {} end)' > "${OUT}"
 
 n_err="$(wc -l < "${ERRORS}" | tr -d ' ')"
 FULL="$(cd "$(dirname "${OUT}")" && pwd)/$(basename "${OUT}")"

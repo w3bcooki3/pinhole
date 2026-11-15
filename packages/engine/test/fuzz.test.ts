@@ -8,7 +8,11 @@ import { analyzeCleanup, analyzeExposure, applyChanges, evaluatePath, INTERNET, 
 
 /** The exact addresses of a finding (`sources` are the rules' labels; `sourceRanges` are what gets through). */
 const exact = (ranges: string[]) => (ranges[0]?.startsWith('0.0.0.0/0 ') ? INTERNET : RangeSet.fromCidrs(ranges));
-import { inCidr, ip, referenceReach } from './reference.js';
+import { inCidr, ip, referenceFirewall, referenceReach } from './reference.js';
+import type { RefPolicy } from './reference.js';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 function rng(seed: number) {
   let a = seed >>> 0;
@@ -183,4 +187,101 @@ describe('differential: rule compaction keeps every packet the same', () => {
     }
     expect(compacted).toBeGreaterThan(RUNS / 10);
   }, 10_000 + RUNS * 10);
+});
+
+describe('differential: Network Firewall against a reference', () => {
+  const RUNS = Number(process.env.PINHOLE_FUZZ_RUNS ?? 400);
+  const root = join(dirname(fileURLToPath(import.meta.url)), '../../../fixtures');
+  const base = JSON.parse(readFileSync(join(root, '12-network-firewall', 'snapshot.json'), 'utf8'));
+  const POLICY = 'arn:aws:network-firewall:us-east-1:111122223333:firewall-policy/edge-policy';
+  const SL = 'arn:aws:network-firewall:us-east-1:111122223333:stateless-rulegroup/no-telnet';
+  const SF = 'arn:aws:network-firewall:us-east-1:111122223333:stateful-rulegroup/web-in';
+  it(`agrees on ${RUNS} random firewall policies, per client port`, () => {
+    let agreed = 0;
+    let passed = 0;
+    for (let seed = 1; seed <= RUNS; seed++) {
+      const r = rng(seed * 104729);
+      const pick = <T>(xs: T[]) => xs[Math.floor(r() * xs.length)]!;
+      const PORTS = [22, 443, 8080];
+      const range = (): [number, number] => {
+        const a = pick([0, 22, 443, 1024, 32768, 40000, 50000, 61001]);
+        const b = pick([22, 443, 8080, 40000, 49151, 61000, 65535]);
+        return [Math.min(a, b), Math.max(a, b)];
+      };
+      const cidrs = ['203.0.113.0/24', '198.51.100.0/24', '0.0.0.0/0', '8.8.8.0/24', '10.0.0.0/16', '10.0.1.10/32'];
+      const policy: RefPolicy = {
+        stateless: Array.from({ length: Math.floor(r() * 4) }, (_, i) => ({
+          priority: i + 1,
+          action: pick(['pass', 'drop', 'forward', 'forward'] as const),
+          protocols: pick([[], [6], [17], [6, 17]]),
+          sources: r() < 0.3 ? [pick(cidrs)] : [],
+          srcPorts: r() < 0.3 ? [range()] : [],
+          dstPorts: r() < 0.5 ? [range()] : [],
+        })),
+        statelessDefault: pick(['forward', 'forward', 'pass', 'drop'] as const),
+        stateful: Array.from({ length: Math.floor(r() * 5) }, () => ({
+          action: pick(['pass', 'pass', 'drop', 'reject', 'alert'] as const),
+          proto: pick(['tcp', 'udp', 'ip'] as const),
+          src: pick(['any', '$EXTERNAL_NET', '$HOME_NET', ...cidrs]),
+          dst: pick(['any', '$HOME_NET', '10.0.1.10/32', '198.51.100.0/24']),
+          dstPort: pick(['any', '22', '443', '8080', '400:9000', '1024:65535']),
+          both: r() < 0.25,
+        })),
+        strict: r() < 0.5,
+        defaults: [],
+        home: '10.0.0.0/16',
+      };
+      if (policy.strict) policy.defaults = pick([[], ['aws:drop_strict'], ['aws:drop_established'], ['aws:alert_strict']]);
+      const s = JSON.parse(JSON.stringify(base));
+      s.ec2.SecurityGroupRules = [
+        ...['tcp', 'udp'].map((p, i) => ({ SecurityGroupRuleId: `sgr-all-${i}`, GroupId: 'sg-web', IsEgress: false, IpProtocol: p, FromPort: 0, ToPort: 65535, CidrIpv4: '0.0.0.0/0' })),
+        { SecurityGroupRuleId: 'sgr-out', GroupId: 'sg-web', IsEgress: true, IpProtocol: '-1', FromPort: -1, ToPort: -1, CidrIpv4: '0.0.0.0/0' },
+      ];
+      const pol = s.networkFirewall.FirewallPolicies[POLICY].FirewallPolicy;
+      pol.StatelessDefaultActions = [{ pass: 'aws:pass', drop: 'aws:drop', forward: 'aws:forward_to_sfe' }[policy.statelessDefault]];
+      pol.StatefulRuleGroupReferences = policy.strict ? [{ ResourceArn: SF, Priority: 1 }] : [{ ResourceArn: SF }];
+      if (policy.strict) {
+        pol.StatefulEngineOptions = { RuleOrder: 'STRICT_ORDER' };
+        pol.StatefulDefaultActions = policy.defaults;
+      } else {
+        delete pol.StatefulEngineOptions;
+        delete pol.StatefulDefaultActions;
+      }
+      s.networkFirewall.RuleGroups[SL].RuleGroup.RulesSource.StatelessRulesAndCustomActions.StatelessRules = policy.stateless.map((x) => ({
+        Priority: x.priority,
+        RuleDefinition: {
+          Actions: [{ pass: 'aws:pass', drop: 'aws:drop', forward: 'aws:forward_to_sfe' }[x.action]],
+          MatchAttributes: {
+            ...(x.protocols.length ? { Protocols: x.protocols } : {}),
+            ...(x.sources.length ? { Sources: x.sources.map((c) => ({ AddressDefinition: c })) } : {}),
+            ...(x.srcPorts.length ? { SourcePorts: x.srcPorts.map(([a, b]) => ({ FromPort: a, ToPort: b })) } : {}),
+            ...(x.dstPorts.length ? { DestinationPorts: x.dstPorts.map(([a, b]) => ({ FromPort: a, ToPort: b })) } : {}),
+          },
+        },
+      }));
+      const rg = s.networkFirewall.RuleGroups[SF].RuleGroup;
+      delete rg.RuleVariables;
+      rg.RulesSource = { RulesString: policy.stateful.map((x, i) => `${x.action} ${x.proto} ${x.src} any ${x.both ? '<>' : '->'} ${x.dst} ${x.dstPort} (sid:${i + 1};)`).join('\n') || '# none' };
+      const model = normalize(s);
+      for (const client of ['203.0.113.9', '8.8.8.8', '198.51.100.77']) {
+        for (const protocol of ['tcp', 'udp'] as const) {
+          for (const port of PORTS) {
+            const got = evaluatePath(model, { from: { internet: client }, to: { eni: 'eni-web' }, protocol, port });
+            const allowed = (got.returnProfiles ?? []).flatMap((x) => x.allowed);
+            for (const eph of [33000, 50000, 61000, 61001, 63000]) {
+              const want = referenceFirewall(policy, ip(client), ip('10.0.1.10'), protocol === 'tcp' ? 6 : 17, port, eph);
+              const engine = got.verdict === 'reachable' && allowed.some((a) => eph >= a.from && eph <= a.to);
+              if (want !== engine) {
+                throw new Error(`seed ${seed}: ${client} -> ${protocol}/${port} from client port ${eph}: reference ${want}, engine ${engine} (${got.verdict}: ${got.summary})\n${JSON.stringify(policy)}`);
+              }
+              agreed += 1;
+              if (want) passed += 1;
+            }
+          }
+        }
+      }
+    }
+    expect(passed).toBeGreaterThan(agreed * 0.1);
+    expect(passed).toBeLessThan(agreed * 0.9);
+  }, 10_000 + RUNS * 20);
 });

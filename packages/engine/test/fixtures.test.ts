@@ -32,7 +32,7 @@ interface Expected {
   docs: string[];
   paths?: PathCase[];
   exposure?: {
-    exposed?: { resource: string; protocol: string; port: number; returnPath?: string; family?: string; sources?: string[]; from?: string[]; notFrom?: string[] }[];
+    exposed?: { resource: string; protocol: string; port: number; returnPath?: string; family?: string; sources?: string[]; from?: string[]; notFrom?: string[]; inspectedBy?: string[]; caveat?: boolean }[];
     notExposed?: { resource: string; protocol: string; port: number }[];
     exactResources?: string[];
     lbTargets?: { lb: string; listenerPort: number; target: string; port: number; verdict: string }[];
@@ -107,6 +107,8 @@ describe('fixtures', () => {
             if (e.returnPath) expect(f?.returnPath, summary).toBe(e.returnPath);
             if (e.family) expect(f?.family, summary).toBe(e.family);
             if (e.sources) expect(f?.sourceRanges, summary).toEqual(e.sources);
+            if (e.inspectedBy) expect(f?.inspectedBy, summary).toEqual(e.inspectedBy);
+            if (e.caveat !== undefined) expect(!!f?.caveats?.length, `caveats: ${JSON.stringify(f?.caveats)}${summary}`).toBe(e.caveat);
             const set = f?.family === 'ipv6' ? (f.sourceRanges[0]?.startsWith('::/0 (') ? INTERNET6 : RangeSet6.fromCidrs(f.sourceRanges)) : undefined;
             for (const c of e.from ?? []) expect(set && RangeSet6.fromCidrs([c]).subtract(set).isEmpty(), `${c} should be a source${summary}`).toBe(true);
             for (const c of e.notFrom ?? []) expect(set && RangeSet6.fromCidrs([c]).intersect(set).isEmpty(), `${c} should not be a source${summary}`).toBe(true);

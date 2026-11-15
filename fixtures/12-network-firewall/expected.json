@@ -1,0 +1,58 @@
+{
+  "description": "An AWS Network Firewall in front of a public subnet. The internet gateway's route table sends traffic for the subnet to the firewall endpoint, and the subnet sends replies back through it. The security groups allow everything they list from anywhere; the firewall narrows it: HTTPS from anyone, SSH from the office only, HTTP on 8080 only if it is HTTP, telnet dropped by a stateless rule, and everything else dropped by the strict default action.",
+  "docs": [
+    "https://docs.aws.amazon.com/network-firewall/latest/developerguide/arch-igw-ngw.html",
+    "https://docs.aws.amazon.com/network-firewall/latest/developerguide/firewall-rules-engines.html",
+    "https://docs.aws.amazon.com/network-firewall/latest/developerguide/suricata-rule-evaluation-order.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/gateway-route-tables.html"
+  ],
+  "paths": [
+    { "name": "HTTPS from anywhere passes the firewall", "from": { "internet": "8.8.8.8" }, "to": { "eni": "eni-web" }, "protocol": "tcp", "port": 443, "expect": { "verdict": "reachable", "returnPath": "all", "via": ["rtb-edge", "vpce-fw1", "edge", "rtb-fw"] } },
+    { "name": "SSH from the office passes", "from": { "internet": "203.0.113.7" }, "to": { "eni": "eni-web" }, "protocol": "tcp", "port": 22, "expect": { "verdict": "reachable", "via": ["edge"] } },
+    { "name": "SSH from elsewhere is dropped by the firewall, not the security group", "from": { "internet": "8.8.8.8" }, "to": { "eni": "eni-web" }, "protocol": "tcp", "port": 22, "expect": { "verdict": "blocked", "blockedAt": "firewall" } },
+    { "name": "Telnet is dropped by a stateless rule", "from": { "internet": "8.8.8.8" }, "to": { "eni": "eni-web" }, "protocol": "tcp", "port": 23, "expect": { "verdict": "blocked", "blockedAt": "firewall" } },
+    { "name": "RDP is dropped by the strict default action", "from": { "internet": "8.8.8.8" }, "to": { "eni": "eni-web" }, "protocol": "tcp", "port": 3389, "expect": { "verdict": "blocked", "blockedAt": "firewall" } },
+    { "name": "The database is open in its security group but not through the firewall", "from": { "internet": "8.8.8.8" }, "to": { "eni": "eni-db" }, "protocol": "tcp", "port": 5432, "expect": { "verdict": "blocked", "blockedAt": "firewall" } }
+  ],
+  "exposure": {
+    "exposed": [
+      { "resource": "eni-web", "protocol": "tcp", "port": 443, "returnPath": "all", "sources": ["0.0.0.0/0 (every internet address)"], "inspectedBy": ["edge"], "caveat": false },
+      { "resource": "eni-web", "protocol": "tcp", "port": 22, "sources": ["203.0.113.0/24"], "inspectedBy": ["edge"], "caveat": false },
+      { "resource": "eni-web", "protocol": "tcp", "port": 8080, "inspectedBy": ["edge"], "caveat": true }
+    ],
+    "notExposed": [
+      { "resource": "eni-web", "protocol": "tcp", "port": 23 },
+      { "resource": "eni-web", "protocol": "tcp", "port": 3389 },
+      { "resource": "eni-db", "protocol": "tcp", "port": 5432 }
+    ],
+    "exactResources": ["eni-web"]
+  },
+  "whatIf": [
+    {
+      "name": "Replies that skip the firewall break every connection through it (asymmetric routing)",
+      "changes": [
+        { "kind": "remove-route", "routeTableId": "rtb-app", "destination": "0.0.0.0/0" },
+        { "kind": "add-route", "routeTableId": "rtb-app", "destination": "0.0.0.0/0", "targetId": "igw-1" }
+      ],
+      "deltas": [
+        { "resource": "eni-web", "protocol": "tcp", "port": 22, "status": "closed" },
+        { "resource": "eni-web", "protocol": "tcp", "port": 443, "status": "closed" },
+        { "resource": "eni-web", "protocol": "tcp", "port": 8080, "status": "closed" }
+      ]
+    },
+    {
+      "name": "Sending the internet gateway's traffic straight to the subnet bypasses the firewall",
+      "changes": [
+        { "kind": "remove-route", "routeTableId": "rtb-edge", "destination": "10.0.1.0/24" },
+        { "kind": "remove-route", "routeTableId": "rtb-app", "destination": "0.0.0.0/0" },
+        { "kind": "add-route", "routeTableId": "rtb-app", "destination": "0.0.0.0/0", "targetId": "igw-1" }
+      ],
+      "deltas": [
+        { "resource": "eni-web", "protocol": "tcp", "port": 22, "status": "widened" },
+        { "resource": "eni-web", "protocol": "tcp", "port": 23, "status": "opened" },
+        { "resource": "eni-web", "protocol": "tcp", "port": 3389, "status": "opened" },
+        { "resource": "eni-db", "protocol": "tcp", "port": 5432, "status": "opened" }
+      ]
+    }
+  ]
+}

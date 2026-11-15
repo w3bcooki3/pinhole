@@ -82,7 +82,7 @@
   <dl class="terms">
     <dt><span class="pill ok">Reachable</span></dt><dd>Every step allows the request and the response.</dd>
     <dt><span class="pill bad">Blocked</span></dt><dd>A named step stops it, with the rule or the missing route.</dd>
-    <dt><span class="pill unk">Unknown</span></dt><dd>The snapshot lacks what the answer depends on, for example a route table in another account or a firewall appliance in the path. Pinhole never guesses.</dd>
+    <dt><span class="pill unk">Unknown</span></dt><dd>The snapshot lacks what the answer depends on, for example a route table in another account or a route to an instance acting as an appliance. Pinhole never guesses.</dd>
   </dl>
 </section>
 
@@ -316,6 +316,23 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
   <p>The plan lists, for every step, what it closes, what chains it cuts, what else it affects, and the AWS CLI command. Anything no single change closes is listed for a person to decide.</p>
 </section>
 
+<section id="firewalls" data-group="Concepts" data-title="Firewalls and appliances">
+  <h2>Firewalls and appliances</h2>
+  <p class="lede">Traffic that a route sends to an inspection endpoint is followed through it. AWS Network Firewall is evaluated rule by rule; third-party appliances are shown on the path and never quietly dropped from the report.</p>
+  <!--run can fixtures/12-network-firewall/snapshot.json --from internet --to web --port 22-->
+  <h3 id="nfw">AWS Network Firewall</h3>
+  <p>Pinhole reads each firewall, its policy and its rule groups, and follows the routes that send traffic to the firewall's endpoints: the internet gateway's own route table (ingress routing), the subnet routes that send replies back through the firewall, routes between subnets in a VPC, and a transit gateway sending traffic through an inspection VPC. On each path it evaluates the connection the way the firewall does:</p>
+  <ul>
+    <li><b>Stateless rules</b> per packet, in priority order, for the request and the reply: pass, drop or forward to the stateful engine; then the policy's default action.</li>
+    <li><b>Stateful rules</b> per flow: 5-tuple rules, Suricata rules and domain lists, in default action order (pass, then drop, then reject, then alert) or strict order, with the strict default actions. <code>HOME_NET</code> and other variables are resolved from the rule group and the policy.</li>
+    <li><b>Per client port.</b> Rules can treat client source ports differently, so the connection is decided for every client port range, the same way network ACL return traffic is.</li>
+    <li><b>Asymmetric routing.</b> If only one direction of a connection passes a firewall, its stateful engine drops it, and the path says so.</li>
+  </ul>
+  <p>A rule that also matches on content, a host name or an application protocol (for example <code>pass http ... 8080</code>) cannot be decided from configuration. Pinhole follows both outcomes; when they differ, the exposure is still reported, marked with a caveat that names the firewall and the reason. AWS managed rule groups are assumed to drop only known-malicious traffic.</p>
+  <h3 id="third-party">Third-party appliances</h3>
+  <p>A Gateway Load Balancer endpoint for a third-party appliance is followed like a firewall endpoint, but the appliance's rules are not visible to AWS APIs. Paths through it are assumed to pass, and every exposure through it says so, so it can be checked on the appliance itself.</p>
+</section>
+
 <section id="privacy" data-group="Trust" data-title="Privacy and security">
   <h2>Privacy and security</h2>
   <ul class="ticks">
@@ -351,7 +368,7 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
   </table>
   </div>
   <h3 id="differential">Checked against a second implementation</h3>
-  <p>A separate reference evaluator, written from the AWS documentation one packet at a time and sharing no code with the engine, answers the same questions on random networks: random routes (including blackholes and NAT), network ACLs, security groups, public addresses and gateways. Every test run checks the engine against it on 400 networks and over 120,000 questions, both through the packet evaluator and the exposure report, and any disagreement fails the build with the network that caused it. Rule compaction is checked the same way. The test takes a larger count with <code>PINHOLE_FUZZ_RUNS</code>; it has been run on 6,000 networks (1.8 million questions) without a difference.</p>
+  <p>A separate reference evaluator, written from the AWS documentation one packet at a time and sharing no code with the engine, answers the same questions on random networks: random routes (including blackholes and NAT), network ACLs, security groups, public addresses and gateways. Every test run checks the engine against it on 400 networks and over 120,000 questions, both through the packet evaluator and the exposure report, and any disagreement fails the build with the network that caused it. Rule compaction is checked the same way, and so is Network Firewall: random stateless and stateful policies, in both rule orders and with every default action, are decided per client port by the engine and by a separate reference, and have agreed on 4,000 policies (360,000 connections). The test takes a larger count with <code>PINHOLE_FUZZ_RUNS</code>; it has been run on 6,000 networks (1.8 million questions) without a difference.</p>
   <p>Continuous integration runs every test on Node 22 and 24, and runs both collectors against a fake AWS built from the scenarios. The full model, with every simplification, is in <a href="https://github.com/w3bcooki3/pinhole/blob/main/docs/model.md">docs/model.md</a>. If you find a wrong result, <a href="https://github.com/w3bcooki3/pinhole/issues/new/choose">report it</a>; it becomes a new scenario.</p>
 </section>
 
@@ -360,7 +377,8 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
   <p class="lede">Read these before relying on a clean report. Anything detected but not analysed is listed on the Coverage page.</p>
   <ul class="plain">
     <li><b>Scope.</b> VPC network paths to interfaces and Application and Network Load Balancers. Not S3, API Gateway, Lambda function URLs, CloudFront, or other services that are public outside a VPC. Use a configuration scanner such as Prowler or AWS Security Hub for those.</li>
-    <li><b>Detected, not modelled.</b> AWS Network Firewall, Gateway Load Balancer, routes to appliances, gateway route tables, Global Accelerator, Classic Load Balancers, VPN and Direct Connect. Paths through them are reported as unknown.</li>
+    <li><b>Followed, with a caveat.</b> Third-party appliances behind Gateway Load Balancer endpoints (their rules are not visible), and Network Firewall rules that match on content or host names.</li>
+    <li><b>Detected, not modelled.</b> Routes to instances or interfaces acting as appliances, Global Accelerator, Classic Load Balancers, VPN and Direct Connect. Paths through them are reported as unknown.</li>
     <li><b>IPv6</b> is analysed for TCP and UDP to interfaces and dual-stack load balancers. Not yet for ICMPv6 or IPv6 lateral movement.</li>
     <li><b>Wanted traffic is inferred.</b> Fixes count a lost connection as a break only with evidence it is wanted: a load balancer and its targets, a health check, or a rule that names the source's group. Traffic allowed only by an address range may or may not be used; flow logs are not read. A policy's require rules make any connection count.</li>
     <li><b>Configuration, not traffic.</b> Host firewalls, the operating system and whether anything listens on the port are outside the model. Existing connections can outlive a rule change.</li>
@@ -381,7 +399,7 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
       <tr><th>Where it runs</th><td>Your browser or machine, offline</td><td>In your AWS account</td><td>In your AWS account</td></tr>
       <tr><th>Attack chains and fix plans</th><td>Yes, each fix verified</td><td>No</td><td>No</td></tr>
       <tr><th>Before you apply</th><td>Terraform plans and simulated changes</td><td>Deployed resources</td><td>Deployed resources</td></tr>
-      <tr><th>Network Firewall and appliances</th><td>Detected, reported as unknown</td><td>Analysed</td><td>Analysed</td></tr>
+      <tr><th>Network Firewall and appliances</th><td>Network Firewall evaluated; third-party appliances followed and marked</td><td>Analysed</td><td>Analysed</td></tr>
     </tbody>
   </table>
   </div>

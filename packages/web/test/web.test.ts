@@ -37,10 +37,22 @@ describe('web console', () => {
     api.go('dashboard');
     expect(text(doc, '#plan')).toMatch(/sgr-0a-ssh-world/);
   });
+  it('shows the firewall on the path, and what it could not decide', () => {
+    const { doc, api } = page();
+    api.go('issues');
+    const rows = [...doc.querySelectorAll('table.t tbody tr')] as HTMLElement[];
+    const row = rows.find((r) => /777788889999/.test(r.textContent ?? '') && /8080/.test(r.textContent ?? ''))!;
+    row.click();
+    expect(text(doc, '.caveat-box')).toMatch(/decides this by the traffic itself/);
+    expect(text(doc, '.kv')).toMatch(/Inspected by\s*edge/);
+    expect(text(doc, '.ap')).toMatch(/Network Firewall/);
+  });
+
   it('compares two snapshots of one account and region, and uses only the latest elsewhere', () => {
     const { doc, api } = page();
     // The demo has an older copy of prod us-east-1: it is kept for Compare and left out of the dashboard.
-    expect(text(doc, '#total')).toBe('21');
+    // 21 exposures across the estates, plus 3 behind the Network Firewall in 'inspected us-east-1'.
+    expect(text(doc, '#total')).toBe('24');
     expect(text(doc, '.chip-older')).toBe('+1 older');
     api.go('compare');
     expect(text(doc, '#cmp-verdict')).toMatch(/^2 new or wider internet exposures, no new attack chains, 1 closed or narrower, 3 configuration changes\./);
@@ -407,7 +419,7 @@ describe('web console', () => {
 describe('documentation', () => {
   it('builds, with every example produced by the real CLI', () => {
     const out = execFileSync(process.execPath, [join(root, 'scripts/build-docs.mjs')], { cwd: root, encoding: 'utf8' });
-    expect(out).toMatch(/17 sections, 10 live examples/);
+    expect(out).toMatch(/18 sections, 11 live examples/);
     const html = readFileSync(join(root, 'site/docs/index.html'), 'utf8');
     expect(html).not.toMatch(/<!--(run|trace|policy)/);
     expect(html).toContain('pinhole blast account-a/snapshot.json account-b/snapshot.json');

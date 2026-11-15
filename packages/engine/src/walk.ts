@@ -52,6 +52,10 @@ export type Stage =
   | 'dest-sg-ingress'
   | 'return-route'
   | 'return-nacl'
+  | 'ingress-route'
+  | 'appliance-nacl'
+  | 'firewall'
+  | 'appliance'
   | 'scope';
 
 export interface Hop {
@@ -65,6 +69,8 @@ export interface Hop {
   /** Other resources this step involves, e.g. the target of a route. */
   relatedIds?: string[];
   docUrl?: string;
+  /** Set when the step lets traffic through without deciding it exactly: why (a third-party appliance, a rule that depends on content). */
+  caveat?: string;
 }
 
 export interface NaclCheckpoint {
@@ -75,7 +81,23 @@ export interface NaclCheckpoint {
   stage: Stage;
 }
 
-export type WalkStep = { kind: 'hop'; hop: Hop } | { kind: 'nacl'; check: NaclCheckpoint };
+/**
+ * A Gateway Load Balancer endpoint in the path: an AWS Network Firewall
+ * endpoint (evaluated) or a third-party appliance (not visible).
+ */
+export interface ApplianceCheckpoint {
+  endpointId: string;
+  /** The firewall, when the endpoint is a Network Firewall endpoint. */
+  firewallArn?: string;
+  /** Service name of a third-party appliance's endpoint service. */
+  serviceName?: string;
+  subnetId: string;
+  /** This direction's source and destination. */
+  srcIp: number;
+  dstIp: number;
+}
+
+export type WalkStep = { kind: 'hop'; hop: Hop } | { kind: 'nacl'; check: NaclCheckpoint } | { kind: 'appliance'; check: ApplianceCheckpoint };
 
 export type WalkEnd =
   | { kind: 'delivered'; vpcId: string; subnet: Subnet; relation: PeerRelation }
@@ -114,9 +136,51 @@ function deliverInVpc(model: NetworkModel, vpcId: string, dstIp: number): Subnet
   return subnetContaining(model, vpcId, dstIp);
 }
 
-export function walkRoute(model: NetworkModel, from: Subnet, srcIp: number, dstIp: number): Walk {
+/**
+ * An endpoint a route can send traffic to that hands it to an appliance and
+ * back: a Network Firewall endpoint, or any Gateway Load Balancer endpoint
+ * (https://docs.aws.amazon.com/vpc/latest/userguide/gwlb-route.html).
+ */
+export function applianceOf(model: NetworkModel, endpointId: string): { firewallArn?: string; serviceName?: string; subnetId?: string } | undefined {
+  for (const fw of model.firewalls.values()) {
+    const ep = fw.endpoints.find((e) => e.endpointId === endpointId);
+    if (ep) return { firewallArn: fw.arn, subnetId: ep.subnetId };
+  }
+  const vpce = model.vpcEndpoints.get(endpointId);
+  if (vpce?.type === 'GatewayLoadBalancer') return { serviceName: vpce.serviceName, ...(vpce.subnetIds?.[0] ? { subnetId: vpce.subnetIds[0] } : {}) };
+  return undefined;
+}
+
+/** Most appliances a packet passes in one direction before the walk gives up (routing loops). */
+const MAX_APPLIANCES = 4;
+
+/**
+ * Hands the packet to the appliance behind `endpointId`, then routes it on
+ * from the endpoint's subnet. `steps` already holds what led here.
+ */
+function throughAppliance(model: NetworkModel, steps: WalkStep[], from: Subnet, endpointId: string, srcIp: number, dstIp: number, depth: number): Walk {
+  const app = applianceOf(model, endpointId)!;
+  const end = (e: WalkEnd): Walk => ({ steps, end: e });
+  if (depth >= MAX_APPLIANCES) return end({ kind: 'unknown', stage: 'appliance', resourceId: endpointId, detail: `The packet passes more than ${MAX_APPLIANCES} appliances; the routes may loop.`, docUrl: DOCS.gwlbRouting });
+  const epSubnet = app.subnetId ? model.subnets.get(app.subnetId) : undefined;
+  if (!epSubnet) return end({ kind: 'unknown', stage: 'appliance', resourceId: endpointId, detail: `The subnet of endpoint ${endpointId} is not in the snapshot.`, docUrl: DOCS.gwlbRouting });
+  if (epSubnet.id === from.id) {
+    // Same subnet: no boundary crossed on the way to the endpoint.
+    const i = steps.findIndex((s) => s.kind === 'nacl' && s.check.subnetId === from.id && s.check.egress && s.check.peerIp === dstIp);
+    if (i >= 0) steps.splice(i, 1);
+  } else {
+    steps.push(nacl({ subnetId: epSubnet.id, egress: false, peerIp: srcIp, stage: 'appliance-nacl' }));
+  }
+  steps.push({ kind: 'appliance', check: { endpointId, ...(app.firewallArn ? { firewallArn: app.firewallArn } : {}), ...(app.serviceName ? { serviceName: app.serviceName } : {}), subnetId: epSubnet.id, srcIp, dstIp } });
+  // The appliance returns the packet to the endpoint, which routes it on by its subnet's route table.
+  const next = walkRoute(model, epSubnet, srcIp, dstIp, depth + 1);
+  steps.push(...next.steps);
+  return { steps, end: next.end };
+}
+
+export function walkRoute(model: NetworkModel, from: Subnet, srcIp: number, dstIp: number, depth = 0): Walk {
   const steps: WalkStep[] = [];
-  const srcEgress: NaclCheckpoint = { subnetId: from.id, egress: true, peerIp: dstIp, stage: 'source-nacl-egress' };
+  const srcEgress: NaclCheckpoint = { subnetId: from.id, egress: true, peerIp: dstIp, stage: depth ? 'appliance-nacl' : 'source-nacl-egress' };
   steps.push(nacl(srcEgress));
   const dstText = formatIpv4(dstIp);
 
@@ -236,7 +300,17 @@ export function walkRoute(model: NetworkModel, from: Subnet, srcIp: number, dstI
         return end({ kind: 'unknown', stage: 'tgw-route', resourceId: dstVpcId, detail: `${dstVpcId} is in another account and not in this snapshot.` });
       }
       if (!vpcContains(model, dstVpcId, dstIp)) {
-        return end({ kind: 'unknown', stage: 'scope', resourceId: dstVpcId, detail: `${dstText} is not inside ${dstVpcId}; onward routing from the attachment subnet is not modelled in v1.` });
+        // Centralised inspection: the attachment subnet sends the packet to an
+        // appliance, which hands it back towards the transit gateway.
+        const att = dstAtt.subnetIds.map((id) => model.subnets.get(id)).find((sub): sub is Subnet => !!sub && sub.availabilityZone === from.availabilityZone) ?? dstAtt.subnetIds.map((id) => model.subnets.get(id)).find((sub): sub is Subnet => !!sub);
+        const attRt = att ? routeTableForSubnet(model, att) : undefined;
+        const via = attRt ? lookupRoute(attRt, dstIp, model.prefixLists) : undefined;
+        if (att && attRt && via && via.route.state === 'active' && via.route.target.type === 'vpce' && applianceOf(model, via.route.target.id)) {
+          steps.push(hop({ stage: 'dest-vpc-route', decision: 'pass', resourceId: attRt.id, relatedIds: [via.route.target.id], detail: `${routeDetail(attRt.id, via.route, via.matchedCidr.text)} from attachment subnet ${att.id}`, docUrl: DOCS.gwlbRouting }));
+          steps.push(nacl({ subnetId: att.id, egress: true, peerIp: dstIp, stage: 'tgw-nacl' }));
+          return throughAppliance(model, steps, att, via.route.target.id, srcIp, dstIp, depth);
+        }
+        return end({ kind: 'unknown', stage: 'scope', resourceId: dstVpcId, detail: `${dstText} is not inside ${dstVpcId}, and its attachment subnet does not send it to an inspection endpoint; onward routing is not modelled.` });
       }
       const dstSubnet = deliverInVpc(model, dstVpcId, dstIp);
       if (!dstSubnet) return end({ kind: 'blocked', stage: 'tgw-route', resourceId: dstVpcId, detail: `${dstText} is in no subnet of ${dstVpcId}.` });
@@ -252,6 +326,11 @@ export function walkRoute(model: NetworkModel, from: Subnet, srcIp: number, dstI
       const inner = dstRt ? lookupRoute(dstRt, dstIp, model.prefixLists) : undefined;
       if (!dstRt || !inner) {
         return end({ kind: 'blocked', stage: 'dest-vpc-route', resourceId: dstRt?.id ?? dstTgwSubnet.id, detail: `No route for ${dstText} from attachment subnet ${dstTgwSubnet.id}.` });
+      }
+      if (inner.route.target.type === 'vpce' && inner.route.state === 'active' && applianceOf(model, inner.route.target.id)) {
+        steps.push(hop({ stage: 'dest-vpc-route', decision: 'pass', resourceId: dstRt.id, relatedIds: [inner.route.target.id], detail: `${routeDetail(dstRt.id, inner.route, inner.matchedCidr.text)} from attachment subnet ${dstTgwSubnet.id}`, docUrl: DOCS.gwlbRouting }));
+        steps.push(nacl({ subnetId: dstTgwSubnet.id, egress: true, peerIp: dstIp, stage: 'tgw-nacl' }));
+        return throughAppliance(model, steps, dstTgwSubnet, inner.route.target.id, srcIp, dstIp, depth);
       }
       if (inner.route.target.type !== 'local' || inner.route.state !== 'active') {
         return end({
@@ -287,8 +366,12 @@ export function walkRoute(model: NetworkModel, from: Subnet, srcIp: number, dstI
       return end({ kind: 'egress', vpcId: from.vpcId, target: r.target });
     }
 
+    case 'vpce':
+      if (applianceOf(model, r.target.id)) return throughAppliance(model, steps, from, r.target.id, srcIp, dstIp, depth);
+      return end({ kind: 'egress', vpcId: from.vpcId, target: r.target });
+
     default:
-      // NAT gateway, VPN gateway, endpoint, interface/instance (middlebox), etc.
+      // NAT gateway, VPN gateway, interface or instance (middlebox), etc.
       return end({ kind: 'egress', vpcId: from.vpcId, target: r.target });
   }
 }

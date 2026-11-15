@@ -117,16 +117,28 @@ describe('exposure: exact splitting', () => {
     expect(f?.severity).toBe('info');
   });
 
-  it('marks paths through an IGW gateway route table as unknown and does not report them', () => {
+  it('follows an IGW gateway route table that keeps traffic local', () => {
     const s = base();
     s.ec2.SecurityGroupRules = [rule('sgr-ssh', 22, 22, '0.0.0.0/0')];
     s.ec2.RouteTables!.push({ RouteTableId: 'rtb-edge', VpcId: 'vpc-1', Associations: [{ GatewayId: 'igw-1' }], Routes: [] });
+    const report = analyzeExposure(normalize(s));
+    expect(report.findings.map((f) => f.ports)).toEqual([{ from: 22, to: 22 }]);
+    expect(report.warnings.map((w) => w.code)).not.toContain('gateway-route-table');
+    const r = evaluatePath(normalize(s), { from: { internet: '8.8.8.8' }, to: { eni: 'eni-1' }, protocol: 'tcp', port: 22 });
+    expect(r.verdict).toBe('reachable');
+    expect(r.hops.some((h) => h.stage === 'ingress-route')).toBe(true);
+  });
+
+  it('marks an IGW gateway route table that sends traffic to an instance as unknown', () => {
+    const s = base();
+    s.ec2.SecurityGroupRules = [rule('sgr-ssh', 22, 22, '0.0.0.0/0')];
+    s.ec2.RouteTables!.push({ RouteTableId: 'rtb-edge', VpcId: 'vpc-1', Associations: [{ GatewayId: 'igw-1' }], Routes: [{ DestinationCidrBlock: '10.0.0.0/16', NetworkInterfaceId: 'eni-appliance', State: 'active' }] });
     const report = analyzeExposure(normalize(s));
     expect(report.findings).toEqual([]);
     expect(report.warnings.map((w) => w.code)).toContain('gateway-route-table');
     const r = evaluatePath(normalize(s), { from: { internet: '8.8.8.8' }, to: { eni: 'eni-1' }, protocol: 'tcp', port: 22 });
     expect(r.verdict).toBe('unknown');
-    expect(r.blockedAt?.stage).toBe('scope');
+    expect(r.blockedAt?.stage).toBe('ingress-route');
   });
 });
 
