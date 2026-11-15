@@ -7,6 +7,16 @@ All notable changes to this project are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- The console works on every screen size, from small phones (320 px) to
+  very wide monitors: every page has been checked at 320, 375, 768, 1024,
+  1440 and 2560 px with no horizontal overflow. Phones and tablets get a
+  menu button instead of a scrolling row of links; tables on phones become
+  labelled cards; very wide screens keep pages at a readable width. The
+  sidebar lists every page, grouped (Policies, Outbound, On-premises and
+  PrivateLink were only reachable through search), and search finds pages
+  by other words ("vpn", "egress", "onprem"). The query page switches to the
+  snapshot that holds the names typed. The demo includes on-premises and
+  PrivateLink scenarios.
 - Outbound: what each server can send to the internet, through an internet
   gateway (as its public IP) or a NAT gateway (as the gateway's Elastic IP),
   with the security group, routes, firewalls and network ACLs of both subnets,

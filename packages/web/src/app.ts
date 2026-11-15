@@ -15,9 +15,9 @@ import { ALL, boxHead, btn, empty, linkBtn, sevPill, sevVar, softVar } from './u
 import { reportDoc, reportHtml, REPORT_CSS } from './report.js';
 import { comparePage } from './compare.js';
 import { policyPage } from './policy.js';
-import { egressPage } from './egress.js';
-import { onPremPage } from './onprem.js';
-import { privateLinkPage } from './privatelink.js';
+import { egressOf, egressPage } from './egress.js';
+import { onPremOf, onPremPage } from './onprem.js';
+import { privateLinkOf, privateLinkPage } from './privatelink.js';
 import { askPage, blastPage, fixesSection, hygienePage, openPalette, planBox, simulatorPage } from './pages.js';
 import type { Ctx } from './pages.js';
 import type { Change } from '@pinhole/engine';
@@ -25,27 +25,29 @@ import type { Change } from '@pinhole/engine';
 
 type Route = 'dashboard' | 'graph' | 'blast' | 'issues' | 'resources' | 'hygiene' | 'policy' | 'egress' | 'onprem' | 'privatelink' | 'coverage' | 'simulator' | 'compare' | 'ask' | 'report' | 'connect';
 const ROUTES: Route[] = ['dashboard', 'graph', 'blast', 'issues', 'resources', 'hygiene', 'policy', 'egress', 'onprem', 'privatelink', 'coverage', 'simulator', 'compare', 'ask', 'report', 'connect'];
-const PAGES: { route: Route; label: string; icon: string }[] = [
+const PAGES: { route: Route; label: string; icon: string; keys?: string }[] = [
   { route: 'dashboard', label: 'Dashboard', icon: 'home' },
   { route: 'graph', label: 'Attack graph', icon: 'graph' },
-  { route: 'blast', label: 'Blast radius', icon: 'blast' },
+  { route: 'blast', label: 'Blast radius', icon: 'blast', keys: 'attack chains lateral movement crown jewels' },
   { route: 'issues', label: 'Exposures', icon: 'list' },
   { route: 'resources', label: 'Resources', icon: 'box' },
-  { route: 'egress', label: 'Outbound', icon: 'outbound' },
-  { route: 'onprem', label: 'On-premises', icon: 'onprem' },
-  { route: 'privatelink', label: 'PrivateLink', icon: 'link' },
-  { route: 'hygiene', label: 'Rule hygiene', icon: 'broom' },
-  { route: 'policy', label: 'Policies', icon: 'policy' },
+  { route: 'egress', label: 'Outbound', icon: 'outbound', keys: 'egress exfiltration nat gateway internet out' },
+  { route: 'onprem', label: 'On-premises', icon: 'onprem', keys: 'vpn direct connect hybrid datacenter office vgw' },
+  { route: 'privatelink', label: 'PrivateLink', icon: 'link', keys: 'endpoint service vpce private link' },
+  { route: 'hygiene', label: 'Rule hygiene', icon: 'broom', keys: 'cleanup redundant shadowed unused firewall rules' },
+  { route: 'policy', label: 'Policies', icon: 'policy', keys: 'rules deny require compliance' },
   { route: 'coverage', label: 'Coverage', icon: 'shield' },
-  { route: 'simulator', label: 'Simulator', icon: 'flask' },
+  { route: 'simulator', label: 'Simulator', icon: 'flask', keys: 'what if change' },
   { route: 'compare', label: 'Compare snapshots', icon: 'compare' },
-  { route: 'ask', label: 'Reachability query', icon: 'route' },
+  { route: 'ask', label: 'Reachability query', icon: 'route', keys: 'can reach path fix repair why blocked' },
   { route: 'report', label: 'Report', icon: 'file' },
   { route: 'connect', label: 'Connect an account', icon: 'plug' },
 ];
 type CatFilter = Category | 'world' | '';
 
 const st = {
+  /** The navigation menu is open (phones and tablets). */
+  menu: false,
   /** Every loaded snapshot, including older ones of the same account and region. */
   all: [] as Snap[],
   /** The latest snapshot of each account and region: what every analysis page uses. */
@@ -139,6 +141,7 @@ document.addEventListener('drop', () => document.body.classList.remove('dragging
 function go(route: Route, patch: Partial<typeof st> = {}) {
   Object.assign(st, patch);
   st.route = route;
+  st.menu = false;
   try {
     if (location.hash !== `#/${route}`) history.replaceState(null, '', `#/${route}`);
   } catch {
@@ -147,6 +150,7 @@ function go(route: Route, patch: Partial<typeof st> = {}) {
   scrollMemo.delete(`${st.route}|${st.sel}|${st.chain}`);
   render();
   document.querySelector('main.view')?.scrollTo?.(0, 0);
+  window.scrollTo?.(0, 0);
 }
 const ctx: Ctx = {
   st,
@@ -512,7 +516,7 @@ function dashboard(): HTMLElement {
   const accs = [...accounts].sort();
   const regs = [...regions].sort();
   // Region columns keep a readable minimum width; with many Regions the grid scrolls sideways instead of overlapping.
-  const matrix = h('div', { class: 'matrix', style: `grid-template-columns:minmax(6.5rem,1.2fr) repeat(${regs.length},minmax(4rem,1fr))` }, h('span'), ...regs.map((x) => { const m = /^(.*)-(\d+)$/.exec(x); return h('span', { class: 'hd', title: x }, ...(m ? [...m[1]!.split('-').flatMap((part, i, all) => [part + (i < all.length - 1 ? '-' : ''), h('wbr')]), h('br'), m[2]!] : [x])); }));
+  const matrix = h('div', { class: 'matrix', style: `grid-template-columns:minmax(6.5rem,1.2fr) repeat(${regs.length},minmax(2.75rem,1fr))` }, h('span'), ...regs.map((x) => h('span', { class: 'hd', title: x }, shortRegion(x))));
   for (const a of accs) {
     const inAcc = rows.filter((r) => r.snap.account === a);
     matrix.append(h('span', { class: 'lab' }, h('b', {}, a), D.plural(inAcc.length, 'exposure')));
@@ -915,7 +919,7 @@ function codeDialog(tab: 'script' | 'policy' = 'script') {
       'div',
       { class: 'dlg-h' },
       tabs,
-      h('div', { style: 'display:flex;gap:0.375rem' }, btn('Copy', 'sm', async () => { await D.copyText(file()[1]); toast('Copied'); }), btn([iconSvg('download', 14), 'Download'], 'sm', () => D.saveFile(...file())), btn(iconSvg('x', 15), 'sm ghost icon', () => dlg.close(), { 'aria-label': 'Close' })),
+      h('div', { style: 'display:flex;flex-wrap:wrap;gap:0.375rem' }, btn('Copy', 'sm', async () => { await D.copyText(file()[1]); toast('Copied'); }), btn([iconSvg('download', 14), 'Download'], 'sm', () => D.saveFile(...file())), btn(iconSvg('x', 15), 'sm ghost icon', () => dlg.close(), { 'aria-label': 'Close' })),
     ),
     body,
   );
@@ -959,7 +963,7 @@ function connectPage(): HTMLElement {
           'ol',
           { class: 'wiz', id: 'wizard', style: 'list-style:none;margin:0' },
           step(1, 'Open AWS CloudShell in the account to check', 'Sign in to the AWS console with a role that can read EC2 and Elastic Load Balancing configuration. CloudShell already has the AWS CLI and jq, and runs as you.', h('div', { style: 'display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap' }, h('label', { class: 'dim', for: 'region', style: 'font-size:0.7812rem' }, 'Regions'), rin, cs)),
-          step(2, 'Put the collector script into CloudShell', 'Paste this into the terminal. It writes cloudshell-collect.sh to your home folder. If CloudShell warns about a multi-line paste, choose Paste.', cmd([p(), `cat > cloudshell-collect.sh <<'PINHOLE_EOF'\n`, h('span', { class: 'c' }, `  ${D.scriptLines()} lines, read it with View script\n`), 'PINHOLE_EOF\n', p(), 'chmod +x cloudshell-collect.sh'], D.heredoc), h('div', { style: 'display:flex;gap:0.5rem;margin-top:0.5rem' }, btn([iconSvg('file', 14), 'View script'], 'sm', () => codeDialog('script')), btn([iconSvg('shield', 14), 'View IAM policy'], 'sm', () => codeDialog('policy')))),
+          step(2, 'Put the collector script into CloudShell', 'Paste this into the terminal. It writes cloudshell-collect.sh to your home folder. If CloudShell warns about a multi-line paste, choose Paste.', cmd([p(), `cat > cloudshell-collect.sh <<'PINHOLE_EOF'\n`, h('span', { class: 'c' }, `  ${D.scriptLines()} lines, read it with View script\n`), 'PINHOLE_EOF\n', p(), 'chmod +x cloudshell-collect.sh'], D.heredoc), h('div', { style: 'display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.5rem' }, btn([iconSvg('file', 14), 'View script'], 'sm', () => codeDialog('script')), btn([iconSvg('shield', 14), 'View IAM policy'], 'sm', () => codeDialog('policy')))),
           step(3, 'Run it', 'It makes only Describe and Get calls, writes one JSON file per region and prints where it saved it. Nothing in the account changes.', runHost, h('p', { style: 'margin:0.625rem 0 0;font-size:0.7812rem' }, 'When it finishes you will see something like:'), outHost),
           step(4, 'Download the snapshot to your computer', 'In CloudShell choose Actions, then Download file, and paste the path the script printed. Repeat for each region. To list the files again:', cmd([p(), D.LIST_CMD], () => D.LIST_CMD)),
           step(5, 'Load the snapshots here', 'Drop the files anywhere on this page, or choose them. They are read and analysed in this browser tab and never uploaded.', btn([iconSvg('upload', 14), 'Choose snapshot files'], 'primary', pick)),
@@ -1042,6 +1046,9 @@ function renderNow() {
   const chains = allChains.length;
   const chainsCrit = allChains.filter((c) => c.c.severity === 'critical').length;
   const hyg = D.hygieneRows(st.snaps).filter((x) => !x.h.inExposure).length;
+  const egressOpen = st.snaps.reduce((n, x) => n + egressOf(x).wide, 0);
+  const onpremReach = st.snaps.reduce((n, x) => n + onPremOf(x).reachable, 0);
+  const plServices = st.snaps.reduce((n, x) => n + privateLinkOf(x).services.filter((s) => s.severity !== 'info').length, 0);
   const link = (route: Route, icon: string, label: string, n?: number, hot = false) =>
     on(h('a', { href: `#/${route}`, 'aria-current': st.route === route ? 'page' : undefined, 'data-route': route }, iconSvg(icon, 18), label, n ? h('span', { class: `n${hot ? ' crit' : ''}` }, String(n)) : null), 'click', (e) => { e.preventDefault(); go(route, { sel: '', ...(route === 'blast' ? { chain: '' } : {}) }); });
 
@@ -1095,18 +1102,34 @@ function renderNow() {
       { class: 'app' },
       h(
         'nav',
-        { class: 'side', 'aria-label': 'Main' },
-        h('div', { class: 'brand' }, h('span', { class: 'm' }, LOGO()), 'Pinhole', h('small', {}, `v${D.VERSION}`)),
+        { class: `side${st.menu ? ' open' : ''}`, 'aria-label': 'Main' },
         h(
           'div',
-          { class: 'nav' },
-          h('div', { class: 'grp' }, 'Analysis'),
+          { class: 'brand' },
+          h('span', { class: 'm' }, LOGO()),
+          'Pinhole',
+          h('small', {}, `v${D.VERSION}`),
+          on(h('button', { type: 'button', class: 'menu-btn', 'aria-expanded': String(st.menu), 'aria-controls': 'main-nav' }, iconSvg(st.menu ? 'x' : 'menu', 18), h('span', {}, st.menu ? 'Close' : PAGES.find((p) => p.route === st.route)?.label ?? 'Menu')), 'click', () => {
+            st.menu = !st.menu;
+            render();
+          }),
+        ),
+        h(
+          'div',
+          { class: 'nav', id: 'main-nav' },
           link('dashboard', 'home', 'Dashboard'),
+          h('div', { class: 'grp' }, 'From the internet'),
+          link('issues', 'list', 'Exposures', rows.length, crit > 0),
           link('graph', 'graph', 'Attack graph'),
           link('blast', 'blast', 'Blast radius', chains, chainsCrit > 0),
-          link('issues', 'list', 'Exposures', rows.length, crit > 0),
           link('resources', 'box', 'Resources', D.resources(rows).length),
+          h('div', { class: 'grp' }, 'Other paths'),
+          link('egress', 'outbound', 'Outbound', egressOpen),
+          link('onprem', 'onprem', 'On-premises', onpremReach),
+          link('privatelink', 'link', 'PrivateLink', plServices),
+          h('div', { class: 'grp' }, 'Rules'),
           link('hygiene', 'broom', 'Rule hygiene', hyg),
+          link('policy', 'policy', 'Policies'),
           link('coverage', 'shield', 'Coverage', warn),
           h('div', { class: 'grp' }, 'Tools'),
           link('simulator', 'flask', 'Simulator', st.changes.length),
@@ -1132,6 +1155,13 @@ function renderNow() {
     ),
     ),
   );
+}
+
+/** us-east-1 → us-e-1, ap-southeast-2 → ap-se-2: short enough for a matrix column; the full name is the title. */
+function shortRegion(r: string): string {
+  const COMPASS: Record<string, string> = { northeast: 'ne', southeast: 'se', northwest: 'nw', southwest: 'sw', north: 'n', south: 's', east: 'e', west: 'w', central: 'c', gov: 'gov', iso: 'iso', isob: 'isob' };
+  const parts = r.split('-');
+  return parts.map((p, i) => (i === 0 || /^\d+$/.test(p) ? p : COMPASS[p] ?? p.slice(0, 2))).join('-');
 }
 
 // ---------------------------------------------------------------- start

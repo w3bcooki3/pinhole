@@ -5,7 +5,7 @@ import { h, on } from './dom.js';
 import * as D from './data.js';
 import type { Snap } from './data.js';
 import { traceStepper } from './pages.js';
-import { boxHead, empty, sevPill, short } from './ui.js';
+import { boxHead, empty, sevPill, short, stacked } from './ui.js';
 
 const cache = new WeakMap<Snap, EgressReport>();
 export function egressOf(snap: Snap): EgressReport {
@@ -77,7 +77,7 @@ export function egressPage(ctx: { st: { snaps: Snap[] } }): HTMLElement {
     { class: 'page' },
     h('div', { class: 'ph' }, h('div', {}, h('h1', {}, 'Outbound'), h('p', {}, 'What each server can send to the internet, to which addresses and ports, through which gateway and as which public address.'))),
     h('div', { class: 'eg-stats' }, stat(open, 'can reach the internet', `of ${D.plural(interfaces, 'interface')}`), stat(wide, 'on any port to any address', 'no egress filtering'), stat(exfil, 'data stores with open egress', 'exfiltration paths')),
-    rows.length ? h('section', { class: 'box', style: 'margin-bottom:1rem' }, boxHead('Outbound traffic', 'Select a row for the path'), h('div', { class: 'table-wrap' }, table)) : empty('Nothing can reach the internet', 'No interface in the loaded snapshots can open a connection to an internet address.'),
+    rows.length ? h('section', { class: 'box', style: 'margin-bottom:1rem' }, boxHead('Outbound traffic', 'Select a row for the path'), h('div', { class: 'table-wrap' }, stacked(table))) : empty('Nothing can reach the internet', 'No interface in the loaded snapshots can open a connection to an internet address.'),
     detail,
   );
 }

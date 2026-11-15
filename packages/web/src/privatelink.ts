@@ -4,7 +4,7 @@ import type { PrivateLinkReport, PrivateLinkService } from '@pinhole/engine';
 import { h, on } from './dom.js';
 import * as D from './data.js';
 import type { Snap } from './data.js';
-import { boxHead, empty, sevPill } from './ui.js';
+import { boxHead, empty, sevPill, stacked } from './ui.js';
 
 const cache = new WeakMap<Snap, PrivateLinkReport>();
 export function privateLinkOf(snap: Snap): PrivateLinkReport {
@@ -39,7 +39,7 @@ function serviceDetail(s: PrivateLinkService): HTMLElement {
         ? h(
             'div',
             { class: 'table-wrap' },
-            h(
+            stacked(h(
               'table',
               { class: 't pl-listeners' },
               h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Listener'), h('th', {}, 'Consumers let in'), h('th', {}, 'Filtered by'), h('th', { class: 'last' }, 'Targets'))),
@@ -57,7 +57,7 @@ function serviceDetail(s: PrivateLinkService): HTMLElement {
                   ),
                 ),
               ),
-            ),
+            )),
           )
         : h('p', { class: 'faint' }, 'No listeners analysed (Gateway Load Balancer, or the load balancer is not in the snapshot).'),
     ),
@@ -120,8 +120,8 @@ export function privateLinkPage(ctx: { st: { snaps: Snap[] } }): HTMLElement {
     'div',
     { class: 'page' },
     head,
-    services.length ? h('section', { class: 'box', style: 'margin-bottom:1rem' }, boxHead('Endpoint services you provide', 'Select a row for listeners and targets'), h('div', { class: 'table-wrap' }, svcTable)) : null,
+    services.length ? h('section', { class: 'box', style: 'margin-bottom:1rem' }, boxHead('Endpoint services you provide', 'Select a row for listeners and targets'), h('div', { class: 'table-wrap' }, stacked(svcTable))) : null,
     detail,
-    endpoints.length ? h('section', { class: 'box', style: 'margin-top:1rem' }, boxHead('Your VPC endpoints', D.plural(endpoints.length, 'endpoint')), h('div', { class: 'table-wrap' }, epTable)) : null,
+    endpoints.length ? h('section', { class: 'box', style: 'margin-top:1rem' }, boxHead('Your VPC endpoints', D.plural(endpoints.length, 'endpoint')), h('div', { class: 'table-wrap' }, stacked(epTable))) : null,
   );
 }

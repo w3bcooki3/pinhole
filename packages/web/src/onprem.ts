@@ -5,7 +5,7 @@ import { h, on } from './dom.js';
 import * as D from './data.js';
 import type { Snap } from './data.js';
 import { traceStepper } from './pages.js';
-import { boxHead, empty, sevPill, short } from './ui.js';
+import { boxHead, empty, sevPill, short, stacked } from './ui.js';
 
 const cache = new WeakMap<Snap, OnPremReport>();
 export function onPremOf(snap: Snap): OnPremReport {
@@ -63,7 +63,7 @@ export function onPremPage(ctx: { st: { snaps: Snap[] } }): HTMLElement {
     h(
       'div',
       { class: 'table-wrap' },
-      h(
+      stacked(h(
         'table',
         { class: 't op-links' },
         h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Link'), h('th', {}, 'Type'), h('th', {}, 'On-premises networks'), h('th', {}, 'Tunnels'), h('th', { class: 'last hide-sm' }, 'Account and region'))),
@@ -82,7 +82,7 @@ export function onPremPage(ctx: { st: { snaps: Snap[] } }): HTMLElement {
             ),
           ),
         ),
-      ),
+      )),
     ),
   );
 
@@ -137,7 +137,7 @@ export function onPremPage(ctx: { st: { snaps: Snap[] } }): HTMLElement {
     head,
     linkList,
     rows.length
-      ? h('section', { class: 'box', style: 'margin-bottom:1rem' }, boxHead('Reachable from on-premises', `${reach} of ${D.plural(total, 'interface')}; select a row for the path`), h('div', { class: 'table-wrap' }, table))
+      ? h('section', { class: 'box', style: 'margin-bottom:1rem' }, boxHead('Reachable from on-premises', `${reach} of ${D.plural(total, 'interface')}; select a row for the path`), h('div', { class: 'table-wrap' }, stacked(table)))
       : h('div', { class: 'box', style: 'margin-bottom:1rem' }, empty('Nothing reachable from on-premises', 'No security group, network ACL and return route together let an on-premises address connect to any interface.')),
     detail,
     chainsBox(snaps),

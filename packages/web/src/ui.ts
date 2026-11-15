@@ -25,6 +25,7 @@ Object.assign(ICON, {
   download: 'M12 4v12M7 11l5 5 5-5M4 20h16',
   check: 'M5 12.5 10 17l9-10',
   x: 'M6 6l12 12M18 6 6 18',
+  menu: 'M4 6h16M4 12h16M4 18h16',
   file: 'M14 3H6v18h12V7zM14 3v4h4',
   info: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18ZM12 11v5M12 8h.01',
   open: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
@@ -67,4 +68,12 @@ export function cmdBlock(lines: string[], copyLabel = 'Copy'): HTMLElement {
       toast('Copied');
     }),
   );
+}
+
+/** On phones a table marked this way shows each row as a card, each cell labelled with its column header. */
+export function stacked<T extends HTMLElement>(t: T): T {
+  t.classList.add('stack');
+  const heads = [...t.querySelectorAll('thead th')].map((x) => x.textContent ?? '');
+  t.querySelectorAll('tbody tr').forEach((tr) => [...tr.children].forEach((td, i) => heads[i] && td.setAttribute('data-label', heads[i]!)));
+  return t;
 }

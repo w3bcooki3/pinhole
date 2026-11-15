@@ -255,6 +255,13 @@ describe('web console', () => {
     expect(text(doc, '#notes')).toMatch(/appliance or NAT instance/);
   });
 
+  it('lists every page in the navigation, and the search finds pages by other words', () => {
+    const { doc } = page();
+    const routes = [...doc.querySelectorAll('#main-nav a[data-route]')].map((a) => a.getAttribute('data-route'));
+    for (const r of ['dashboard', 'issues', 'graph', 'blast', 'resources', 'egress', 'onprem', 'privatelink', 'hygiene', 'policy', 'coverage', 'simulator', 'compare', 'ask', 'report', 'connect']) expect(routes, r).toContain(r);
+    expect(doc.querySelector('.menu-btn')?.getAttribute('aria-controls')).toBe('main-nav');
+  });
+
   describe('0.2 pages', () => {
     const load9 = () => {
       const p = page();

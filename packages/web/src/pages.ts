@@ -429,7 +429,7 @@ export function simulatorPage(ctx: Ctx): HTMLElement {
   // ---- right: the result
   let right: HTMLElement;
   if (!changes.length) {
-    right = h('aside', { class: 'panel', id: 'sim-result' }, empty('No changes yet', 'Switch a rule off to see which internet paths and attack chains it closes. Fixes and chain cuts elsewhere in the console open here too.'));
+    right = h('aside', { class: 'panel idle', id: 'sim-result' }, empty('No changes yet', 'Switch a rule off to see which internet paths and attack chains it closes. Fixes and chain cuts elsewhere in the console open here too.'));
   } else {
     const r = simulate(snap, changes);
     const d = r.diff;
@@ -543,7 +543,14 @@ const eniLabel = (m: NetworkModel, id: string) => {
 export function askPage(ctx: Ctx): HTMLElement {
   const st = ctx.st;
   if (!st.snaps.length) return h('div', { class: 'page' }, h('div', { class: 'box' }, empty('No snapshots loaded', 'Load a snapshot to query it.')));
-  const snap = snapByKey(ctx, st.askKey) ?? st.snaps.find((x) => D.blastOf(x).edges.length) ?? st.snaps[0]!;
+  let snap = snapByKey(ctx, st.askKey) ?? st.snaps.find((x) => D.blastOf(x).edges.length) ?? st.snaps[0]!;
+  // The names typed may belong to another loaded snapshot: use the one where most of them resolve.
+  const found = (x: Snap) => [st.askTo, st.askMode === 'pair' ? st.askFrom : ''].filter((r) => r && resolveRef(x.model, r)).length;
+  const best = [...st.snaps].sort((a, b) => found(b) - found(a))[0];
+  if (best && found(best) > found(snap)) {
+    snap = best;
+    st.askKey = best.key;
+  }
   const m = snap.model;
   const names = [...m.enis.values()].filter(isLateralTarget).map((e) => {
     const inst = e.instanceId ? m.instances.get(e.instanceId) : undefined;
@@ -852,12 +859,13 @@ interface Item {
   hint: string;
   icon: string;
   act: () => void;
+  keys?: string;
 }
 
-export function openPalette(ctx: Ctx, pages: { route: string; label: string; icon: string }[]) {
+export function openPalette(ctx: Ctx, pages: { route: string; label: string; icon: string; keys?: string }[]) {
   if (document.querySelector('dialog.palette')) return;
   const items: Item[] = [
-    ...pages.map((p) => ({ label: p.label, hint: 'Page', icon: p.icon, act: () => ctx.go(p.route) })),
+    ...pages.map((p) => ({ label: p.label, hint: 'Page', icon: p.icon, ...(p.keys ? { keys: p.keys } : {}), act: () => ctx.go(p.route) })),
     ...ctx.rows().slice(0, 300).map((r) => ({ label: `${short(r.f.resourceName)} on ${D.service(r.f)}`, hint: `Issue, ${D.SEV_LABEL[r.f.severity]}`, icon: 'list', act: () => ctx.go('issues', { sel: r.id }) })),
     ...D.chainsOf(ctx.st.snaps).slice(0, 100).map((c) => ({ label: chainText(c.c), hint: `Attack chain, ${D.SEV_LABEL[c.c.severity]}`, icon: 'blast', act: () => ctx.go('blast', { blastKey: c.snap.key, chain: c.id }) })),
     ...ctx.st.snaps.flatMap((sn) => [...sn.model.enis.values()].filter(isLateralTarget).map((e) => ({ label: eniLabel(sn.model, e.id), hint: `Who can reach it, ${sn.account} ${sn.region}`, icon: 'route', act: () => ctx.go('ask', { askKey: sn.key, askMode: 'who', askTo: e.id }) }))),
@@ -870,7 +878,14 @@ export function openPalette(ctx: Ctx, pages: { route: string; label: string; ico
   let shown: Item[] = [];
   const draw = () => {
     const words = input.value.toLowerCase().split(/\s+/).filter(Boolean);
-    shown = items.filter((x) => words.every((w) => `${x.label} ${x.hint}`.toLowerCase().includes(w))).slice(0, 40);
+    // "onprem" finds "On-premises": words are compared with and without punctuation.
+    shown = items
+      .filter((x) => {
+        const hay = `${x.label} ${x.hint} ${x.keys ?? ''}`.toLowerCase();
+        const flat = hay.replace(/[^a-z0-9]/g, '');
+        return words.every((w) => hay.includes(w) || flat.includes(w.replace(/[^a-z0-9]/g, '')));
+      })
+      .slice(0, 40);
     active = Math.min(active, Math.max(0, shown.length - 1));
     list.replaceChildren(
       ...(shown.length
