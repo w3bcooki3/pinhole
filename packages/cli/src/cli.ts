@@ -22,7 +22,7 @@ import { VERSION } from './version.js';
 import { egress, egressFailsAt, egressMarkdown, egressText } from './egress.js';
 import { onPremFailsAt, onPremMarkdown, onPremText } from './onprem.js';
 import { privateLinkFailsAt, privateLinkMarkdown, privateLinkText } from './privatelink.js';
-import { analyzeOnPrem, analyzePrivateLink } from '@pinhole/engine';
+import { analyzeOnPrem, analyzeOnPremBlast, analyzePrivateLink } from '@pinhole/engine';
 import { policyCheck, policyFailsAt, policyMarkdown, policyText, readPolicy } from './policy.js';
 import { applyChanges, diffPolicy, findMinCut, PolicyError } from '@pinhole/engine';
 
@@ -94,8 +94,10 @@ egress    What each server can send to the internet: which addresses and
 onprem    What clients on-premises can reach over Site-to-Site VPN and
           Direct Connect: the links, the on-premises networks AWS routes to
           each, and every server and port reachable from them, with the
-          addresses that work and the path. On-premises routers and
-          firewalls are not visible to AWS and are assumed to pass.
+          addresses that work and the path, and the attack chains that
+          start from a host on-premises that is taken over. On-premises
+          routers and firewalls are not visible to AWS and are assumed to
+          pass.
 privatelink
           Who can reach this account's services through AWS PrivateLink:
           the principals allowed on each endpoint service (every AWS
@@ -351,12 +353,15 @@ function cmdOnPrem(args: string[], io: Io): number {
   if (format !== 'text' && format !== 'json' && format !== 'markdown') throw new UsageError('--format must be text, json or markdown');
   const min = severityArg(values['min-severity'], '--min-severity') ?? 'info';
   const failOn = severityArg(values['fail-on'], '--fail-on');
-  const r = analyzeOnPrem(snapshotModel(positionals, 'onprem'));
-  if (format === 'json') io.stdout(json({ tool: { name: 'pinhole', version: VERSION }, ...r }));
+  const model = snapshotModel(positionals, 'onprem');
+  const r = analyzeOnPrem(model);
+  const blast = analyzeOnPremBlast(model, r);
+  if (format === 'json') io.stdout(json({ tool: { name: 'pinhole', version: VERSION }, ...r, chains: blast.chains }));
   else if (format === 'markdown') io.stdout(onPremMarkdown(r, min));
-  else io.stdout(safeForTerminal(onPremText(r, min, values.verbose ?? false)));
-  if (failOn && onPremFailsAt(r, failOn)) {
-    io.stderr(`${onPremFailsAt(r, failOn)} on-premises finding(s) at or above ${failOn}.\n`);
+  else io.stdout(safeForTerminal(onPremText(r, min, values.verbose ?? false, blast)));
+  const fails = failOn ? onPremFailsAt(r, failOn) + blast.chains.filter((c) => SEVERITY_ORDER.indexOf(c.severity) <= SEVERITY_ORDER.indexOf(failOn)).length : 0;
+  if (failOn && fails) {
+    io.stderr(`${fails} on-premises finding(s) and attack chain(s) at or above ${failOn}.\n`);
     return 2;
   }
   return 0;

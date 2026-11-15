@@ -34,6 +34,7 @@ import type { BlastReport } from './blast.js';
 import { formatIpv4 } from './ipv4.js';
 import { evaluatePath } from './path.js';
 import { analyzeOnPrem } from './hybrid.js';
+import { analyzeOnPremBlast } from './blast.js';
 import { onPremNetworks } from './onprem.js';
 import { analyzeEgress } from './egress.js';
 import { pairReach } from './internal.js';
@@ -194,12 +195,12 @@ export function parsePolicy(input: unknown): PolicyFile {
     checkTarget(body.to, `${w}.${kind}.to`, names);
     if (body.to === 'internet' && body.from === 'internet') throw new PolicyError(`${w}.${kind}: "from" and "to" cannot both be "internet".`);
     if (body.to === 'onprem') throw new PolicyError(`${w}.${kind}.to: "onprem" can only be the "from" of a rule.`);
-    if (body.from === 'onprem' && (body.to === 'internet' || body.indirect)) throw new PolicyError(`${w}.${kind}: with "from": "onprem", "to" must be resources and "indirect" is not used.`);
-    if (body.to === 'internet' && body.indirect) throw new PolicyError(`${w}.deny.indirect applies to "from": "internet" only.`);
+    if (body.from === 'onprem' && body.to === 'internet') throw new PolicyError(`${w}.${kind}: with "from": "onprem", "to" must be resources.`);
+    if (body.to === 'internet' && body.indirect) throw new PolicyError(`${w}.deny.indirect applies to "from": "internet" or "onprem" only.`);
     if (kind === 'require' && body.ports === undefined) throw new PolicyError(`${w}.require.ports is required: say which service must get through.`);
     parsePorts(body.ports as string | string[] | undefined, `${w}.${kind}.ports`);
     if (body.indirect !== undefined && typeof body.indirect !== 'boolean') throw new PolicyError(`${w}.deny.indirect must be true or false.`);
-    if (body.indirect && body.from !== 'internet') throw new PolicyError(`${w}.deny.indirect applies to "from": "internet" only.`);
+    if (body.indirect && body.from !== 'internet' && body.from !== 'onprem') throw new PolicyError(`${w}.deny.indirect applies to "from": "internet" or "onprem" only.`);
   });
   return input as unknown as PolicyFile;
 }
@@ -313,6 +314,19 @@ export function checkPolicy(model: NetworkModel, exposure: ExposureReport, blast
           if (ports === false) continue;
           const label = serviceLabel({ protocol: f.protocol, ...(ports ? { ports } : {}) });
           out.violations.push({ from: 'onprem', fromName: 'on-premises', to: f.resourceId, toName: f.resourceName, protocol: f.protocol, ...(ports ? { ports } : {}), detail: `${f.sources.slice(0, 3).join(', ')}${f.sources.length > 3 ? ', ...' : ''} on-premises can open ${label} on ${f.resourceName} over ${f.via}`, path: f.trace.map(hopLine), ruleIds: allowedBy(f.trace) });
+        }
+        if (rule.deny?.indirect) {
+          // Attack chains from a host on-premises that is taken over (blast.ts); analysed for every interface, so a foothold outside "to" counts.
+          const full = analyzeOnPrem(model);
+          for (const c of analyzeOnPremBlast(model, full).chains) {
+            const e = model.enis.get(c.targetId);
+            if (!e || !matches(model, policy, body.to, { kind: 'eni', eni: e })) continue;
+            const last = c.steps[c.steps.length - 1]!;
+            const m = /^([a-z0-9]+)(?:\/(\d+)(?:-(\d+))?)?$/.exec(last.service ?? '');
+            const ports = m?.[2] ? { from: Number(m[2]), to: Number(m[3] ?? m[2]) } : undefined;
+            if (want && overlap(want, m?.[1] ?? '', ports) === false) continue;
+            out.violations.push({ from: c.entry.eniId, fromName: c.entry.name, to: e.id, toName: displayName(model, e), protocol: m?.[1] ?? 'all', ...(ports ? { ports } : {}), detail: `attack chain from on-premises: ${c.steps.map((s) => `${s.name}${s.service ? ` (${s.service})` : ''}`).join(' → ')}`, path: [`entry: ${c.entry.how}`, ...c.steps.slice(1).map((s) => `→ ${s.name} on ${s.service}`)], ruleIds: [] });
+          }
         }
       } else {
         const space = onPremNetworks(model);

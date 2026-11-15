@@ -12,7 +12,7 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { analyzeEgress, analyzeOnPrem, analyzePrivateLink, normalize, evaluatePath, analyzeExposure, analyzeBlastRadius, analyzeHygiene, applyChanges, diffExposure, findFixes, reachServices, serviceLabel } from '../src/index.js';
+import { analyzeEgress, analyzeOnPrem, analyzeOnPremBlast, analyzePrivateLink, normalize, evaluatePath, analyzeExposure, analyzeBlastRadius, analyzeHygiene, applyChanges, diffExposure, findFixes, reachServices, serviceLabel } from '../src/index.js';
 import type { Change, Endpoint, ExposureFinding, PathResult } from '../src/index.js';
 import { INTERNET6, RangeSet6 } from '../src/ipv6.js';
 
@@ -59,6 +59,7 @@ interface Expected {
     reachable?: { resource: string; protocol: string; port: number; via: string; sources?: string[] }[];
     unreachable?: { resource: string; protocol: string; port: number }[];
     counts?: { interfaces: number; reachable: number };
+    chains?: { steps: string[]; service: string; severity: string }[];
   };
   fixes?: { resource: string; protocol: string; port: number; best: string; allVerified?: boolean }[];
   whatIf?: {
@@ -197,6 +198,10 @@ describe('fixtures', () => {
             expect(report.findings.find((x) => x.resourceId === e.resource && x.protocol === e.protocol && e.port >= x.ports.from && e.port <= x.ports.to), `${e.resource} ${e.protocol}/${e.port}${summary}`).toBeUndefined();
           }
           if (op.counts) expect({ interfaces: report.interfaces, reachable: report.reachable }).toEqual(op.counts);
+          if (op.chains) {
+            const b = analyzeOnPremBlast(normalize(snapshot), report);
+            expect(b.chains.map((c) => ({ steps: c.steps.map((x) => x.eniId), service: c.steps[c.steps.length - 1]!.service, severity: c.severity }))).toEqual(op.chains);
+          }
         });
       }
 

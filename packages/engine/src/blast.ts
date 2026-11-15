@@ -17,9 +17,10 @@
 import type { ExposureFinding, ExposureReport } from './exposure.js';
 import { parseIpv4 } from './ipv4.js';
 import { candidateRules, isLateralTarget, serviceLabel } from './reach.js';
+import type { OnPremReport } from './hybrid.js';
 import { pairReach } from './internal.js';
 import type { PairReach, ServiceReach } from './reach.js';
-import { compareSeverity, SEVERITY_ORDER } from './risk.js';
+import { compareSeverity, isPivotService, SEVERITY_ORDER } from './risk.js';
 import type { ServiceCategory, Severity } from './risk.js';
 import { displayName } from './topology.js';
 import { jewelTag } from './jewels.js';
@@ -30,7 +31,7 @@ export interface BlastEntry {
   name: string;
   /** How the internet gets in: the worst exposure finding on it, or the listener in front of it. */
   how: string;
-  via: 'direct' | 'load-balancer';
+  via: 'direct' | 'load-balancer' | 'onprem';
   severity: Severity;
   findingKeys: string[];
 }
@@ -143,23 +144,57 @@ function chainSeverity(entry: Severity, target: ServiceReach, depth: number): Se
   return s;
 }
 
-export function analyzeBlastRadius(model: NetworkModel, exposure: ExposureReport, opts: BlastOptions = {}): BlastReport {
-  const maxDepth = opts.maxDepth ?? 3;
-  const maxPairs = opts.maxPairs ?? 50_000;
-  const entries = entriesFrom(model, exposure);
-  const targets = [...model.enis.values()].filter(isLateralTarget);
-  const memo = new Map<string, PairReach>();
-  const stats = { pairsConsidered: 0, pairsEvaluated: 0, cellsEvaluated: 0, truncated: false, redundantChains: 0 };
+type Direct = Map<string, { protocol: string; from: number; to: number }[]>;
 
+export function analyzeBlastRadius(model: NetworkModel, exposure: ExposureReport, opts: BlastOptions = {}): BlastReport {
   // Services the internet already reaches directly, or through a load balancer.
   // A chain that ends at one of these tells the reader nothing the exposure
   // report does not, so it is counted but not reported.
-  const direct = new Map<string, { protocol: string; from: number; to: number }[]>();
+  const direct: Direct = new Map();
   const addDirect = (eniId: string, protocol: string, from: number, to: number) => (direct.get(eniId) ?? direct.set(eniId, []).get(eniId)!).push({ protocol, from, to });
   for (const f of exposure.findings) {
     if (f.kind === 'interface') addDirect(f.resourceId, f.protocol, f.ports.from, f.ports.to);
     for (const t of f.targets ?? []) if (t.eniId && (t.verdict === 'reachable' || t.verdict === 'partial')) addDirect(t.eniId, 'tcp', t.port, t.port);
   }
+  return blastFrom(model, entriesFrom(model, exposure), direct, opts, 'the internet');
+}
+
+/**
+ * Attack chains that start on-premises: a host in an on-premises network
+ * (over Site-to-Site VPN or Direct Connect) is taken over, and the attacker
+ * moves into AWS. Footholds are the interfaces on-premises clients reach on
+ * a service that gives command execution (remote administration, control
+ * planes, wide port ranges); from there the chains are followed as for the
+ * internet. Services on-premises clients reach directly are in the
+ * on-premises report, so chains that end at them are not repeated.
+ */
+export function analyzeOnPremBlast(model: NetworkModel, onprem: OnPremReport, opts: BlastOptions = {}): BlastReport {
+  const direct: Direct = new Map();
+  const byEni = new Map<string, BlastEntry>();
+  for (const f of onprem.findings) {
+    (direct.get(f.resourceId) ?? direct.set(f.resourceId, []).get(f.resourceId)!).push({ protocol: f.protocol, from: f.ports.from, to: f.ports.to });
+    if (f.protocol === 'icmp' || !isPivotService(f.protocol, f.ports)) continue;
+    const eni = model.enis.get(f.resourceId);
+    if (!eni || !isLateralTarget(eni)) continue;
+    const how = `${serviceLabel(f)} from ${f.sources.slice(0, 2).join(', ')}${f.sources.length > 2 ? ', ...' : ''} on-premises, over ${f.via}`;
+    const cur = byEni.get(f.resourceId);
+    if (!cur) byEni.set(f.resourceId, { eniId: f.resourceId, name: displayName(model, eni), how, via: 'onprem', severity: f.severity, findingKeys: [findingKey(f)] });
+    else {
+      cur.findingKeys.push(findingKey(f));
+      if (compareSeverity(f.severity, cur.severity) < 0) Object.assign(cur, { how, severity: f.severity });
+    }
+  }
+  const entries = [...byEni.values()].sort((a, b) => compareSeverity(a.severity, b.severity) || a.name.localeCompare(b.name));
+  return blastFrom(model, entries, direct, opts, 'on-premises');
+}
+
+function blastFrom(model: NetworkModel, entries: BlastEntry[], direct: Direct, opts: BlastOptions, origin: string): BlastReport {
+  const maxDepth = opts.maxDepth ?? 3;
+  const maxPairs = opts.maxPairs ?? 50_000;
+  const targets = [...model.enis.values()].filter(isLateralTarget);
+  const memo = new Map<string, PairReach>();
+  const stats = { pairsConsidered: 0, pairsEvaluated: 0, cellsEvaluated: 0, truncated: false, redundantChains: 0 };
+
   const reachableFromInternet = (eniId: string, s: ServiceReach) =>
     (direct.get(eniId) ?? []).some((d) => d.protocol === s.protocol && (!s.ports || (d.from <= s.ports.to && d.to >= s.ports.from)));
 
@@ -252,7 +287,7 @@ export function analyzeBlastRadius(model: NetworkModel, exposure: ExposureReport
         const severity = chainSeverity(entry.severity, h.svc, depth);
         const jewel = jewelTag(model, dst);
         const why = [
-          `${entry.name} is reachable from the internet (${entry.how}).`,
+          origin === 'the internet' ? `${entry.name} is reachable from the internet (${entry.how}).` : `${entry.name} is reachable from ${origin} (${entry.how}).`,
           ...steps.slice(1).map((s, i) => `${steps[i]!.name} can open ${s.service}${s.serviceName ? ` (${s.serviceName})` : ''} on ${s.name}.`),
           ...(jewel ? [`${steps[steps.length - 1]!.name} is a crown jewel (${jewel}).`] : []),
         ];

@@ -59,7 +59,9 @@ describe('pinhole CLI', () => {
     expect(r.stdout).toMatch(/Site-to-Site VPN through vgw-1 \(vpn-1, 1 of 2 tunnels up\)/);
     expect(r.stdout).toMatch(/Direct Connect through tgw-attach-dx on tgw-1/);
     expect(r.stdout).toMatch(/\[MEDIUM\] tcp\/22 on app/);
-    expect(r.stdout).not.toMatch(/on db/);
+    expect(r.stdout).not.toMatch(/\] tcp\/\d+ on db/);
+    expect(r.stdout).toMatch(/If a host on-premises is taken over: 1 foothold\(s\) in AWS, 1 attack chain\(s\)/);
+    expect(r.stdout).toMatch(/on-premises --> app \(i-app, eni-app\) --tcp\/5432 PostgreSQL--> db/);
     expect((await cli('onprem', fx('15-hybrid'), '--fail-on', 'medium')).code).toBe(2);
     expect(JSON.parse((await cli('onprem', fx('15-hybrid'), '--format', 'json')).stdout).reachable).toBe(2);
     expect((await cli('onprem', fx('06-public-ip-without-igw-route'))).stdout).toMatch(/No VPN or Direct Connect links/);

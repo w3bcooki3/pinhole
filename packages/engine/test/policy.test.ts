@@ -118,6 +118,9 @@ describe('policies', () => {
     const req = one(m, { require: { from: 'onprem', to: { names: ['db'] }, ports: 'tcp/5432' } });
     expect(req.status).toBe('fail');
     expect(req.violations[0]!.detail).toMatch(/no way back on-premises/);
+    const chain = one(m, { deny: { from: 'onprem', to: { names: ['db'] }, indirect: true } });
+    expect(chain.status).toBe('fail');
+    expect(chain.violations[0]!.detail).toMatch(/attack chain from on-premises: app .* → db .*\(tcp\/5432\)/);
     expect(() => parsePolicy({ rules: [{ id: 'x', deny: { from: '*', to: 'onprem' } }] })).toThrow(/only be the "from"/);
     expect(() => parsePolicy({ groups: { onprem: {} }, rules: [{ id: 'x', deny: { from: 'onprem', to: '*' } }] })).toThrow(/reserved/);
   });
@@ -130,7 +133,7 @@ describe('policies', () => {
     bad({ rules: [{ id: 'a', deny: { from: 'internet', to: '*', ports: 'tcp/99999' } }] }, /not a valid port range/);
     bad({ rules: [{ id: 'a', deny: { from: 'internet', to: '*' }, require: { from: 'internet', to: '*', ports: 'tcp/1' } }] }, /exactly one/);
     bad({ rules: [{ id: 'a', require: { from: 'internet', to: '*' } }] }, /ports is required/);
-    bad({ rules: [{ id: 'a', deny: { from: '*', to: '*', indirect: true } }] }, /internet" only/);
+    bad({ rules: [{ id: 'a', deny: { from: '*', to: '*', indirect: true } }] }, /"internet" or "onprem" only/);
     bad({ rules: [{ id: 'a', deny: { from: 'internet', to: { tagz: {} } } }] }, /unknown selector key "tagz"/);
     bad({ groups: { internet: {} }, rules: [{ id: 'a', deny: { from: 'internet', to: '*' } }] }, /reserved/);
     expect(() => parsePolicy({ rules: [{ id: 'a b', deny: { from: 'internet', to: '*' } }] })).toThrow(PolicyError);

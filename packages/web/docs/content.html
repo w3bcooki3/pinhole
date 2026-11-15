@@ -367,6 +367,7 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
     <li>the network ACLs and the security group allow the client's own address (security groups cannot reference on-premises groups), and replies back on its ephemeral ports.</li>
   </ul>
   <!--run can fixtures/15-hybrid/snapshot.json --from 192.168.10.5 --to db --port 5432-->
+  <p>If a host on-premises is taken over, the attack chains into AWS are followed the same way as from the internet: from every server it can reach on SSH, RDP or another service that gives command execution, to the databases and control planes behind them. In the scenario above, the database cannot be reached from on-premises directly, but it can through the app server.</p>
   <p>Outbound to an on-premises address is decided the same way, ending at the link. <code>pinhole can</code> and the console's query page take on-premises addresses on either side, and policies take <code>"from": "onprem"</code>.</p>
 </section>
 

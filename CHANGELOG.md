@@ -35,6 +35,10 @@ All notable changes to this project are recorded here. The format follows
   way to copy data to any account), endpoints to other accounts' services,
   and who can use them. `pinhole privatelink` and the console's PrivateLink
   page. Three new read-only permissions. Fixture 16.
+- Attack chains from on-premises: if a host in an on-premises network is
+  taken over, which servers it gets a foothold on over VPN or Direct
+  Connect, and what it reaches from there. In `pinhole onprem`, the
+  On-premises page, and policies with `"from": "onprem", "indirect": true`.
 - Repair: `pinhole can --port N --fix` and the console's query page say,
   for a blocked connection, the fewest changes that make it work (security
   group rules from the source's own group, network ACL entries numbered

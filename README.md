@@ -71,7 +71,7 @@ For every network interface with a public IP and every internet-facing ALB/NLB l
 It also answers the other questions an auditor asks of a network:
 
 - **Outbound:** what each server can send to the internet, to which addresses and ports, through which internet or NAT gateway and as which public address. A server holding data that can send anything anywhere is flagged as an exfiltration path (`pinhole egress`).
-- **On-premises:** the Site-to-Site VPN and Direct Connect links, the on-premises networks AWS routes to each, and every server and port clients there can reach, with the addresses that work and the path (`pinhole onprem`). Your own routers and firewalls are not visible to AWS, so these paths assume they pass and say so.
+- **On-premises:** the Site-to-Site VPN and Direct Connect links, the on-premises networks AWS routes to each, and every server and port clients there can reach, with the addresses that work and the path, and the attack chains into AWS if a host on-premises is taken over (`pinhole onprem`). Your own routers and firewalls are not visible to AWS, so these paths assume they pass and say so.
 - **PrivateLink:** for each endpoint service the account provides, who may connect (every AWS account, with or without approval, or named principals), who has, which consumer addresses the Network Load Balancer lets in, and which targets they reach. Also VPC endpoints whose policy allows anything (with S3 or DynamoDB, a way to copy data to any account) and endpoints to other accounts' services (`pinhole privatelink`).
 
 Findings are ordered by risk: remote administration ports (SSH, RDP, ...), databases and cluster control planes first, then admin panels, then everything else, then plain HTTP/HTTPS.

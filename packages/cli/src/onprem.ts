@@ -1,11 +1,11 @@
 /** `pinhole onprem`: what clients on-premises can reach over VPN and Direct Connect. */
 import { SEVERITY_ORDER } from '@pinhole/engine';
-import type { OnPremFinding, OnPremReport, Severity } from '@pinhole/engine';
+import type { BlastReport, OnPremFinding, OnPremReport, Severity } from '@pinhole/engine';
 
 const ports = (f: OnPremFinding) => (f.protocol === 'icmp' ? 'icmp echo' : f.ports.from === 0 && f.ports.to === 65535 ? `${f.protocol}/any port` : f.ports.from === f.ports.to ? `${f.protocol}/${f.ports.from}` : `${f.protocol}/${f.ports.from}-${f.ports.to}`);
-const at = (min: Severity) => (f: OnPremFinding) => SEVERITY_ORDER.indexOf(f.severity) <= SEVERITY_ORDER.indexOf(min);
+const at = (min: Severity) => (f: { severity: Severity }) => SEVERITY_ORDER.indexOf(f.severity) <= SEVERITY_ORDER.indexOf(min);
 
-export function onPremText(r: OnPremReport, min: Severity, verbose: boolean): string {
+export function onPremText(r: OnPremReport, min: Severity, verbose: boolean, blast?: BlastReport): string {
   const lines = ['Pinhole on-premises report', ''];
   if (!r.links.length) {
     lines.push('No VPN or Direct Connect links in this snapshot: no virtual private gateways, and no VPN or Direct Connect attachments on transit gateways.');
@@ -29,6 +29,14 @@ export function onPremText(r: OnPremReport, min: Severity, verbose: boolean): st
     lines.push('');
   }
   if (!shown.length) lines.push(`Nothing reachable from on-premises at or above ${min}.`);
+  const chains = (blast?.chains ?? []).filter(at(min));
+  if (blast) {
+    lines.push('', `If a host on-premises is taken over: ${blast.entries.length} foothold(s) in AWS, ${blast.chains.length} attack chain(s).`);
+    for (const c of chains) {
+      lines.push(`[${c.severity.toUpperCase()}] on-premises --> ${c.steps.map((s, i) => (i ? `--${s.service}${s.serviceName ? ` ${s.serviceName}` : ''}--> ${s.name}` : s.name)).join(' ')}`);
+      lines.push(`    ${c.why.join(' ')}`);
+    }
+  }
   lines.push('', 'Note: on-premises routers and firewalls are not visible to AWS; these paths assume they pass.');
   return `${lines.join('\n')}\n`;
 }

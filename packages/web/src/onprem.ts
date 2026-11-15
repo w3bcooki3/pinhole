@@ -1,6 +1,6 @@
 /** On-premises page: the VPN and Direct Connect links, the networks behind them, and what they reach. */
-import { analyzeOnPrem } from '@pinhole/engine';
-import type { OnPremFinding, OnPremReport } from '@pinhole/engine';
+import { analyzeOnPrem, analyzeOnPremBlast } from '@pinhole/engine';
+import type { BlastReport, OnPremFinding, OnPremReport } from '@pinhole/engine';
 import { h, on } from './dom.js';
 import * as D from './data.js';
 import type { Snap } from './data.js';
@@ -14,8 +14,39 @@ export function onPremOf(snap: Snap): OnPremReport {
   return r;
 }
 
+const chainCache = new WeakMap<Snap, BlastReport>();
+export function onPremChainsOf(snap: Snap): BlastReport {
+  let r = chainCache.get(snap);
+  if (!r) chainCache.set(snap, (r = analyzeOnPremBlast(snap.model, onPremOf(snap))));
+  return r;
+}
+
 const service = (f: OnPremFinding) => (f.protocol === 'icmp' ? 'ICMP echo' : f.ports.from === 0 && f.ports.to === 65535 ? `${f.protocol.toUpperCase()}, any port` : f.ports.from === f.ports.to ? `${f.protocol.toUpperCase()} ${f.ports.from}` : `${f.protocol.toUpperCase()} ${f.ports.from}-${f.ports.to}`);
 const KIND = { vpn: 'Site-to-Site VPN', 'direct-connect': 'Direct Connect', 'vpn-or-direct-connect': 'VPN or Direct Connect' } as const;
+
+function chainsBox(snaps: Snap[]): HTMLElement {
+  const chains = snaps.flatMap((s) => onPremChainsOf(s).chains);
+  const box = h('section', { class: 'box op-chains', style: 'margin-top:1rem' }, boxHead('If a host on-premises is taken over', chains.length ? `${D.plural(chains.length, 'attack chain')} into AWS` : 'no attack chains'));
+  box.append(
+    chains.length
+      ? h(
+          'ol',
+          { class: 'pad op-chain-list' },
+          ...chains.map((c) =>
+            h(
+              'li',
+              {},
+              sevPill(c.severity),
+              ' ',
+              h('strong', {}, ['On-premises', ...c.steps.map((s) => short(s.name))].join(' → ')),
+              h('div', { class: 'faint' }, c.why.join(' ')),
+            ),
+          ),
+        )
+      : h('p', { class: 'pad faint' }, 'No server that on-premises clients can take over reaches anything more from there.'),
+  );
+  return box;
+}
 
 export function onPremPage(ctx: { st: { snaps: Snap[] } }): HTMLElement {
   const snaps = D.latestPerScope(ctx.st.snaps);
@@ -109,6 +140,7 @@ export function onPremPage(ctx: { st: { snaps: Snap[] } }): HTMLElement {
       ? h('section', { class: 'box', style: 'margin-bottom:1rem' }, boxHead('Reachable from on-premises', `${reach} of ${D.plural(total, 'interface')}; select a row for the path`), h('div', { class: 'table-wrap' }, table))
       : h('div', { class: 'box', style: 'margin-bottom:1rem' }, empty('Nothing reachable from on-premises', 'No security group, network ACL and return route together let an on-premises address connect to any interface.')),
     detail,
+    chainsBox(snaps),
     h('p', { class: 'faint op-note' }, 'On-premises routers and firewalls are not visible to AWS; these paths assume they pass.'),
   );
 }

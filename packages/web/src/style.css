@@ -682,3 +682,5 @@ table.xt tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offs
 .repair-note { margin-top: 0.25rem; }
 .repair-stuck { font-weight: 600; }
 .warn-bar { padding: 0.5rem 0.75rem; margin-top: 0.5rem; border-radius: var(--r); border: 1px solid var(--medium); background: var(--medium-soft); color: var(--medium-ink); font-weight: 500; }
+.op-chain-list { margin: 0; padding-left: 2rem; }
+.op-chain-list li { margin-bottom: 0.75rem; }

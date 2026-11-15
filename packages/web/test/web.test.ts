@@ -324,6 +324,8 @@ describe('web console', () => {
       expect(rows.some((r) => /db/.test(r.textContent ?? ''))).toBe(false);
       rows[0]!.click();
       expect(text(doc, '.op-detail')).toMatch(/not visible to AWS/);
+      expect(text(doc, '.op-chains')).toMatch(/1 attack chain into AWS/);
+      expect(text(doc, '.op-chains')).toMatch(/On-premises → app → db/);
       api.go('ask', { askMode: 'pair', askFrom: '192.168.10.5', askTo: 'db', askProto: 'tcp', askPort: '5432' });
       expect(text(doc, '.ask-results')).toMatch(/no way back on-premises/);
       api.go('ask', { askMode: 'pair', askFrom: 'web', askTo: '10.50.1.1', askProto: 'tcp', askPort: '443' });

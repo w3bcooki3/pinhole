@@ -262,6 +262,8 @@ The report cuts destination addresses at every security group egress rule, netwo
 
 **From an interface to on-premises.** Security group, route (to a virtual private gateway attached to the VPC, or through a transit gateway to a VPN or Direct Connect attachment), network ACLs; then the replies arrive over the same link to the interface's subnet, and its network ACLs let them in on the interface's ephemeral ports.
 
+**Attack chains from on-premises.** `analyzeOnPremBlast` (`blast.ts`) treats a host on-premises that is taken over as the attacker. Its footholds are the interfaces on-premises clients reach on a service that gives command execution (remote administration, control planes, wide port ranges); from each, chains are followed exactly as from the internet. Services on-premises clients reach directly are already in the report, so chains that end at them are not repeated. Policies take `"from": "onprem", "indirect": true` to fail on these chains.
+
 Every path over a link carries a caveat: on-premises routers and firewalls are not visible to AWS. The report (`analyzeOnPrem`) uses the exposure method on the on-premises address space, cut at every security group rule, network ACL entry and route of the interface's VPC, transit gateway route, gateway route table entry and firewall rule. Severity is the internet rating of the service lowered one level, and one more when only 256 or fewer on-premises addresses reach it.
 
 ## PrivateLink
