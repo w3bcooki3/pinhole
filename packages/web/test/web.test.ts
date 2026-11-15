@@ -292,9 +292,15 @@ describe('web console', () => {
     it('policies: checks the example, shows violations, and names the field in a bad policy', () => {
       const { doc, api } = load9();
       api.go('policy');
-      expect(text(doc, '.pol-res')).toMatch(/1 of 3 rules fail/);
-      expect(text(doc, '.pol-res')).toMatch(/no-db-from-internet/);
+      expect(text(doc, '.pol-sum')).toMatch(/1 of 3 rules fails across 1 snapshot/);
+      // One card per rule, the failing one first, in words as well as by ID.
+      const cards = [...doc.querySelectorAll('.pol-rule')];
+      expect(cards).toHaveLength(3);
+      expect(cards[0]!.textContent).toMatch(/no-db-from-internet/);
+      expect(cards[0]!.textContent).toMatch(/the internet must never reach databases, not even through a compromised server/);
       expect(text(doc, '.pol-res')).toMatch(/attack chain from the internet: bastion/);
+      // The editor stays folded until it is needed.
+      expect((doc.querySelector('.pol-ed') as HTMLDetailsElement).open).toBe(false);
       const area = doc.querySelector('.pol-src') as HTMLTextAreaElement;
       area.value = JSON.stringify({ rules: [{ id: 'x', deny: { from: 'internet', to: 'nope' } }] });
       [...doc.querySelectorAll('.pol-ed button')].find((b) => b.textContent?.includes('Check'))!.dispatchEvent(new (doc.defaultView as unknown as typeof globalThis).MouseEvent('click', { bubbles: true }));
@@ -307,7 +313,7 @@ describe('web console', () => {
       const { doc, api } = page();
       api.loadText(fixture('14-outbound'), 'out.json');
       api.go('egress');
-      expect(text(doc, '.eg-stats')).toMatch(/can reach the internet/);
+      expect(text(doc, '.eg-sum')).toMatch(/can reach the internet/);
       const rows = [...doc.querySelectorAll('.eg-t tbody tr')] as HTMLElement[];
       expect(rows.length).toBeGreaterThan(0);
       const db = rows.find((r) => /db/.test(r.textContent ?? '') && /nat-1/.test(r.textContent ?? ''))!;

@@ -17,6 +17,14 @@ All notable changes to this project are recorded here. The format follows
   by other words ("vpn", "egress", "onprem"). The query page switches to the
   snapshot that holds the names typed. The demo includes on-premises and
   PrivateLink scenarios.
+- The Policies page leads with the answer (how many rules fail, across how
+  many snapshots) and shows one card per rule, written out in words, with
+  the snapshots where it fails and where it holds; the JSON editor is folded
+  away until needed. Outbound lists one row per server instead of one per
+  protocol. Graphs refit when their box changes size and never enlarge past
+  100%, so nothing is cut off at the edge; on phones the lateral-movement
+  graph is laid out top to bottom. Coverage describes what this version
+  models today.
 - Outbound: what each server can send to the internet, through an internet
   gateway (as its public IP) or a NAT gateway (as the gateway's Elastic IP),
   with the security group, routes, firewalls and network ACLs of both subnets,

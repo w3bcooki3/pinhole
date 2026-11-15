@@ -796,10 +796,11 @@ function resourcesPage(): HTMLElement {
 // ---------------------------------------------------------------- coverage
 
 const NOT_MODELLED: [string, string][] = [
-  ['AWS Network Firewall and Gateway Load Balancer', 'Traffic routed through an inspection appliance is reported as unknown past that hop.'],
-  ['IPv6', 'Only IPv4 paths are analysed. IPv6 CIDRs and egress-only gateways are detected and listed here.'],
-  ['Global Accelerator and CloudFront', 'Entry through these services is detected where possible but not traced.'],
-  ['VPN, Direct Connect and VPC endpoints', 'Routes to these targets are reported as unknown rather than blocked.'],
+  ['Third-party appliances', 'Traffic through a Gateway Load Balancer endpoint is followed, but the appliance\'s rules are not visible: it is assumed to pass, and every path through it says so.'],
+  ['Firewall rules that read the traffic', 'Network Firewall rules that match content, host names or application protocols are followed both ways; the path is marked when the answer depends on the traffic.'],
+  ['The on-premises side of VPN and Direct Connect', 'Followed up to the AWS gateway. Routers and firewalls on-premises are not visible and are assumed to pass.'],
+  ['IPv6 beyond exposure', 'Internet exposure is analysed over IPv6 for TCP and UDP. ICMPv6 and IPv6 movement between servers are not.'],
+  ['Instances acting as routers, Global Accelerator, CloudFront, Classic Load Balancers', 'Detected and listed on this page. Paths through them are reported as unknown, never as safe.'],
 ];
 
 function reportPage(): HTMLElement {
@@ -856,8 +857,8 @@ function coveragePage(): HTMLElement {
               'tr',
               {},
               h('td', { class: 'first' }, h('div', { class: 'mono' }, `${x.account} / ${x.region}`), h('div', { class: 'faint', style: 'font-size:0.75rem' }, x.name)),
-              h('td', { class: 'hide-sm' }, x.collectedAt ? x.collectedAt.replace('T', ' ').replace(/\.\d+Z$|Z$/, ' UTC') : 'unknown'),
-              h('td', { class: 'mono' }, `${x.stats.interfacesAnalysed} of ${x.stats.interfacesWithPublicIp} public`),
+              h('td', { class: 'hide-sm mono' }, x.collectedAt ? x.collectedAt.replace('T', ' ').replace(/:\d\d(\.\d+)?Z$/, ' UTC') : 'unknown'),
+              h('td', { class: 'mono' }, String(x.model.enis.size), h('span', { class: 'faint' }, ` (${x.stats.interfacesWithPublicIp} with a public IPv4)`)),
               h('td', { class: 'mono' }, String(x.stats.loadBalancersAnalysed)),
               h('td', { class: 'mono' }, String(x.findings.length)),
               h('td', { class: 'last' }, x.warnings.length ? sevPill('medium', String(x.warnings.length)) : sevPill('low', 'none')),

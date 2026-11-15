@@ -112,22 +112,44 @@ export function renderLateral(host: HTMLElement, model: NetworkModel, blast: Bla
     H = Math.max(H, list.length * (NH + GAPY));
   }
   H = Math.max(H, 260);
-  for (const [c, list] of cols) {
-    const total = list.length * (NH + GAPY) - GAPY;
-    list.forEach((n, i) => {
-      n.x = colX(c);
-      n.y = 40 + (H - total) / 2 + i * (NH + GAPY);
-    });
-  }
   const maxCol = Math.max(...cols.keys());
-  const W = colX(maxCol) + NW + 40;
-  const svgH = H + 70;
+  // A narrow box (a phone) cannot show the columns side by side at a readable size: stack them
+  // top to bottom instead, each step under a heading, with the links drawn down the right side.
+  const vertical = !opts.compact && host.getBoundingClientRect().width > 0 && host.getBoundingClientRect().width < colX(maxCol) * 0.6;
+  const headY: number[] = [];
+  let W: number;
+  let svgH: number;
+  if (vertical) {
+    let y = 8;
+    for (let c = 0; c <= maxCol; c++) {
+      headY[c] = y + 14;
+      y += 26;
+      for (const n of cols.get(c) ?? []) {
+        n.x = 12;
+        n.y = y;
+        y += NH + GAPY;
+      }
+      y += 10;
+    }
+    W = 12 + NW + 70;
+    svgH = y + 8;
+  } else {
+    for (const [c, list] of cols) {
+      const total = list.length * (NH + GAPY) - GAPY;
+      list.forEach((n, i) => {
+        n.x = colX(c);
+        n.y = 40 + (H - total) / 2 + i * (NH + GAPY);
+      });
+    }
+    W = colX(maxCol) + NW + 40;
+    svgH = H + 70;
+  }
 
   const svg = s('svg', { class: `graph lateral${opts.compact ? ' compact' : ''}`, role: 'img', 'aria-label': 'Lateral movement graph', ...(opts.compact ? { viewBox: `0 0 ${W} ${svgH}` } : {}) });
   const g = s('g');
   svg.append(g);
   const heads = ['Internet', 'Open to the internet', ...Array.from({ length: maxCol - 1 }, (_, i) => `${i + 1} hop${i ? 's' : ''} further`)];
-  heads.forEach((t, i) => g.append(s('text', { x: colX(i) + 4, y: 22, class: 'g-col' }, t)));
+  heads.forEach((t, i) => g.append(s('text', vertical ? { x: 14, y: headY[i] ?? 0, class: 'g-col' } : { x: colX(i) + 4, y: 22, class: 'g-col' }, t)));
 
   // Highlighted chain: Internet -> entry -> ... -> target.
   const chainIds = opts.selected ? ['internet', ...opts.selected.steps.map((x) => x.eniId)] : [];
@@ -135,6 +157,15 @@ export function renderLateral(host: HTMLElement, model: NetworkModel, blast: Bla
   const chainNodes = new Set(chainIds);
 
   const pathFor = (a: LNode, b: LNode) => {
+    if (vertical) {
+      // Out of the right edge of one card, into the right edge of the next, bulging further for longer links.
+      const x1 = a.x + NW;
+      const y1 = a.y + NH / 2;
+      const x2 = b.x + NW;
+      const y2 = b.y + NH / 2;
+      const bulge = Math.min(60, 18 + Math.abs(y2 - y1) * 0.12);
+      return `M${x1},${y1} C${x1 + bulge},${y1} ${x2 + bulge},${y2} ${x2},${y2}`;
+    }
     if (b.col > a.col) {
       const x1 = a.x + NW;
       const y1 = a.y + NH / 2;
@@ -206,6 +237,13 @@ export function renderLateral(host: HTMLElement, model: NetworkModel, blast: Bla
   if (opts.compact) {
     host.replaceChildren(svg);
     return { fit: () => {} };
+  }
+  if (vertical) {
+    // Tall, not wide: the box grows to the graph's height, and the page scrolls instead of the graph.
+    const canvas = host.parentElement;
+    if (canvas) canvas.style.height = `${svgH + 24}px`;
+    canvas?.classList.add('stacked');
+    return attachPanZoom(host, svg, g, W, svgH, 8);
   }
   return attachPanZoom(host, svg, g, W, svgH, 52);
 }

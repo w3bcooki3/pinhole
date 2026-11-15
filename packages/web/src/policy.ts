@@ -4,7 +4,8 @@
  * browser only.
  */
 import { checkPolicy, parsePolicy, PolicyError } from '@pinhole/engine';
-import type { PolicyFile, PolicyReport, Violation } from '@pinhole/engine';
+import { compareSeverity } from '@pinhole/engine';
+import type { PolicyFile, PolicyReport, PolicyResult, PolicyRule, Severity, Target, Violation } from '@pinhole/engine';
 import { h, on, toast } from './dom.js';
 import * as D from './data.js';
 import type { Snap } from './data.js';
@@ -78,12 +79,40 @@ export function currentPolicy(): { policy?: PolicyFile; error?: string; src: str
   }
 }
 
+/** A target in words: "the internet", a group name, or what a selector picks. */
+function targetText(t: Target): string {
+  if (t === 'internet') return 'the internet';
+  if (t === 'onprem') return 'on-premises networks';
+  if (t === '*') return 'anything';
+  if (typeof t === 'string') return t;
+  const parts: string[] = [];
+  if (t.names) parts.push(t.names.join(', '));
+  if (t.ids) parts.push(t.ids.join(', '));
+  if (t.tags) parts.push(Object.entries(t.tags).map(([k, v]) => `${k}=${Array.isArray(v) ? v.join('|') : v}`).join(', '));
+  if (t.securityGroups) parts.push(`members of ${t.securityGroups.join(', ')}`);
+  if (t.subnets) parts.push(`in ${t.subnets.join(', ')}`);
+  if (t.vpcs) parts.push(`in ${t.vpcs.join(', ')}`);
+  if (t.any) parts.push(t.any.map(targetText).join(' or '));
+  if (t.not) parts.push(`anything except ${targetText(t.not)}`);
+  return parts.join('; ') || 'anything';
+}
+
+function ruleText(r: PolicyRule): string {
+  const b = (r.deny ?? r.require)!;
+  const ports = b.ports ? ` on ${Array.isArray(b.ports) ? b.ports.join(', ') : b.ports}` : '';
+  if (r.deny) return `${targetText(b.from)} must never reach ${targetText(b.to)}${ports}${r.deny.indirect ? ', not even through a compromised server' : ''}`;
+  return `${targetText(b.from)} must always reach ${targetText(b.to)}${ports}`;
+}
+
+type Row = { snap: Snap; x: PolicyResult };
+
 export function policyPage(ctx: { st: { snaps: Snap[] }; render: () => void }): HTMLElement {
   const { policy, error, src } = currentPolicy();
-  const area = h('textarea', { class: 'pol-src mono', spellcheck: 'false', wrap: 'off', 'aria-label': 'Policy (JSON)', rows: 18 }) as HTMLTextAreaElement;
+  const area = h('textarea', { class: 'pol-src mono', spellcheck: 'false', 'aria-label': 'Policy (JSON)', rows: 22 }) as HTMLTextAreaElement;
   area.value = src;
   const check = () => {
     save(area.value);
+    editorOpen = true;
     ctx.render();
   };
   on(area, 'keydown', (e) => {
@@ -100,9 +129,9 @@ export function policyPage(ctx: { st: { snaps: Snap[] }; render: () => void }): 
   });
 
   const editor = h(
-    'section',
-    { class: 'box pol-ed' },
-    boxHead('Policy', 'JSON. Kept in this browser only.'),
+    'details',
+    { class: 'box pol-ed', ...(editorOpen || error ? { open: '' } : {}) },
+    h('summary', {}, h('span', { class: 'pol-ed-t' }, iconSvg('policy', 15), 'Edit the policy'), h('span', { class: 'faint' }, 'JSON, kept in this browser only. Ctrl+Enter checks it.')),
     h(
       'div',
       { class: 'pad' },
@@ -112,45 +141,64 @@ export function policyPage(ctx: { st: { snaps: Snap[] }; render: () => void }): 
       h('p', { class: 'faint', style: 'margin:0.5rem 0 0' }, 'Each rule is a deny (must never be reachable) or a require (must always be). Pick resources by tags, names, security groups, subnets, VPCs or IDs. ', h('a', { href: 'docs/#policies', target: '_blank', rel: 'noopener' }, 'Policy reference')),
     ),
   );
+  on(editor, 'toggle', () => (editorOpen = (editor as HTMLDetailsElement).open));
 
-  const results: HTMLElement[] = [];
-  if (policy) {
-    const all = ctx.st.snaps.map((snap) => ({ snap, r: reportFor(snap, src, policy) }));
-    all.sort((a, b) => b.r.failed - a.r.failed);
-    for (const { snap, r } of all) results.push(resultBox(snap, r));
-  }
-  return h(
-    'div',
-    { class: 'page' },
-    h('div', { class: 'ph' }, h('div', {}, h('h1', {}, 'Policies'), h('p', {}, 'Write down what must never be reachable and what must always be. Every rule is checked exactly against each loaded snapshot.'))),
-    h('div', { class: 'pol-grid' }, editor, h('div', { class: 'pol-res' }, ...(results.length ? results : [error ? empty('The policy has an error', 'Fix it to see results.') : empty('No snapshots', 'Load a snapshot to check the policy.')]))),
+  const head = h('div', { class: 'ph' }, h('div', {}, h('h1', {}, 'Policies'), h('p', {}, 'Write down what must never be reachable and what must always be. Every rule is checked exactly against each loaded snapshot.')));
+  if (!policy) return h('div', { class: 'page pol-page' }, head, editor, h('div', { class: 'box pol-res' }, empty('The policy has an error', 'Fix it above to see results.')));
+  if (!ctx.st.snaps.length) return h('div', { class: 'page pol-page' }, head, editor, h('div', { class: 'box pol-res' }, empty('No snapshots', 'Load a snapshot to check the policy.')));
+
+  // One card per rule, across every snapshot: where it fails, where it holds, where it does not apply.
+  const reports = ctx.st.snaps.map((snap) => ({ snap, r: reportFor(snap, src, policy) }));
+  const rules = policy.rules.map((rule) => {
+    const rows: Row[] = reports.map(({ snap, r }) => ({ snap, x: r.results.find((x) => x.id === rule.id)! })).filter((y) => y.x);
+    const fail = rows.filter((y) => y.x.status === 'fail');
+    const pass = rows.filter((y) => y.x.status === 'pass' && y.x.matched);
+    const none = rows.filter((y) => y.x.status === 'pass' && !y.x.matched);
+    return { rule, fail, pass, none, severity: rows[0]?.x.severity ?? 'medium' };
+  });
+  rules.sort((a, b) => (b.fail.length ? 1 : 0) - (a.fail.length ? 1 : 0) || compareSeverity(a.severity, b.severity));
+  const failing = rules.filter((r) => r.fail.length).length;
+  const holding = rules.filter((r) => !r.fail.length && r.pass.length).length;
+  const idle = rules.length - failing - holding;
+
+  const rest = [holding ? `${holding} ${holding === 1 ? 'holds' : 'hold'}` : '', idle ? `${idle} ${idle === 1 ? 'matches' : 'match'} nothing loaded` : ''].filter(Boolean).join(', ');
+  const summary = h(
+    'p',
+    { class: 'pol-sum' },
+    h('strong', {}, failing ? `${failing} of ${D.plural(rules.length, 'rule')} ${failing === 1 ? 'fails' : 'fail'}` : `All ${D.plural(rules.length, 'rule')} hold`),
+    ` across ${D.plural(reports.length, 'snapshot')}${failing && rest ? `; ${rest}` : ''}.`,
   );
+
+  return h('div', { class: 'page pol-page' }, head, summary, h('div', { class: 'pol-res' }, ...rules.map(ruleCard)), editor);
 }
 
-function resultBox(snap: Snap, r: PolicyReport): HTMLElement {
+let editorOpen = false;
+
+function ruleCard(c: { rule: PolicyRule; fail: Row[]; pass: Row[]; none: Row[]; severity: Severity }): HTMLElement {
+  const where = (rows: Row[]) => rows.map((y) => `${y.snap.account} / ${y.snap.region}`).join(', ');
+  const status = c.fail.length ? sevPill(c.severity) : c.pass.length ? h('span', { class: 'tag safe-tag' }, 'Holds') : h('span', { class: 'tag idle-tag' }, 'Matches nothing');
+  const count = c.fail.reduce((n, y) => n + y.x.violations.length, 0);
   return h(
     'section',
-    { class: 'box', style: 'margin-bottom:1rem' },
-    boxHead(`${snap.account} / ${snap.region}`, r.failed ? `${r.failed} of ${D.plural(r.results.length, 'rule')} fail` : `All ${D.plural(r.results.length, 'rule')} pass`),
+    { class: `box pol-rule ${c.fail.length ? 'fail' : c.pass.length ? 'pass' : 'idle'}` },
     h(
-      'ul',
-      { class: 'pol-list' },
-      ...r.results.map((x) =>
-        h(
-          'li',
-          { class: `pol-r ${x.status}` },
-          h(
-            'div',
-            { class: 'pol-h' },
-            x.status === 'fail' ? sevPill(x.severity) : x.matched ? h('span', { class: 'tag safe-tag' }, 'Pass') : h('span', { class: 'tag idle-tag', title: 'Nothing in this snapshot matches the rule' }, 'No match'),
-            h('strong', { class: 'mono' }, x.id),
-            h('span', { class: 'faint' }, x.matched ? `${x.kind}, ${D.plural(x.matched, 'resource')}${x.checked ? `, ${D.plural(x.checked, x.kind === 'require' ? 'pair' : 'path')} checked` : ''}` : x.kind),
-          ),
-          x.description ? h('div', { class: 'dim' }, x.description) : null,
-          x.violations.length ? h('div', { class: 'pol-v' }, ...x.violations.slice(0, 20).map(violation), x.violations.length > 20 ? h('p', { class: 'faint' }, `and ${x.violations.length - 20} more`) : null) : null,
-        ),
+      'div',
+      { class: 'pol-rh' },
+      h('div', { class: 'pol-rt' }, status, h('strong', {}, c.rule.description ?? ruleText(c.rule))),
+      h('div', { class: 'pol-rs' }, h('span', { class: 'mono' }, c.rule.id), ' · ', c.rule.deny ? 'deny' : 'require', ': ', ruleText(c.rule)),
+      c.fail.length ? h('div', { class: 'pol-rc' }, `${D.plural(count, c.rule.deny ? 'connection breaks it' : 'connection is missing', c.rule.deny ? 'connections break it' : 'connections are missing')} in ${D.plural(c.fail.length, 'snapshot')}`) : null,
+    ),
+    ...c.fail.map((y) =>
+      h(
+        'div',
+        { class: 'pol-snap' },
+        h('div', { class: 'pol-sh' }, h('span', { class: 'mono' }, `${y.snap.account} / ${y.snap.region}`), h('span', { class: 'faint' }, `${D.plural(y.x.violations.length, 'violation')}, ${D.plural(y.x.matched, 'resource')}, ${D.plural(y.x.checked, y.x.kind === 'require' ? 'pair' : 'path')} checked`)),
+        h('div', { class: 'pol-v' }, ...y.x.violations.slice(0, 20).map(violation), y.x.violations.length > 20 ? h('p', { class: 'faint' }, `and ${y.x.violations.length - 20} more`) : null),
       ),
     ),
+    c.pass.length || c.none.length
+      ? h('div', { class: 'pol-foot faint' }, c.pass.length ? h('span', { title: where(c.pass) }, c.pass.length > 2 ? `Holds in ${D.plural(c.pass.length, 'snapshot')}.` : `Holds in ${where(c.pass)}.`) : null, c.none.length ? h('span', { title: where(c.none) }, ` Matches nothing in ${D.plural(c.none.length, 'other snapshot')}.`) : null)
+      : null,
   );
 }
 

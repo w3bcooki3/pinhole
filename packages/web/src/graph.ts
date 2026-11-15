@@ -288,6 +288,8 @@ export function renderGraph(host: HTMLElement, rows: Row[], opts: GraphOptions =
 /** Pan (drag), zoom (wheel and buttons) and fit-to-screen for a graph SVG. */
 export function attachPanZoom(host: HTMLElement, svg: SVGElement, g: SVGElement, W: number, H: number, top = 40, keep?: { y0: number; y1: number }): { fit: () => void } {
   const view = { x: 0, y: 0, k: 1 };
+  // Once the reader pans or zooms, a resize no longer refits the graph.
+  let touched = false;
   const apply = () => g.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`);
   const fit = () => {
     const rect = host.getBoundingClientRect();
@@ -296,7 +298,8 @@ export function attachPanZoom(host: HTMLElement, svg: SVGElement, g: SVGElement,
     top = Math.max(top, bar ? bar.offsetTop + bar.offsetHeight + 8 : 0);
     // Fit the whole graph when that keeps labels readable (50% or more); otherwise
     // start at 50%, top-aligned, and let the reader pan.
-    view.k = Math.max(0.5, Math.min(1.6, (rect.width - 40) / W, (rect.height - top - 24) / H)) || 1;
+    // Never enlarge past 100%: a few nodes in a wide box stay their normal size.
+    view.k = Math.max(0.5, Math.min(1, (rect.width - 40) / W, (rect.height - top - 24) / H)) || 1;
     view.x = Math.max(8, (rect.width - W * view.k) / 2);
     // Centre vertically when the graph is shorter than the canvas.
     view.y = Math.max(top, (rect.height - H * view.k) / 2);
@@ -309,14 +312,27 @@ export function attachPanZoom(host: HTMLElement, svg: SVGElement, g: SVGElement,
   };
   fit();
   // Listeners on window must not pile up across re-renders of the same host.
-  const holder = host as HTMLElement & { _ac?: AbortController };
+  const holder = host as HTMLElement & { _ac?: AbortController; _ro?: ResizeObserver };
   holder._ac?.abort();
   const ac = new AbortController();
   holder._ac = ac;
+  // The box can change size after the first layout (a scrollbar appears, a panel opens, the window
+  // is resized): refit, so nothing is left outside it.
+  holder._ro?.disconnect();
+  if (typeof ResizeObserver === 'function') {
+    let last = 0;
+    holder._ro = new ResizeObserver(() => {
+      const w = Math.round(host.getBoundingClientRect().width);
+      if (w && w !== last && !touched) fit();
+      last = w;
+    });
+    holder._ro.observe(host);
+  }
   let drag: { x: number; y: number } | undefined;
   svg.addEventListener('pointerdown', (e) => {
     if ((e.target as Element).closest('.g-node')) return;
     drag = { x: e.clientX - view.x, y: e.clientY - view.y };
+    touched = true;
     host.classList.add('panning');
   });
   window.addEventListener('pointermove', (e) => {
@@ -330,7 +346,10 @@ export function attachPanZoom(host: HTMLElement, svg: SVGElement, g: SVGElement,
     host.classList.remove('panning');
   }, { signal: ac.signal });
   svg.addEventListener('wheel', (e) => {
+    // Inside a scrolling page the wheel scrolls the page; zoom with Ctrl (or a pinch) or the buttons.
+    if (!host.closest('.graph-page') && !e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
+    touched = true;
     const rect = host.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
@@ -341,11 +360,16 @@ export function attachPanZoom(host: HTMLElement, svg: SVGElement, g: SVGElement,
     apply();
   }, { passive: false });
   const zoom = (f: number) => {
+    touched = true;
     view.k = Math.min(2.5, Math.max(0.3, view.k * f));
     apply();
   };
   const z = h('div', { class: 'zoom' });
-  for (const [label, act, aria] of [['+', () => zoom(1.2), 'Zoom in'], ['−', () => zoom(1 / 1.2), 'Zoom out'], ['⤢', fit, 'Fit to screen']] as const) {
+  const refit = () => {
+    touched = false;
+    fit();
+  };
+  for (const [label, act, aria] of [['+', () => zoom(1.2), 'Zoom in'], ['−', () => zoom(1 / 1.2), 'Zoom out'], ['⤢', refit, 'Fit to screen']] as const) {
     const b = h('button', { type: 'button', 'aria-label': aria }, label);
     b.addEventListener('click', act);
     z.append(b);
