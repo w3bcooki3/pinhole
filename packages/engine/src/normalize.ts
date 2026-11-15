@@ -35,6 +35,12 @@ function tagName(tags: { Key?: string; Value?: string }[] | undefined): string |
   return tags?.find((t) => t.Key === 'Name')?.Value;
 }
 
+function tagMap(tags: { Key?: string; Value?: string }[] | undefined): { tags?: Record<string, string> } {
+  const out: Record<string, string> = {};
+  for (const t of tags ?? []) if (t.Key !== undefined) out[t.Key] = t.Value ?? '';
+  return Object.keys(out).length ? { tags: out } : {};
+}
+
 function tryCidr(text: string | undefined, warnings: Warning[], resourceId: string): Cidr | undefined {
   if (!text || !isIpv4Cidr(text)) return undefined;
   try {
@@ -176,6 +182,7 @@ export function normalize(input: unknown): NetworkModel {
       cidrs: [...texts].map((t) => tryCidr(t, warnings, v.VpcId)).filter((c): c is Cidr => !!c),
       ipv6CidrTexts: (v.Ipv6CidrBlockAssociationSet ?? []).map((a) => a.Ipv6CidrBlock).filter((x): x is string => !!x),
       ...(v.OwnerId ? { ownerId: v.OwnerId } : {}),
+      ...tagMap(v.Tags),
     });
   }
   for (const s of ec2.Subnets ?? []) {
@@ -187,6 +194,7 @@ export function normalize(input: unknown): NetworkModel {
       cidr,
       availabilityZone: s.AvailabilityZone ?? '',
       ...(s.AvailabilityZoneId ? { availabilityZoneId: s.AvailabilityZoneId } : {}),
+      ...tagMap(s.Tags),
     });
   }
 
@@ -298,6 +306,7 @@ export function normalize(input: unknown): NetworkModel {
       id: g.GroupId,
       name: g.GroupName ?? g.GroupId,
       vpcId: g.VpcId ?? '',
+      ...tagMap(g.Tags),
       ingress: rules.filter((r) => !r.egress),
       egress: rules.filter((r) => r.egress),
     });
@@ -413,6 +422,7 @@ export function normalize(input: unknown): NetworkModel {
     model.instances.set(i.InstanceId, {
       id: i.InstanceId,
       ...(name ? { name } : {}),
+      ...tagMap(i.Tags),
       state: i.State?.Name ?? 'unknown',
       ...(primary?.NetworkInterfaceId ? { primaryEniId: primary.NetworkInterfaceId } : {}),
       eniIds: nics.map((x) => x.NetworkInterfaceId).filter((x): x is string => !!x),

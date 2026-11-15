@@ -5,12 +5,15 @@
  */
 import {
   analyzeBlastRadius,
+  analyzeCleanup,
   analyzeExposure,
   analyzeHygiene,
   applyChanges,
   changeScope,
+  cleanupFindings,
   compareSeverity,
   crossChains,
+  describeBreak,
   diffExposure,
   evaluatePath,
   findFixes,
@@ -20,8 +23,9 @@ import {
   reachServices,
   serviceLabel,
   SEVERITY_ORDER,
+  summarizeBreaks,
 } from '@pinhole/engine';
-import type { BlastReport, Change, CrossChain, ExposureDiff, JoinLink, JoinResult, FixCandidate, FixPlan, HygieneFinding, NetworkModel, PathResult, ServiceReach, Severity } from '@pinhole/engine';
+import type { Breakage, BlastReport, MinCut, Change, CrossChain, ExposureDiff, JoinLink, JoinResult, FixCandidate, FixPlan, HygieneFinding, NetworkModel, PathResult, ServiceReach, Severity } from '@pinhole/engine';
 
 export class LookupError extends Error {}
 
@@ -101,7 +105,21 @@ function serviceLine(s: ServiceReach): string {
 
 // ------------------------------------------------------------------ blast
 
-export function blastText(model: NetworkModel, b: BlastReport, minSeverity: Severity): string {
+export function cutText(c: MinCut): string[] {
+  if (!c.before) return [];
+  const lines = ['', `Crown jewels: ${c.jewels.map((j) => `${j.name} (${j.reason})`).join('; ')}`];
+  if (c.uncuttable) {
+    lines.push('Smallest cut: some path to a crown jewel goes through a resource without security groups, so no set of rule removals cuts it.');
+    return lines;
+  }
+  lines.push(`Smallest cut: removing ${c.ruleIds.length} rule(s) leaves no attack path to any crown jewel${c.verified ? ' (verified by re-analysis)' : ` (NOT verified: ${c.after} chain(s) remain)`}.`);
+  for (const r of c.rules) lines.push(`  - ${r.id} in ${r.groupId}: ${r.text}`);
+  breakLines(c.breaks, '  ').forEach((l) => lines.push(l));
+  for (const x of c.cli) lines.push(`  $ ${x}`);
+  return lines;
+}
+
+export function blastText(model: NetworkModel, b: BlastReport, minSeverity: Severity, cut?: MinCut): string {
   const limit = SEVERITY_ORDER.indexOf(minSeverity);
   const chains = b.chains.filter((c) => SEVERITY_ORDER.indexOf(c.severity) <= limit);
   const lines: string[] = [];
@@ -116,6 +134,7 @@ export function blastText(model: NetworkModel, b: BlastReport, minSeverity: Seve
     for (const w of c.why) lines.push(`    ${w}`);
   }
   if (!chains.length) lines.push(`No attack chains at or above ${minSeverity}.`);
+  if (cut) lines.push(...cutText(cut));
   return `${lines.join('\n')}\n`;
 }
 
@@ -177,11 +196,12 @@ export function fixText(fixes: { label: string; severity: Severity; fixes: FixCa
     const shown = all ? f.fixes : f.fixes.slice(0, 1);
     if (!shown.length) lines.push('    No fix found automatically.');
     for (const x of shown) {
-      lines.push(`  ${x.verified ? 'Verified' : 'NOT verified'}: ${x.title}`);
+      lines.push(`  ${x.verified ? (x.safe ? 'Verified, safe' : 'Verified') : 'NOT verified'}: ${x.title}`);
       for (const s of x.steps) lines.push(`    - ${s}`);
       if (x.bonus.length) lines.push(`    Also closes: ${x.bonus.map(delta).join('; ')}`);
       if (x.collateral.length) lines.push(`    Also affects (check these are not wanted): ${x.collateral.map(delta).join('; ')}`);
       if (x.opened.length) lines.push(`    WARNING, opens: ${x.opened.map(delta).join('; ')}`);
+      breakLines(x.breaks, '    ').forEach((l) => lines.push(l));
       if (x.stillReachable.length) lines.push(`    Still reachable after a compromise of: ${[...new Set(x.stillReachable.map((c) => c.steps[0]!.name))].join(', ')}`);
       for (const c of x.cli) lines.push(`    $ ${c}`);
     }
@@ -189,6 +209,18 @@ export function fixText(fixes: { label: string; severity: Severity; fixes: FixCa
   }
   if (!fixes.length) lines.push('Nothing to fix at this severity.');
   return `${lines.join('\n')}\n`;
+}
+
+/** Wanted traffic a change breaks, then a count of address-range connections it also cuts. */
+function breakLines(list: Breakage[], pad: string): string[] {
+  const { wanted, network } = summarizeBreaks(list);
+  const out = wanted.slice(0, 8).map((b) => `${pad}BREAKS ${describeBreak(b)}`);
+  if (wanted.length > 8) out.push(`${pad}... and ${wanted.length - 8} more`);
+  if (network.length) {
+    const n = new Set(network.map((b) => `${b.flow.from}>${b.flow.to}`)).size;
+    out.push(`${pad}Also cuts ${n} connection(s) allowed only by address ranges: ${network.slice(0, 3).map(describeBreak).join('; ')}${network.length > 3 ? '; ...' : ''}`);
+  }
+  return out;
 }
 
 const delta = (d: ExposureDiff['deltas'][number]) => `${d.status} ${d.resourceName} ${d.protocol}${d.ports ? `/${d.ports.from === d.ports.to ? d.ports.from : `${d.ports.from}-${d.ports.to}`}` : ''}`;
@@ -205,12 +237,12 @@ export function fixesFor(model: NetworkModel, minSeverity: Severity) {
 
 export function hygieneText(list: HygieneFinding[]): string {
   if (!list.length) return 'No rule hygiene findings.\n';
-  const lines = list.flatMap((h) => [`${sevTag(h.severity)} ${h.title}${h.inExposure ? '  (already an internet exposure)' : ''}`, `    ${h.detail}`, ...(h.cli ?? []).map((c) => `    $ ${c}`)]);
+  const lines = list.flatMap((h) => [`${sevTag(h.severity)} ${h.title}${h.inExposure ? '  (already an internet exposure)' : ''}`, `    ${h.detail}`, ...(h.cli ?? []).map((x) => `    $ ${x}`)]);
   return `${lines.join('\n')}\n`;
 }
 
 export function hygiene(model: NetworkModel) {
-  return analyzeHygiene(model, analyzeExposure(model)).sort((a, b) => compareSeverity(a.severity, b.severity));
+  return [...analyzeHygiene(model, analyzeExposure(model)), ...cleanupFindings(model, analyzeCleanup(model))].sort((a, b) => compareSeverity(a.severity, b.severity));
 }
 
 // ------------------------------------------------------------------ whatif
@@ -251,9 +283,9 @@ export function shortcutChanges(model: NetworkModel, revoke: string[], removeNac
 
 // ------------------------------------------------------------------ plan
 
-export function plan(model: NetworkModel): FixPlan {
+export function plan(model: NetworkModel, protect?: (m: NetworkModel) => number): FixPlan {
   const e = analyzeExposure(model);
-  return planFixes(model, e, analyzeBlastRadius(model, e));
+  return planFixes(model, e, analyzeBlastRadius(model, e), protect ? { protect } : {});
 }
 
 export function planText(p: FixPlan): string {
@@ -261,6 +293,11 @@ export function planText(p: FixPlan): string {
   const lines = [
     `Fix plan: ${p.steps.length} change(s) close ${p.before.exposures - p.after.exposures} of ${p.before.exposures} critical and high exposures and ${p.before.chains - p.after.chains} of ${p.before.chains} attack chains.`,
     'Each step was applied to a copy of the snapshot and everything re-analysed. Apply them in order.',
+    p.steps.length > 1
+      ? p.optimality.status === 'optimal'
+        ? `No plan with fewer steps exists among the ${p.stats.candidates} candidate changes considered (${p.optimality.searched} smaller plans checked).`
+        : `At least ${p.optimality.lowerBound} steps are needed; the search for a shorter plan stopped after ${p.optimality.searched} tries.`
+      : '',
     '',
   ];
   p.steps.forEach((s, i) => {
@@ -269,6 +306,7 @@ export function planText(p: FixPlan): string {
     if (s.closes.length) lines.push(`   Closes: ${s.closes.map(delta).join('; ')}`);
     if (s.chainsCut.length) lines.push(`   Cuts chains: ${s.chainsCut.map((c) => c.steps.map((x) => x.name).join(' -> ')).join('; ')}`);
     if (s.collateral.length) lines.push(`   Also affects (check these are not wanted): ${s.collateral.map(delta).join('; ')}`);
+    breakLines(s.breaks, '   ').forEach((l) => lines.push(l));
     for (const c of s.cli) lines.push(`   $ ${c}`);
     lines.push('');
   });

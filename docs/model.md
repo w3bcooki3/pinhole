@@ -153,6 +153,60 @@ Sources: [VPC peering basics](https://docs.aws.amazon.com/vpc/latest/peering/vpc
 - **broad-internal-source:** a private range of /16 or wider allowed to remote administration, a data store or a control plane.
 - **all-ports:** every port or protocol allowed from a CIDR.
 
+## Internal traffic a change breaks
+
+`packages/engine/src/internal.ts`. For a list of changes, the interfaces they can affect are found (members of changed security groups, interfaces in subnets whose network ACL or route table changes, interfaces a group is attached to or detached from). Every pair into or out of those interfaces is evaluated with `reachServices` before and after, and every protocol and port range that no longer gets through is reported. Each lost range carries its evidence:
+
+| Evidence | Meaning |
+|---|---|
+| `load-balancer` | a load balancer node reaching a registered target on its traffic port |
+| `health-check` | the same, on a separate health check port (HTTP and HTTPS health checks are TCP) |
+| `group-reference` | the rule that let it in names the source's security group |
+| `network` | allowed only by an address range or prefix list: may or may not be used |
+
+A fix is *safe* when it is verified, opens nothing, and loses nothing with the first three kinds of evidence. Public IP, internet gateway and listener changes do not carry traffic between private addresses and are not counted.
+
+The least-privilege rewrite finds the interfaces whose only allowing rule, on some service, is the rule in question (`usersOf`), and replaces the rule's source with a greedy cover of their security groups (groups with no other members first; never a group containing the excluded foothold), plus `/32` addresses for interfaces without a usable group. It is offered when that takes at most eight rules.
+
+## Fix plan proof
+
+After the greedy plan and pruning, `planFixes` records, for every goal it closed, the connections the goal depends on (`needsOf`): an exposure needs the internet to reach its resource on its ports; a chain needs its entries' exposures and every hop of every route found. A candidate *can close* a need only if it revokes or narrows a rule that matches the need's traffic on the destination (or the source, for egress rules), adds a deny network ACL entry for its protocol and ports in either subnet, or removes the interface's public IP or a group; adding a rule or an allow entry can close nothing. This is sound for the candidates the planner generates, all of which only take access away.
+
+- **Lower bound:** the minimum hitting set of the goals' candidate sets, by branch and bound with a disjoint-sets bound.
+- **Search:** every set of the relevant candidates of each size from the bound up to the plan's size minus one, skipping sets with two changes to the same rule, network ACL entry number or public IP. A set is accepted if, re-analysed, it closes every goal the plan closed, opens nothing, breaks no more wanted traffic and no more protected (policy) traffic. Because candidates only take access away, a goal left open by some candidates is left open by any subset of them; those sets are skipped without re-analysis.
+- **Result:** `optimal` with the plan's size as the bound when every smaller size was searched (or a smaller plan was found, which then replaces it), `bounded` with the bound when the budget (`proofBudget`, default 500 re-analyses) ran out. Optimality is relative to the candidates considered, not to every possible change.
+
+## Policies
+
+`packages/engine/src/policy.ts`. The file format is in the documentation site's Policies page and validated by `parsePolicy`. Selectors match interfaces (not load balancer nodes) and load balancers; tags are merged from the VPC, then the subnet, then the instance, the most specific winning.
+
+- *deny from internet*: every exposure finding on a matching resource whose ports overlap, and every load balancer target that matches and is reachable on an overlapping target port. With `indirect`, every attack chain whose target matches and whose last service overlaps.
+- *deny between groups*: every reachable service between every pair of matching interfaces (`reachServices`).
+- *require from internet*: a finding on the resource covering the whole port range; otherwise the result of `evaluatePath` from a documentation address shows where it is blocked.
+- *require between groups*: a reachable service covering the whole range for every pair; otherwise `evaluatePath` shows the blocking hop.
+
+`diffPolicy` compares two reports by connection, for Terraform plans.
+
+## Crown jewels and the minimum cut
+
+`packages/engine/src/cut.ts` and `jewels.ts`. Crown jewels are interfaces tagged `pinhole:crown-jewel` (or `crown-jewel`; any value but false, no or 0) or with a `data-classification` / `classification` tag of confidential, restricted, secret, top-secret, sensitive, PII, PHI, PCI or critical, on the instance, subnet or VPC. Without any, the targets of data and control-plane chains are used. Chains to tagged jewels get 25 added to their score.
+
+The attack graph has a source (the internet), `controls(eni)` nodes, `reaches(jewel)` nodes and a sink. Edges: internet to each entry (every rule that admits the internet to it, by `allowingRules`), controls to controls for pivot services, controls to reaches for a jewel's data, control-plane, admin or critical services, reaches to sink. An edge's capacity is the number of rules that must all go to cut it, times 10 for entries whose worst exposure is medium or lower (public websites) and at least 5 for rules that reference a security group. An edge with no security group rule to remove (a destination without groups) has infinite capacity. Edmonds-Karp gives the minimum cut; its rules are pruned one at a time while no chain to a jewel returns, and the result is verified by re-analysis.
+
+## Rule cleanup
+
+`packages/engine/src/cleanup.ts`. Comparisons are made on cells: addresses cut at every CIDR and prefix list boundary of the rules involved, ports at every port boundary, ICMP at every type and code mentioned, plus one peer per referenced group outside every CIDR. One packet per cell goes through `evaluateSg` or `evaluateNacl`. Within a cell every rule matches all or nothing, so agreement on every cell is agreement on every packet.
+
+- *Covered together*: a rule whose every allowed cell another rule of its group allows (single-rule cover is left to hygiene).
+- *Covered by an attached group*: every interface and load balancer that uses the rule's group has other groups that together allow every cell.
+- *Network ACL entry decided by earlier entries*: every cell the entry matches is matched first by an earlier entry (not the default `*` rule); harmless when they give the same answer.
+- *Compaction*: per protocol, all-protocol rules first; per referenced group and prefix list, port ranges merged; per port cell, the CIDR rules' address set (minus all-protocol addresses) merged with equal neighbours and written as the fewest CIDR blocks. ICMP, protocols without ports and IPv6 rules are kept. The result is offered only when it has fewer rules and `sameRules` confirms it cell by cell.
+- *Quotas*: 80% of the defaults: 60 rules per direction per group, 20 per direction per network ACL, 5 groups per interface ([Amazon VPC quotas](https://docs.aws.amazon.com/vpc/latest/userguide/amazon-vpc-limits.html)).
+
+## Differential testing
+
+`packages/engine/test/fuzz.test.ts` and `reference.ts`. A seeded generator builds random networks: one VPC, two subnets, an internet gateway attached or not, main and subnet route tables with default and more-specific routes to the gateway, a NAT gateway or a blackhole, default and subnet network ACLs with random entries, three security groups with random rules, and public addresses on some interfaces. For every interface, client address, protocol and port in a fixed list, the reference evaluator answers from the snapshot JSON directly, and the engine answers twice: `evaluatePath` and the exposure report's exact `sourceRanges`. Any disagreement fails with the seed and the snapshot. Compaction is fuzzed against a direct rule matcher in the same way.
+
 ## Out of scope, detected and warned about
 
 | Detected | How |

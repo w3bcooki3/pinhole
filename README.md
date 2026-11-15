@@ -16,7 +16,9 @@ It answers three questions, exactly rather than by sampling:
 
 1. **What can the internet open a connection to?** Every interface and load balancer listener, the exact ports and source addresses, and the rule that allowed each hop: public IP, internet gateway, network ACL in both directions, security group, return route.
 2. **If one of those servers is compromised, what next?** Attack chains through SSH, RDP, cluster control planes and databases to internal resources the internet cannot reach directly.
-3. **What is the smallest fix?** Each candidate change is applied to a copy of the snapshot and the analysis is run again, so every suggested fix is proved, with what else it would affect and the AWS CLI command to apply it.
+3. **What is the smallest fix that breaks nothing?** Each candidate change is applied to a copy of the snapshot and the analysis is run again, so every suggested fix is proved. Each one is also checked for the internal traffic it would cut (a load balancer losing its targets, a health check, a connection a rule grants by security group), and the narrowest fix rewrites a rule to keep exactly what uses it. The fix plan comes with a proof that no shorter plan exists among the changes considered.
+
+It also checks your own rules (*the database is never reachable from the internet, even through a compromised server*; *the bastion can always reach it on 22*), finds the smallest set of rules that cuts every attack path to your crown jewels, and shows which security groups can be smaller with exactly the same effect.
 
 ## Quick start
 
@@ -184,7 +186,13 @@ pinhole blast shared-services.json payments.json
 pinhole fix snapshot.json                 # critical and high findings
 pinhole fix snapshot.json --all           # every candidate, not just the best
 
-# Redundant, shadowed, stale, unused and overly broad rules
+# Fix plan with a proof of its size; --policy keeps what your require rules need
+pinhole fix snapshot.json --plan --policy policy.json
+
+# Your own rules: what must never, and must always, be reachable
+pinhole policy snapshot.json policy.json --fail-on high
+
+# Redundant, shadowed, stale, unused and overly broad rules; groups that can be smaller
 pinhole hygiene snapshot.json
 
 # Before and after, without touching AWS
@@ -280,6 +288,8 @@ Every evaluation rule has unit tests, written before the implementation. On top 
 | [10](fixtures/10-ipv6-exposure) | IPv6 without a public IP; egress-only gateways; network ACL IPv6 rules and return ports |
 | [11](fixtures/11-cross-account-peering) | Attack chains across two accounts: peering routes on both sides, security group references across peering, no route back |
 
+On top of the fixtures, a differential test generates random networks (routes with blackholes and NAT, network ACLs, security groups, public addresses, gateways) and holds the engine to a separate reference evaluator, written one packet at a time and sharing no code with it: 400 networks and over 120,000 questions on every run, and 6,000 networks (1.8 million questions) without a difference when run longer (`PINHOLE_FUZZ_RUNS=6000 npm test`). Rule compaction is checked the same way.
+
 CI runs every test and fixture on each push, on Node 22 and 24. It also runs both collectors (SDK and CloudShell script) against a fake AWS backed by the fixtures.
 
 ```sh
@@ -330,6 +340,7 @@ The engine has no dependencies so that it can later share a core with IAM Lens (
 - **M2 (0.2, done):** `pinhole can`, rule hygiene, blast radius and attack chains, verified fixes, what-if simulation, in the CLI and the console.
 - **M3 (0.2, done):** Terraform plan check, snapshot diff, SARIF and Markdown output, and a GitHub Action that fails pull requests that open new internet exposure.
 - **M4 (unreleased, done):** attack chains that cross accounts and Regions through peering and transit gateways, with a verified plan to cut them; a fix planner that considers several open risks at once, re-measures lazily and drops redundant steps.
+- **M5 (unreleased, done):** fixes checked for the internal traffic they break, least-privilege rewrites, a fix plan with a proof of its size, network policies, crown jewels and a verified minimum cut, exact rule compaction, and differential testing against a reference evaluator.
 - **Next:** IPv6 lateral movement and ICMPv6, and AWS Network Firewall and other appliances in the path.
 
 ## Security

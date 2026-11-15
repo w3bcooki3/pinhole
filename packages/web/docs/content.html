@@ -143,11 +143,12 @@ pinhole collect --profile audit --region us-east-1,eu-west-1 --out-dir snapshots
   <h2>The console</h2>
   <p class="lede">Load one or many snapshots, across accounts and Regions. Everything is analysed in the browser tab.</p>
   <div class="cards two">
-    <div class="card"><h4>Dashboard</h4><p>Exposures by severity, the verified fix plan, exposures by kind of service, the top exposures and attack chains, and a map of accounts and Regions.</p></div>
+    <div class="card"><h4>Dashboard</h4><p>Exposures by severity, the verified fix plan (proved the fewest changes when the search finishes), exposures by kind of service, the top exposures and attack chains, and a map of accounts and Regions.</p></div>
     <div class="card"><h4>Attack graph</h4><p>Internet, entry points, exposed resources and load balancer targets, grouped by account, Region and VPC. Pan, zoom, filter and highlight.</p></div>
-    <div class="card"><h4>Blast radius</h4><p>If an internet-facing server is compromised, what the attacker reaches next. Each chain shows its route, why it works and the rules that cut it, including chains that cross into another account.</p></div>
-    <div class="card"><h4>Exposures</h4><p>Every service the internet can open a connection to. Each opens as a page with a plain verdict, the path hop by hop, and verified fixes with commands.</p></div>
-    <div class="card"><h4>Rule hygiene</h4><p>Rules that are redundant, shadowed, stale, unused or broader than they need to be.</p></div>
+    <div class="card"><h4>Blast radius</h4><p>If an internet-facing server is compromised, what the attacker reaches next. Each chain shows its route, why it works and the rules that cut it, including chains that cross into another account. Crown jewels come first, with the smallest set of rules that cuts every path to them.</p></div>
+    <div class="card"><h4>Exposures</h4><p>Every service the internet can open a connection to. Each opens as a page with a plain verdict, the path hop by hop, and verified fixes with commands, each marked safe or with the internal traffic it would break.</p></div>
+    <div class="card"><h4>Rule hygiene</h4><p>Rules that are redundant, shadowed, stale, unused or broader than they need to be, groups that can be smaller with exactly the same effect, and rules near AWS quotas.</p></div>
+    <div class="card"><h4>Policies</h4><p>Your own rules about what must never and must always be reachable, checked against every snapshot as you type, with the connection that breaks each one.</p></div>
     <div class="card"><h4>Simulator</h4><p>Switch rules off, edit them, or drop public IPs, and see which paths and chains close or open. Exports the changes for the CLI.</p></div>
     <div class="card"><h4>Compare</h4><p>Load an older snapshot of the same account and Region to see what opened or closed, and the configuration changes behind it.</p></div>
     <div class="card"><h4>Reachability query</h4><p>"Can A reach B, and on what?" and "Who can reach B?", by name, ID or IP.</p></div>
@@ -173,13 +174,18 @@ pinhole collect --profile audit --region us-east-1,eu-west-1 --out-dir snapshots
 
   <h3 id="cli-fix">The fix plan</h3>
   <!--run fix fixtures/09-lateral-movement/snapshot.json --plan-->
-  <p><code>pinhole fix</code> without <code>--plan</code> lists the best verified fix for each finding; <code>--all</code> lists every candidate. Nothing is ever run for you.</p>
+  <p><code>pinhole fix</code> without <code>--plan</code> lists the best verified fix for each finding; <code>--all</code> lists every candidate. Add <code>--policy policy.json</code> to keep everything the policy's require rules need working. Nothing is ever run for you.</p>
+
+  <h3 id="cli-policy">Check your own rules</h3>
+  <!--run policy fixtures/09-lateral-movement/snapshot.json fixtures/policies/09-policy.json-->
+  <p>Add <code>--fail-on high</code> to exit with code 2 when a rule at that severity fails, <code>--verbose</code> for every path, or <code>--format json|markdown</code>. See <a href="#policies">Policies</a> for the format.</p>
 
   <h3 id="cli-whatif">Try a change first</h3>
   <!--run whatif fixtures/09-lateral-movement/snapshot.json --revoke sgr-bastion-ssh-world-->
 
   <h3 id="cli-hygiene">Rule hygiene</h3>
-  <!--run lines=14 hygiene fixtures/09-lateral-movement/snapshot.json-->
+  <!--run hygiene fixtures/09-lateral-movement/snapshot.json-->
+  <p>Besides rules that do nothing on their own, it finds rules that several others cover together, rules another attached group already covers everywhere, network ACL entries that earlier entries decide in full, the smallest equivalent rule set for each group, and groups and ACLs near their rule quotas. Every comparison is made on cells, with the same evaluators as the path analysis, so a compacted group allows exactly the same traffic.</p>
 </section>
 
 <section id="ci" data-group="Use it" data-title="In CI and pull requests">
@@ -189,7 +195,8 @@ pinhole collect --profile audit --region us-east-1,eu-west-1 --out-dir snapshots
   <h3 id="terraform">Check a Terraform plan</h3>
   <p>Pinhole places each security group, rule, network ACL, route, attachment, Elastic IP, subnet association, internet gateway and listener change from the plan onto the snapshot, IPv4 and IPv6, including groups and gateways the plan creates, and runs the full analysis. Anything it cannot place exactly is listed as not analysed, never guessed.</p>
 <pre class="code"><code>terraform plan -out tfplan &amp;&amp; terraform show -json tfplan &gt; plan.json
-pinhole plan snapshot.json plan.json --fail-on high</code></pre>
+pinhole plan snapshot.json plan.json --fail-on high --policy policy.json</code></pre>
+  <p>With <code>--policy</code>, the check also lists every policy rule the plan would start to break, and every violation it would resolve; <code>--fail-on</code> then fails on broken rules at that severity too.</p>
   <!--run lines=18 plan fixtures/09-lateral-movement/snapshot.json fixtures/plans/09-plan.json-->
 
   <h3 id="action">GitHub Action</h3>
@@ -211,6 +218,45 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
   <h3 id="sarif">Code scanning</h3>
 <pre class="code"><code>pinhole exposure snapshot.json --format sarif &gt; pinhole.sarif</code></pre>
   <p>Upload with GitHub's <code>upload-sarif</code> action. Each exposed service has a stable fingerprint, so an alert stays one alert across runs and closes when the exposure goes away.</p>
+</section>
+
+<section id="policies" data-group="Use it" data-title="Policies">
+  <h2>Policies</h2>
+  <p class="lede">Write down what must never be reachable and what must always be. Pinhole checks every rule exactly, and shows the connection that breaks it.</p>
+<pre class="code"><code>{
+  "groups": {
+    "databases": { "tags": { "role": "db" } },
+    "bastions":  { "securityGroups": ["sg-0bastion"] },
+    "dev":       { "tags": { "env": "dev" } },
+    "prod":      { "tags": { "env": "prod" } }
+  },
+  "rules": [
+    { "id": "no-public-db", "severity": "critical",
+      "deny": { "from": "internet", "to": "databases", "indirect": true } },
+    { "id": "dev-not-prod", "deny": { "from": "dev", "to": "prod" } },
+    { "id": "ssh-via-bastion",
+      "deny": { "from": "internet", "to": { "not": "bastions" }, "ports": "tcp/22" } },
+    { "id": "site-up",
+      "require": { "from": "internet", "to": { "names": ["web-*"] }, "ports": "tcp/443" } }
+  ]
+}</code></pre>
+  <h3 id="policy-rules">Rules</h3>
+  <ul>
+    <li><b>deny</b> fails for every connection that gets through, with the rules that let it in. From <code>"internet"</code>, it covers direct exposure and anything behind a load balancer (on the port that reaches the target). With <code>"indirect": true</code> it also covers attack chains: an internet-facing server taken over that then reaches the target. Between groups, it checks every pair.</li>
+    <li><b>require</b> fails for every pair that cannot connect, with the hop that blocks it. From <code>"internet"</code>, the whole port range must be open to some internet address.</li>
+    <li><b>ports</b>: <code>tcp/22</code>, <code>udp/53</code>, <code>tcp/1024-65535</code>, <code>icmp</code> or <code>all</code>, alone or in a list. Optional for deny, required for require.</li>
+    <li><b>severity</b>: critical, high, medium, low or info. Deny rules default to high, require rules to medium.</li>
+  </ul>
+  <h3 id="policy-selectors">Choosing resources</h3>
+  <p><code>from</code> and <code>to</code> take <code>"internet"</code> (as a source), <code>"*"</code>, the name of a group, or a selector. Every key in a selector must match: <code>tags</code> (read from the instance, then the subnet, then the VPC; a list matches any value; <code>*</code> is a wildcard), <code>securityGroups</code>, <code>subnets</code>, <code>vpcs</code>, <code>ids</code> (interface, instance or load balancer IDs, ARNs or names), <code>names</code> (instance or load balancer names, with <code>*</code>), <code>any</code> (a list of alternatives) and <code>not</code>.</p>
+  <h3 id="policy-where">Where policies run</h3>
+  <ul>
+    <li><code>pinhole policy snapshot.json policy.json</code> checks a snapshot.</li>
+    <li><code>pinhole plan snapshot.json plan.json --policy policy.json</code> shows what a Terraform plan would break or fix.</li>
+    <li><code>pinhole fix snapshot.json --plan --policy policy.json</code> plans fixes that keep every required connection working.</li>
+    <li>The console's Policies page checks every loaded snapshot as you edit. The policy stays in your browser.</li>
+  </ul>
+  <p>The file is validated field by field; an error names the field, such as <code>rules[2].deny.to</code>.</p>
 </section>
 
 <section id="exposure" data-group="Concepts" data-title="Internet exposure">
@@ -241,6 +287,10 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
   <p>A chain is reported when it ends at a data store, a control plane or remote administration that the internet cannot reach directly. Chains to the same target are merged, with every route listed. Severity comes from what is reached, lowered when the starting point is only open on web ports, or when the chain is three hops or longer.</p>
   <p>This is a model of what the network allows, not of what is exploitable: it assumes credentials or a vulnerability at each step.</p>
 
+  <h3 id="crown-jewels">Crown jewels and the smallest cut</h3>
+  <p>Tag what matters most with <code>pinhole:crown-jewel=true</code>, or with a data classification of confidential, restricted, secret, sensitive or PII, on the instance, its subnet or its VPC. Chains to those rank first. Without tags, the data stores and control planes that chains end at are used.</p>
+  <p>Pinhole then finds the smallest set of security group rules whose removal leaves no attack path to any of them: a minimum cut on the attack graph, computed with max flow. Each edge costs the rules that must all go to cut it, and the costs are weighted so that closing a public website, or a rule that names a security group, is a last resort. The result is pruned until every rule in it is needed, then checked by removing the rules from a copy of the snapshot and running everything again.</p>
+
   <h3 id="across">Across accounts and Regions</h3>
   <p>Load snapshots from both sides of a VPC peering connection or a transit gateway together and Pinhole joins them, so chains are followed from one account or Region into another. Routes, network ACLs and security groups are checked on both sides, and so are security group references across the link where AWS supports them: same-Region peering, and transit gateways with referencing turned on.</p>
   <!--run lines=14 from=Across blast fixtures/11-cross-account-peering/account-a/snapshot.json fixtures/11-cross-account-peering/account-b/snapshot.json --min-severity critical-->
@@ -249,14 +299,20 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
 <section id="fixes" data-group="Concepts" data-title="Fixes and the fix plan">
   <h2>Fixes and the fix plan</h2>
   <p class="lede">Pinhole only suggests changes it has proved.</p>
-  <p>For each exposure, it tries the narrowest changes first: cut the port out of a wider rule, allow it only from inside the VPC, remove the rule, add a network ACL deny, or remove the public IP. Each candidate is applied to a copy of the snapshot and the whole analysis runs again. A fix is <b>verified</b> only if the path is gone afterwards. Every other path the change closes is shown, so you can see if it breaks something you want.</p>
+  <p>For each exposure, it tries the narrowest changes first: replace the rule's source with exactly what uses it, cut the port out of a wider rule, allow it only from inside the VPC, remove the rule, add a network ACL deny, or remove the public IP. Each candidate is applied to a copy of the snapshot and the whole analysis runs again. A fix is <b>verified</b> only if the path is gone afterwards.</p>
+
+  <h3 id="safe-fixes">What a fix breaks</h3>
+  <p>A change that closes an exposure can also cut traffic inside the network. For every fix, Pinhole measures every connection into and out of the interfaces it touches, before and after, with the same exact analysis, and reports what is lost. A lost connection counts as a <b>break</b> when there is evidence someone wants it: a load balancer reaching its targets, a health check on its own port, or a rule that names the source's security group. A connection allowed only by an address range is listed as a cut, since the snapshot cannot tell whether it is used. A verified fix that opens nothing and breaks nothing is marked <b>safe</b>.</p>
+  <p>The narrowest fix keeps that traffic on purpose: it finds the interfaces that reach the resource through the rule today, and replaces the rule's source with their security groups (or their addresses), so the internet loses access and they keep it. On an attack chain, the same rewrite keeps everyone except the attacker's foothold.</p>
 
   <h3 id="plan-algorithm">How the plan is chosen</h3>
   <ol class="steps">
     <li><b>Candidates.</b> The verified fixes for the worst open exposures, the rules on every route of the worst open attack chains, and the fixes at each chain's starting point, where one change can cut every chain from that server at once.</li>
     <li><b>Selection.</b> Each round picks the change that removes the most weighted risk, with a penalty for closing paths that are probably wanted, and never a change that opens anything. Candidates that cannot win a round are not re-measured, which keeps it fast on large accounts.</li>
     <li><b>Pruning.</b> When the plan is built, each step is taken out in turn and the rest re-applied. A step a later one made unnecessary is dropped. The tests check that every remaining step is needed.</li>
+    <li><b>Proof.</b> Every goal the plan closes needs some step that can touch its traffic, so the smallest set of candidates that touches them all is a lower bound (found exactly, by branch and bound). Every smaller set of candidates is then tried, smallest first. Since each candidate only takes access away, a set that leaves a goal open rules out all its subsets for free. If the search finishes, the plan is <b>proved</b> to be the fewest changes among those considered; if it runs out of budget, the bound is shown instead.</li>
   </ol>
+  <p>Breaks count against a step, so the plan prefers changes that keep wanted traffic. With a policy, connections its require rules need are never broken: a step that would break one is not taken.</p>
   <p>The plan lists, for every step, what it closes, what chains it cuts, what else it affects, and the AWS CLI command. Anything no single change closes is listed for a person to decide.</p>
 </section>
 
@@ -294,6 +350,8 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
     </tbody>
   </table>
   </div>
+  <h3 id="differential">Checked against a second implementation</h3>
+  <p>A separate reference evaluator, written from the AWS documentation one packet at a time and sharing no code with the engine, answers the same questions on random networks: random routes (including blackholes and NAT), network ACLs, security groups, public addresses and gateways. Every test run checks the engine against it on 400 networks and over 120,000 questions, both through the packet evaluator and the exposure report, and any disagreement fails the build with the network that caused it. Rule compaction is checked the same way. The test takes a larger count with <code>PINHOLE_FUZZ_RUNS</code>; it has been run on 6,000 networks (1.8 million questions) without a difference.</p>
   <p>Continuous integration runs every test on Node 22 and 24, and runs both collectors against a fake AWS built from the scenarios. The full model, with every simplification, is in <a href="https://github.com/w3bcooki3/pinhole/blob/main/docs/model.md">docs/model.md</a>. If you find a wrong result, <a href="https://github.com/w3bcooki3/pinhole/issues/new/choose">report it</a>; it becomes a new scenario.</p>
 </section>
 
@@ -304,6 +362,7 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
     <li><b>Scope.</b> VPC network paths to interfaces and Application and Network Load Balancers. Not S3, API Gateway, Lambda function URLs, CloudFront, or other services that are public outside a VPC. Use a configuration scanner such as Prowler or AWS Security Hub for those.</li>
     <li><b>Detected, not modelled.</b> AWS Network Firewall, Gateway Load Balancer, routes to appliances, gateway route tables, Global Accelerator, Classic Load Balancers, VPN and Direct Connect. Paths through them are reported as unknown.</li>
     <li><b>IPv6</b> is analysed for TCP and UDP to interfaces and dual-stack load balancers. Not yet for ICMPv6 or IPv6 lateral movement.</li>
+    <li><b>Wanted traffic is inferred.</b> Fixes count a lost connection as a break only with evidence it is wanted: a load balancer and its targets, a health check, or a rule that names the source's group. Traffic allowed only by an address range may or may not be used; flow logs are not read. A policy's require rules make any connection count.</li>
     <li><b>Configuration, not traffic.</b> Host firewalls, the operating system and whether anything listens on the port are outside the model. Existing connections can outlive a rule change.</li>
     <li><b>Snapshots are a point in time.</b> Collect again after changes, or compare two snapshots.</li>
     <li><b>Size.</b> The console handles files up to 200 MB. Very large accounts are faster with the CLI.</li>

@@ -7,6 +7,45 @@ All notable changes to this project are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Fixes say what they break inside the network. Every candidate fix is
+  checked, exactly, for the connections it would cut into and out of the
+  interfaces it touches. Losing a load balancer's targets, a health check or a
+  connection granted by a security group reference is a break; traffic allowed
+  only by an address range is listed as a cut. Fixes that break nothing are
+  marked safe, and the planner weighs breaks against what a step closes.
+- Least-privilege fixes. A rule open to the internet can be rewritten to the
+  security groups (or addresses) of exactly the interfaces that use it today;
+  on an attack chain, everyone except the attacker's foothold.
+- A proof of the fix plan's size. A lower bound from the goals each candidate
+  can touch, then a search of every smaller set of candidates, pruned by
+  monotonicity. The plan says when it is proved the fewest changes, or how
+  many are needed at least.
+- Network policies: deny and require rules over groups of resources chosen
+  by tags, names, security groups, subnets, VPCs or IDs. Deny from the
+  internet covers load balancer targets and, with `indirect`, attack chains.
+  `pinhole policy`, `pinhole plan --policy` (what a Terraform plan would
+  break) and `pinhole fix --plan --policy` (keep required traffic working),
+  and a Policies page in the console. Tags are now kept on instances,
+  subnets, VPCs and security groups.
+- Crown jewels and the smallest cut. Tag targets with `pinhole:crown-jewel`
+  or a data classification, or let chain targets stand in; chains to them rank
+  first. `pinhole blast` and the Blast radius page show the fewest rules whose
+  removal cuts every attack path to them: a weighted minimum cut, pruned and
+  verified by re-analysis.
+- Rule cleanup in `pinhole hygiene` and the console: rules several others
+  cover together, rules another attached group covers everywhere, network ACL
+  entries earlier entries decide, the smallest equivalent rule set per group
+  (checked cell by cell), and quota warnings.
+- Differential testing: random networks checked against an independent
+  packet-at-a-time reference evaluator on every run.
+
+### Changed
+- Faster planning and what-if on large accounts: service reachability cuts
+  ports only at the network ACLs on the path, results for interface pairs a
+  change cannot affect are reused from the model it came from, and the
+  planner re-analyses exposure only where a change reaches. On a synthetic
+  account with every interface exposed, a fix plan takes about a quarter less
+  time than before, even with the new checks.
 - Terraform plans: IPv6 security group rules, network ACL entries and routes
   are checked like IPv4 ones. New resource types: route table and main route
   table associations, network ACL associations, internet gateways and their

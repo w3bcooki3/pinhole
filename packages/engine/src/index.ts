@@ -13,6 +13,8 @@ export { applyChanges, cliFor, describeChange, diffExposure, ruleText, ChangeErr
 export type { Change, DiffStatus, ExposureDelta, ExposureDiff } from './whatif.js';
 export { findChokepoints, findFixes, planFixes } from './fixes.js';
 export type { PlanOptions } from './fixes.js';
+export { describeBreak, internalBreaks, internalFlows, isWanted, summarizeBreaks, touchedInterfaces } from './internal.js';
+export type { Breakage, Evidence, InternalFlow } from './internal.js';
 export { changeScope, crossChains, joinSnapshots } from './join.js';
 export type { CrossChain, CrossReport, JoinedEstate, JoinInput, JoinLink, JoinResult } from './join.js';
 export type { Chokepoint, FixCandidate, FixPlan, PlanStep } from './fixes.js';
@@ -35,3 +37,9 @@ export { diffSnapshots, DriftError } from './drift.js';
 export type { ConfigChange, ConfigKind, SnapshotDiff } from './drift.js';
 export { mapTerraformPlan, PlanError } from './terraform.js';
 export type { PlanMapping, PlanResourceResult } from './terraform.js';
+export { analyzeCleanup, cleanupFindings, QUOTAS, sameRules } from './cleanup.js';
+export type { CleanupReport, Compaction, QuotaWarning, RedundantRule, ShadowedEntry } from './cleanup.js';
+export { findCrownJewels, findMinCut } from './cut.js';
+export type { CrownJewel, CutEdge, MinCut } from './cut.js';
+export { checkPolicy, diffPolicy, parsePolicy, PolicyError } from './policy.js';
+export type { PolicyFile, PolicyReport, PolicyResult, PolicyRule, Selector, Target, Violation } from './policy.js';

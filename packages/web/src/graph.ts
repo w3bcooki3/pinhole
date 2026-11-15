@@ -9,6 +9,7 @@ import type { Row, Severity } from './data.js';
 import * as D from './data.js';
 
 export const ICON: Record<string, string> = {
+  policy: 'M10 6h10M10 12h10M10 18h10M3.5 6l1.5 1.5L8 4.5M3.5 12l1.5 1.5L8 10.5M3.5 18l1.5 1.5L8 16.5',
   globe: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm-9 9h18M12 3c2.5 2.6 3.8 5.6 3.8 9S14.5 18.4 12 21M12 3C9.5 5.6 8.2 8.6 8.2 12s1.3 6.4 3.8 9',
   gateway: 'M4 20V9l8-5 8 5v11M8 20v-6h8v6M4 20h16',
   lb: 'M12 4v5M12 9l-6 6M12 9l6 6M12 9v6M4 18h4M10 18h4M16 18h4',

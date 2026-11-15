@@ -250,6 +250,40 @@ describe('web console', () => {
       return p;
     };
 
+    it('blast radius shows the crown jewels and the smallest verified cut', () => {
+      const { doc, api } = load9();
+      api.go('blast');
+      const box = doc.querySelector('#jewels')!;
+      expect(box.textContent).toMatch(/orders-db/);
+      expect(box.textContent).toMatch(/Remove 2 rules and no attack path reaches any of them\./);
+      expect(box.textContent).toMatch(/sgr-bastion-ssh-world/);
+      expect(box.textContent).toMatch(/sgr-db-ssh-vpc/);
+    });
+
+    it('the fix plan says it is proved, and fixes are marked safe', () => {
+      const { doc, api } = load9();
+      api.go('dashboard');
+      expect(text(doc, '#plan')).toMatch(/Proved: no plan with fewer changes/);
+      api.go('issues');
+      (doc.querySelector('table.t tbody tr') as HTMLElement).click();
+      expect(text(doc, '#fixes .cut.best .safe-tag')).toBe('Safe');
+      expect(text(doc, '#fixes')).toMatch(/cuts 2 internal connections allowed only by address range/);
+    });
+
+    it('policies: checks the example, shows violations, and names the field in a bad policy', () => {
+      const { doc, api } = load9();
+      api.go('policy');
+      expect(text(doc, '.pol-res')).toMatch(/1 of 3 rules fail/);
+      expect(text(doc, '.pol-res')).toMatch(/no-db-from-internet/);
+      expect(text(doc, '.pol-res')).toMatch(/attack chain from the internet: bastion/);
+      const area = doc.querySelector('.pol-src') as HTMLTextAreaElement;
+      area.value = JSON.stringify({ rules: [{ id: 'x', deny: { from: 'internet', to: 'nope' } }] });
+      [...doc.querySelectorAll('.pol-ed button')].find((b) => b.textContent?.includes('Check'))!.dispatchEvent(new (doc.defaultView as unknown as typeof globalThis).MouseEvent('click', { bubbles: true }));
+      expect(text(doc, '.pol-err')).toMatch(/rules\[0\]\.deny\.to: "nope"/);
+      [...doc.querySelectorAll('.pol-ed button')].find((b) => b.textContent?.includes('Use the example'))!.dispatchEvent(new (doc.defaultView as unknown as typeof globalThis).MouseEvent('click', { bubbles: true }));
+      expect(doc.querySelector('.pol-err')).toBeNull();
+    });
+
     it('blast radius lists chains, traces one and offers the rule that cuts the most', () => {
       const { doc, api } = load9();
       api.go('blast');
@@ -299,10 +333,12 @@ describe('web console', () => {
       const { doc, api } = load9();
       api.go('hygiene');
       // The bastion's SSH rule is already an exposure, so it is listed there instead.
-      expect(doc.querySelectorAll('table.hyg tbody tr').length).toBe(6);
+      // Six hygiene findings, and sg-web can be compacted from 3 rules to 2.
+      expect(doc.querySelectorAll('table.hyg tbody tr').length).toBe(7);
+      expect(text(doc, 'table.hyg')).toMatch(/sg-web \(web\): 3 inbound rules can be 2/);
       expect(text(doc, '.hyg-note')).toMatch(/1 more rule open to the world already lets the internet in|1 more rule open to the world already let the internet in/);
       api.go('hygiene', { hygAll: true });
-      expect(doc.querySelectorAll('table.hyg tbody tr').length).toBe(7);
+      expect(doc.querySelectorAll('table.hyg tbody tr').length).toBe(8);
       expect(text(doc, 'table.hyg')).toMatch(/acl-data inbound rule 120 can never match/);
     });
 
@@ -371,7 +407,7 @@ describe('web console', () => {
 describe('documentation', () => {
   it('builds, with every example produced by the real CLI', () => {
     const out = execFileSync(process.execPath, [join(root, 'scripts/build-docs.mjs')], { cwd: root, encoding: 'utf8' });
-    expect(out).toMatch(/16 sections, 9 live examples/);
+    expect(out).toMatch(/17 sections, 10 live examples/);
     const html = readFileSync(join(root, 'site/docs/index.html'), 'utf8');
     expect(html).not.toMatch(/<!--(run|trace|policy)/);
     expect(html).toContain('pinhole blast account-a/snapshot.json account-b/snapshot.json');

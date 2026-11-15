@@ -21,7 +21,13 @@ export type HygieneCode =
   | 'open-to-world'
   | 'broad-internal-source'
   | 'all-ports'
-  | 'stale-group-reference';
+  | 'stale-group-reference'
+  // From cleanup.ts:
+  | 'redundant-together'
+  | 'redundant-attached'
+  | 'shadowed-together'
+  | 'compactable-group'
+  | 'near-quota';
 
 export interface HygieneFinding {
   code: HygieneCode;

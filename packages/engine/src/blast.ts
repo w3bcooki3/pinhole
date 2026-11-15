@@ -16,11 +16,13 @@
  */
 import type { ExposureFinding, ExposureReport } from './exposure.js';
 import { parseIpv4 } from './ipv4.js';
-import { candidateRules, isLateralTarget, reachServices, serviceLabel } from './reach.js';
+import { candidateRules, isLateralTarget, serviceLabel } from './reach.js';
+import { pairReach } from './internal.js';
 import type { PairReach, ServiceReach } from './reach.js';
 import { compareSeverity, SEVERITY_ORDER } from './risk.js';
 import type { ServiceCategory, Severity } from './risk.js';
 import { displayName } from './topology.js';
+import { jewelTag } from './jewels.js';
 import type { NetworkModel } from './types.js';
 
 export interface BlastEntry {
@@ -69,6 +71,8 @@ export interface AttackChain {
   severity: Severity;
   score: number;
   why: string[];
+  /** Set when the target is tagged as a crown jewel: the tag. */
+  crownJewel?: string;
 }
 
 export interface BlastFootprint {
@@ -179,7 +183,7 @@ export function analyzeBlastRadius(model: NetworkModel, exposure: ExposureReport
       return undefined;
     }
     stats.pairsEvaluated += 1;
-    const r = reachServices(model, from, to);
+    const r = pairReach(model, from, to);
     stats.cellsEvaluated += r.cells;
     memo.set(key, r);
     return r;
@@ -246,9 +250,11 @@ export function analyzeBlastRadius(model: NetworkModel, exposure: ExposureReport
         steps.push({ eniId: dstId, name: displayName(model, dst), service: serviceLabel(h.svc), ...(h.svc.name ? { serviceName: h.svc.name } : {}), category: h.svc.category });
         const depth = steps.length - 1;
         const severity = chainSeverity(entry.severity, h.svc, depth);
+        const jewel = jewelTag(model, dst);
         const why = [
           `${entry.name} is reachable from the internet (${entry.how}).`,
           ...steps.slice(1).map((s, i) => `${steps[i]!.name} can open ${s.service}${s.serviceName ? ` (${s.serviceName})` : ''} on ${s.name}.`),
+          ...(jewel ? [`${steps[steps.length - 1]!.name} is a crown jewel (${jewel}).`] : []),
         ];
         chains.push({
           id: `${dstId}|${h.svc.category}`,
@@ -260,7 +266,9 @@ export function analyzeBlastRadius(model: NetworkModel, exposure: ExposureReport
           targetId: dstId,
           impact: h.svc.category,
           severity,
-          score: 10 * WEIGHT[severity] + 3 * WEIGHT[entry.severity] - 2 * depth + (h.svc.category === 'data' ? 5 : 0),
+          // What is at stake first: tagged crown jewels, then data, then how easy the way in is.
+          score: 10 * WEIGHT[severity] + 3 * WEIGHT[entry.severity] - 2 * depth + (h.svc.category === 'data' ? 5 : 0) + (jewel ? 25 : 0),
+          ...(jewel ? { crownJewel: jewel } : {}),
           why,
         });
       }

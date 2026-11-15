@@ -3,6 +3,9 @@
  * proved by applying it to a copy of the model and re-running the analysis.
  *
  * Candidates, from narrowest to broadest:
+ *  - narrow the rule's source to exactly what uses it inside the network
+ *    (the security groups, or addresses, of the interfaces that reach the
+ *    resource through that rule today);
  *  - cut the finding's ports out of a wider security group rule;
  *  - remove the security group rule(s) that let the traffic in;
  *  - add a network ACL deny for the ports, ahead of the rule that allows them;
@@ -13,6 +16,13 @@
  * change closes or narrows is reported too: closing another critical path is
  * a bonus; closing a web or low-severity path is collateral, because it is
  * probably traffic someone wants.
+ *
+ * Every candidate is also checked for the internal traffic it cuts
+ * (internal.ts): a load balancer losing its targets or health checks, or a
+ * connection allowed by a rule that names the source's group, is a break; a
+ * connection allowed only by an address range is a cut that may or may not
+ * matter. A verified fix that opens nothing and breaks nothing wanted is
+ * marked safe; address-range cuts are still listed with it.
  */
 import { analyzeExposure } from './exposure.js';
 import type { ExposureFinding, ExposureReport } from './exposure.js';
@@ -24,9 +34,11 @@ import { INTERNET, RangeSet } from './ipv4.js';
 import { analyzeBlastRadius, findingKey } from './blast.js';
 import type { AttackChain, BlastReport } from './blast.js';
 import { naclForSubnet } from './topology.js';
+import { canSend, internalBreaks, isWanted, pairReach } from './internal.js';
+import type { Breakage } from './internal.js';
 import { applyChanges, cliFor, describeChange, diffExposure, ruleText } from './whatif.js';
 import type { Change, ExposureDelta } from './whatif.js';
-import type { NetworkModel, SgRule } from './types.js';
+import type { Eni, NetworkModel, PortRange, SgRule } from './types.js';
 
 export interface FixCandidate {
   id: string;
@@ -50,6 +62,10 @@ export interface FixCandidate {
    * still reach this resource from another internet-facing server afterwards.
    */
   stillReachable: AttackChain[];
+  /** Internal traffic the change cuts, with the evidence that it is wanted. */
+  breaks: Breakage[];
+  /** Verified, opens nothing, and breaks no internal traffic with evidence that it is wanted. */
+  safe: boolean;
   score: number;
 }
 
@@ -79,6 +95,54 @@ function affected(model: NetworkModel, changes: Change[], finding: ExposureFindi
   return ids;
 }
 
+/**
+ * Every interface and load balancer whose exposure a list of changes can
+ * alter, or undefined when a change is of a kind that could affect anything
+ * (routes, gateways), so a full analysis is needed.
+ */
+function exposureScope(model: NetworkModel, changes: Change[]): Set<string> | undefined {
+  const ids = new Set<string>();
+  const groups = new Set<string>();
+  const subnets = new Set<string>();
+  for (const c of changes) {
+    if (c.kind === 'revoke-sg-rule' || c.kind === 'edit-sg-rule') {
+      for (const g of model.securityGroups.values()) if (g.ingress.some((r) => r.id === c.ruleId) || g.egress.some((r) => r.id === c.ruleId)) groups.add(g.id);
+    } else if (c.kind === 'add-sg-rule') groups.add(c.groupId);
+    else if (c.kind === 'add-nacl-entry' || c.kind === 'remove-nacl-entry') {
+      for (const sub of model.subnets.values()) if (naclForSubnet(model, sub)?.id === c.naclId) subnets.add(sub.id);
+    } else if (c.kind === 'remove-public-ip' || c.kind === 'detach-sg' || c.kind === 'attach-sg') ids.add(c.eniId);
+    else return undefined;
+  }
+  const enis = new Set<string>();
+  for (const e of model.enis.values()) if (ids.has(e.id) || subnets.has(e.subnetId) || e.groupIds.some((g) => groups.has(g))) enis.add(e.id);
+  enis.forEach((id) => ids.add(id));
+  // A load balancer's finding depends on its own groups and subnets, its nodes, and its targets.
+  for (const lb of model.loadBalancers.values()) {
+    if (lb.securityGroupIds.some((g) => groups.has(g)) || lb.subnetIds.some((x) => subnets.has(x)) || lb.nodeEniIds.some((id) => enis.has(id))) {
+      ids.add(lb.arn);
+      continue;
+    }
+    for (const l of model.listeners) {
+      if (l.loadBalancerArn !== lb.arn) continue;
+      for (const tg of l.targetGroupArns.map((a) => model.targetGroups.get(a))) {
+        for (const t of tg?.targets ?? []) {
+          const eni = tg!.targetType === 'instance' ? model.instances.get(t.id)?.primaryEniId : [...model.enis.values()].find((e) => e.privateIps.includes(t.id))?.id;
+          if (eni && enis.has(eni)) ids.add(lb.arn);
+        }
+      }
+    }
+  }
+  return ids;
+}
+
+/** Exposure after `changes`, re-analysing only what they can affect and keeping every other finding. */
+function exposureAfter(before: NetworkModel, after: NetworkModel, e0: ExposureReport, changes: Change[]): ExposureReport {
+  const scope = exposureScope(before, changes);
+  if (!scope) return analyzeExposure(after);
+  const part = analyzeExposure(after, { only: scope });
+  return { findings: [...e0.findings.filter((f) => !scope.has(f.resourceId)), ...part.findings], warnings: e0.warnings, stats: e0.stats };
+}
+
 const overlaps = (d: ExposureDelta, f: ExposureFinding) =>
   d.resourceId === f.resourceId && d.protocol === f.protocol && (!d.ports || (d.ports.from <= f.ports.to && d.ports.to >= f.ports.from)) && (f.listener ? d.listenerPort === f.listener.port : d.listenerPort === undefined);
 
@@ -88,7 +152,7 @@ const overlaps = (d: ExposureDelta, f: ExposureFinding) =>
  * rules for one representative packet; this finds the rest, so a fix can
  * cover all of them.
  */
-function allowingRules(model: NetworkModel, f: ExposureFinding): string[] {
+export function allowingRules(model: NetworkModel, f: ExposureFinding): string[] {
   const groups = f.kind === 'interface' ? model.enis.get(f.resourceId)?.groupIds ?? [] : model.loadBalancers.get(f.resourceId)?.securityGroupIds ?? [];
   const proto = normalizeProtocol(f.protocol);
   const out: string[] = [];
@@ -109,14 +173,112 @@ function allowingRules(model: NetworkModel, f: ExposureFinding): string[] {
   return out.length ? out : (f.trace.find((h) => h.stage === 'dest-sg-ingress')?.ruleIds ?? []).filter((id) => findRule(model, id));
 }
 
-function candidates(model: NetworkModel, f: ExposureFinding): { title: string; rationale: string; changes: Change[] }[] {
-  const out: { title: string; rationale: string; changes: Change[] }[] = [];
+/**
+ * The interfaces that reach the finding's resource through `rule` and through
+ * nothing else, on some protocol and port: removing the rule would cut them.
+ */
+function usersOf(model: NetworkModel, f: ExposureFinding | string[], rule: SgRule): Eni[] {
+  const dsts = Array.isArray(f) ? f : f.kind === 'interface' ? [f.resourceId] : model.loadBalancers.get(f.resourceId)?.nodeEniIds ?? [];
+  const out: Eni[] = [];
+  for (const src of model.enis.values()) {
+    if (!canSend(src) || dsts.includes(src.id)) continue;
+    const uses = dsts.some((d) =>
+      pairReach(model, src.id, d).services.some((s) => {
+        const ids = s.trace.find((h) => h.stage === 'dest-sg-ingress')?.ruleIds ?? [];
+        return ids.length === 1 && ids[0] === rule.id;
+      }),
+    );
+    if (uses) out.push(src);
+  }
+  return out;
+}
+
+/**
+ * The fewest sources that keep every user of `rule`: security groups where
+ * the users are in the same VPC (greedy set cover, preferring groups with no
+ * members beyond the users), single addresses for the rest.
+ */
+function narrowSources(model: NetworkModel, users: Eni[], vpcId: string, exclude: Set<string> = new Set()): { groups: string[]; cidrs: string[] } {
+  const vpcOf = (e: Eni) => model.subnets.get(e.subnetId)?.vpcId;
+  const left = new Set(users.filter((u) => vpcOf(u) === vpcId && u.groupIds.length).map((u) => u.id));
+  const ids = new Set(users.map((u) => u.id));
+  const groups: string[] = [];
+  const members = (g: string) => [...model.enis.values()].filter((e) => e.groupIds.includes(g));
+  while (left.size) {
+    let best: { g: string; covers: number; extra: number } | undefined;
+    for (const g of new Set(users.filter((u) => left.has(u.id)).flatMap((u) => u.groupIds))) {
+      const m = members(g);
+      // A group with an excluded member would let it back in.
+      if (m.some((e) => exclude.has(e.id))) continue;
+      const covers = m.filter((e) => left.has(e.id)).length;
+      const extra = m.filter((e) => !ids.has(e.id)).length;
+      if (!best || covers - extra * 0.5 > best.covers - best.extra * 0.5) best = { g, covers, extra };
+    }
+    if (!best) break;
+    groups.push(best.g);
+    for (const e of members(best.g)) left.delete(e.id);
+  }
+  const covered = new Set(groups.flatMap((g) => members(g).map((e) => e.id)));
+  const cidrs = users.filter((u) => !covered.has(u.id)).map((u) => `${u.privateIps[0]}/32`);
+  return { groups, cidrs };
+}
+
+/**
+ * A rule on an attack chain hop, rewritten to keep every interface that uses
+ * it except the one the attacker comes from: the chain is cut and the rest of
+ * the traffic keeps working.
+ */
+function narrowHop(model: NetworkModel, r: SgRule, dst: string, foothold: string): { title: string; rationale: string; changes: Change[] } | undefined {
+  if (!r.cidr) return undefined;
+  const footEni = model.enis.get(foothold);
+  const users = usersOf(model, [dst], r).filter((u) => u.id !== foothold);
+  if (!users.length || !footEni) return undefined;
+  const { groups, cidrs } = narrowSources(model, users, model.securityGroups.get(r.groupId)?.vpcId ?? footEni.vpcId, new Set([foothold]));
+  if (groups.length + cidrs.length > 8 || cidrs.some((c) => footEni.privateIps.some((ip) => `${ip}/32` === c))) return undefined;
+  const ports = r.fromPort === undefined || r.fromPort === -1 ? {} : { fromPort: r.fromPort, toPort: r.toPort ?? r.fromPort };
+  const proto = protocolName(r.protocol);
+  return {
+    title: `Allow ${r.id} only from what uses it, not ${foothold}`,
+    rationale: `${r.id} allows ${ruleText(r)}. Replacing ${r.cidr.text} with ${[...groups, ...cidrs].join(', ')} keeps the ${users.length} other interface${users.length === 1 ? '' : 's'} that reach ${dst} through it and drops ${foothold}.`,
+    changes: [
+      { kind: 'revoke-sg-rule', ruleId: r.id },
+      ...groups.map((g): Change => ({ kind: 'add-sg-rule', groupId: r.groupId, egress: false, protocol: proto, ...ports, referencedGroupId: g, ...(r.description ? { description: r.description } : {}) })),
+      ...cidrs.map((c): Change => ({ kind: 'add-sg-rule', groupId: r.groupId, egress: false, protocol: proto, ...ports, cidr: c, ...(r.description ? { description: r.description } : {}) })),
+    ],
+  };
+}
+
+type Candidate = { title: string; rationale: string; changes: Change[]; narrow?: boolean };
+
+function candidates(model: NetworkModel, f: ExposureFinding): Candidate[] {
+  const out: Candidate[] = [];
   const ruleIds = allowingRules(model, f);
   const proto = normalizeProtocol(f.protocol);
   const label = serviceLabel(f);
 
   for (const id of ruleIds) {
     const r = findRule(model, id)!;
+    // Least privilege: keep exactly the internal traffic that uses this rule.
+    if (r.cidr && f.family !== 'ipv6') {
+      const users = usersOf(model, f, r);
+      const groupVpc = model.securityGroups.get(r.groupId)?.vpcId ?? f.vpcId;
+      const { groups, cidrs } = users.length ? narrowSources(model, users, groupVpc) : { groups: [], cidrs: [] };
+      if (users.length && groups.length + cidrs.length <= 8) {
+        const ports = r.fromPort === undefined || r.fromPort === -1 ? {} : { fromPort: r.fromPort, toPort: r.toPort ?? r.fromPort };
+        const proto = protocolName(r.protocol);
+        const named = [...groups.map((g) => `${g}${model.securityGroups.get(g)?.name ? ` (${model.securityGroups.get(g)!.name})` : ''}`), ...cidrs];
+        out.push({
+          title: `Allow ${id} only from what uses it`,
+          rationale: `${id} allows ${ruleText(r)}. Inside the network, ${users.length} interface${users.length === 1 ? '' : 's'} reach ${f.resourceName} through it and nothing else: ${users.slice(0, 4).map((u) => u.id).join(', ')}${users.length > 4 ? ', ...' : ''}. Replacing ${r.cidr.text} with ${named.join(', ')} keeps that traffic and closes the rule to the internet and to everything else.`,
+          narrow: true,
+          changes: [
+            { kind: 'revoke-sg-rule', ruleId: id },
+            ...groups.map((g): Change => ({ kind: 'add-sg-rule', groupId: r.groupId, egress: false, protocol: proto, ...ports, referencedGroupId: g, ...(r.description ? { description: r.description } : {}) })),
+            ...cidrs.map((c): Change => ({ kind: 'add-sg-rule', groupId: r.groupId, egress: false, protocol: proto, ...ports, cidr: c, ...(r.description ? { description: r.description } : {}) })),
+          ],
+        });
+      }
+    }
     const from = r.fromPort ?? -1;
     const to = r.toPort ?? from;
     const wider = hasPorts(proto) && r.protocol === proto && from !== -1 && (from < f.ports.from || to > f.ports.to);
@@ -213,7 +375,11 @@ export function findFixes(model: NetworkModel, finding: ExposureFinding): FixCan
     // A network ACL deny hits every interface in the subnet, and removing a public
     // IP cuts everything on the interface: prefer the targeted rule change.
     const breadth = c.changes.some((x) => x.kind === 'add-nacl-entry') ? 15 : c.changes.some((x) => x.kind === 'remove-public-ip') ? 12 : 0;
-    const keepsAccess = c.changes.every((x) => x.kind === 'edit-sg-rule' || x.kind === 'add-sg-rule');
+    const keepsAccess = !!c.narrow || c.changes.every((x) => x.kind === 'edit-sg-rule' || x.kind === 'add-sg-rule');
+    const breaks = internalBreaks(model, after, c.changes);
+    const wanted = breaks.filter(isWanted).length;
+    const cutPairs = new Set(breaks.filter((x) => !isWanted(x)).map((x) => `${x.flow.from}>${x.flow.to}`)).size;
+    const safe = verified && !opened.length && !wanted;
     // Restricting a rule to the VPC keeps internal access, which is the point, but
     // a compromised internet-facing server inside the VPC may then still reach it.
     let stillReachable: AttackChain[] = [];
@@ -223,10 +389,16 @@ export function findFixes(model: NetworkModel, finding: ExposureFinding): FixCan
     }
     const score =
       (keepsAccess ? 3 : 0) +
+      (c.narrow ? 2 : 0) +
+      (safe ? 4 : 0) -
+      25 * wanted -
+      0.5 * Math.min(cutPairs, 6) +
       (verified ? 100 : 0) + bonus.reduce((n, d) => n + SEV_WEIGHT[d.severity], 0) - collateral.reduce((n, d) => n + 12 + SEV_WEIGHT[d.severity], 0) - 50 * opened.length - 2 * c.changes.length - breadth - 5 * stillReachable.length;
     fixes.push({
       id: c.changes.map((x) => JSON.stringify(x)).join('|'),
-      ...c,
+      title: c.title,
+      rationale: c.rationale,
+      changes: c.changes,
       steps: c.changes.map((x) => describeChange(model, x)),
       cli: c.changes.flatMap((x) => cliFor(model, x)),
       verified,
@@ -235,6 +407,8 @@ export function findFixes(model: NetworkModel, finding: ExposureFinding): FixCan
       collateral,
       opened,
       stillReachable,
+      breaks,
+      safe,
       score,
     });
   }
@@ -320,6 +494,8 @@ export interface PlanStep {
   chainsCut: AttackChain[];
   /** Other paths it closes or narrows, probably wanted. */
   collateral: ExposureDelta[];
+  /** Internal traffic this step cuts. */
+  breaks: Breakage[];
 }
 
 export interface FixPlan {
@@ -330,6 +506,15 @@ export interface FixPlan {
   unresolved: string[];
   /** How the plan was found: candidate changes tried, full re-analyses run, redundant steps dropped. */
   stats: { candidates: number; evaluations: number; pruned: number };
+  /**
+   * How close the plan is to the fewest steps possible, among the candidate
+   * changes considered. `optimal`: no smaller set of them closes as much
+   * without breaking more, proved by search. `bounded`: the search ran out of
+   * budget; at least `lowerBound` steps are needed. `lowerBound` is the
+   * minimum number of candidates that touch every closed goal at all, which
+   * any plan must reach.
+   */
+  optimality: { status: 'optimal' | 'bounded'; lowerBound: number; searched: number; improvedFrom?: number };
 }
 
 export interface PlanOptions {
@@ -337,6 +522,141 @@ export interface PlanOptions {
   maxSteps?: number;
   /** Which exposures and chains the plan must close (default: critical and high). */
   goals?: { finding?: (f: ExposureFinding) => boolean; chain?: (c: AttackChain) => boolean };
+  /**
+   * Traffic that must keep working, such as a policy's require rules: returns
+   * how many required connections are broken in a model. A step that breaks
+   * more than the snapshot already does is never taken.
+   */
+  protect?: (model: NetworkModel) => number;
+  /** Most re-analyses to spend proving or improving the plan's size (default 500; 0 skips the proof). */
+  proofBudget?: number;
+}
+
+// ------------------------------------------------------------------ plan size proof
+
+/**
+ * What a goal's traffic depends on: one item per connection it needs. A
+ * finding needs the internet to reach its resource on its protocol and ports;
+ * a chain needs its entries' findings and every hop of every route found.
+ * `protocol: '*'` means any change near that interface counts (used where the
+ * dependency is not one connection, such as targets behind a load balancer).
+ */
+type Need = { dst: string; src?: string; protocol: string; ports?: PortRange };
+
+function needsOf(model: NetworkModel, exposure: ExposureReport, goal: { f?: ExposureFinding; c?: AttackChain }): Need[] {
+  const out: Need[] = [];
+  const ofFinding = (f: ExposureFinding) => {
+    out.push({ dst: f.resourceId, protocol: f.protocol, ports: f.ports });
+    if (f.kind === 'load-balancer') for (const id of behind(model, f.resourceId)) out.push({ dst: id, protocol: '*' });
+  };
+  if (goal.f) ofFinding(goal.f);
+  if (goal.c) {
+    const keys = new Set(goal.c.entries.flatMap((e) => e.findingKeys));
+    for (const f of exposure.findings) if (keys.has(findingKey(f))) ofFinding(f);
+    // Entries reached through a load balancer: the listener findings in front of them.
+    const entryIds = new Set(goal.c.entries.map((e) => e.eniId));
+    for (const f of exposure.findings) if (f.kind === 'load-balancer' && behind(model, f.resourceId).some((id) => entryIds.has(id))) ofFinding(f);
+    for (const route of [goal.c.steps, ...goal.c.altRoutes]) {
+      for (let i = 1; i < route.length; i++) {
+        const m = /^([a-z0-9]+)(?:\/(\d+)(?:-(\d+))?)?$/.exec(route[i]!.service ?? '');
+        const ports = m?.[2] ? { from: Number(m[2]), to: Number(m[3] ?? m[2]) } : undefined;
+        out.push({ src: route[i - 1]!.eniId, dst: route[i]!.eniId, protocol: m?.[1] ?? '*', ...(ports ? { ports } : {}) });
+      }
+    }
+  }
+  return out;
+}
+
+/** A load balancer's nodes and target interfaces. */
+function behind(model: NetworkModel, arn: string): string[] {
+  const lb = model.loadBalancers.get(arn);
+  if (!lb) return [];
+  const ids = [...lb.nodeEniIds];
+  for (const l of model.listeners.filter((x) => x.loadBalancerArn === arn))
+    for (const tg of l.targetGroupArns.map((a) => model.targetGroups.get(a)))
+      for (const t of tg?.targets ?? []) {
+        const eni = tg!.targetType === 'instance' ? model.instances.get(t.id)?.primaryEniId : [...model.enis.values()].find((e) => e.privateIps.includes(t.id))?.id;
+        if (eni) ids.push(eni);
+      }
+  return ids;
+}
+
+/**
+ * Whether a change could close a need. Sound for the changes the planner
+ * uses: taking away or narrowing a rule that never matches the need's
+ * traffic, or adding a rule, cannot close it. Anything not understood here
+ * counts as touching it.
+ */
+function canClose(model: NetworkModel, c: Change, n: Need): boolean {
+  const groupsOf = (id: string | undefined) => (id ? model.enis.get(id)?.groupIds ?? model.loadBalancers.get(id)?.securityGroupIds ?? [] : []);
+  const subnetsOf = (id: string | undefined) => (id ? (model.enis.get(id) ? [model.enis.get(id)!.subnetId] : model.loadBalancers.get(id)?.subnetIds ?? []) : []);
+  const ports = (r: { protocol: string; fromPort?: number; toPort?: number }) => {
+    if (n.protocol === '*') return true;
+    const p = normalizeProtocol(n.protocol);
+    if (r.protocol !== '-1' && r.protocol !== p) return false;
+    if (!n.ports || r.fromPort === undefined || r.fromPort === -1 || !hasPorts(p)) return true;
+    return r.fromPort <= n.ports.to && (r.toPort ?? r.fromPort) >= n.ports.from;
+  };
+  switch (c.kind) {
+    case 'revoke-sg-rule':
+    case 'edit-sg-rule': {
+      for (const g of model.securityGroups.values()) {
+        const r = g.ingress.find((x) => x.id === c.ruleId) ?? g.egress.find((x) => x.id === c.ruleId);
+        if (!r) continue;
+        const side = g.ingress.includes(r) ? groupsOf(n.dst) : groupsOf(n.src);
+        return side.includes(g.id) && ports(r);
+      }
+      return false;
+    }
+    case 'add-sg-rule':
+      return false;
+    case 'add-nacl-entry':
+    case 'remove-nacl-entry': {
+      // A new allow entry only adds; a new deny only blocks its own protocol and ports.
+      if (c.kind === 'add-nacl-entry' && (c.action === 'allow' || !ports({ protocol: normalizeProtocol(c.protocol), ...(c.fromPort !== undefined ? { fromPort: c.fromPort, toPort: c.toPort ?? c.fromPort } : {}) }))) return false;
+      const acl = model.nacls.get(c.naclId);
+      return [...subnetsOf(n.dst), ...subnetsOf(n.src)].some((sid) => {
+        const sub = model.subnets.get(sid);
+        return !!sub && naclForSubnet(model, sub)?.id === acl?.id;
+      });
+    }
+    case 'remove-public-ip':
+    case 'detach-sg':
+    case 'attach-sg':
+      return c.eniId === n.dst || c.eniId === n.src;
+    default:
+      return true;
+  }
+}
+
+/** Minimum hitting set size, exactly, by branch and bound (sets are small). */
+function minHittingSet(sets: number[][], cap = 200000): { size: number; exact: boolean } {
+  let best = Infinity;
+  let nodes = 0;
+  const go = (chosen: Set<number>, depth: number) => {
+    if (++nodes > cap || depth >= best) return;
+    const open = sets.filter((s) => !s.some((x) => chosen.has(x)));
+    if (!open.length) {
+      best = depth;
+      return;
+    }
+    // Disjoint open sets each need their own element: a quick bound.
+    const used = new Set<number>();
+    let disjoint = 0;
+    for (const s of [...open].sort((a, b) => a.length - b.length)) if (!s.some((x) => used.has(x))) {
+      disjoint += 1;
+      s.forEach((x) => used.add(x));
+    }
+    if (depth + disjoint >= best) return;
+    const pick = open.reduce((a, b) => (b.length < a.length ? b : a));
+    for (const x of pick) {
+      chosen.add(x);
+      go(chosen, depth + 1);
+      chosen.delete(x);
+    }
+  };
+  go(new Set(), 0);
+  return { size: best === Infinity ? 0 : best, exact: nodes <= cap };
 }
 
 const W = { critical: 10, high: 6, medium: 0, low: 0, info: 0 } as const;
@@ -380,10 +700,12 @@ export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: 
       return undefined;
     }
     stats.evaluations += 1;
-    const e1 = analyzeExposure(m1);
+    const e1 = exposureAfter(m0, m1, e0, changes);
     const b1 = analyzeBlastRadius(m1, e1);
     return { m: m1, e: e1, b: b1, diff: diffExposure(e0, e1, { before: b0, after: b1 }) };
   };
+  const protectBase = opts.protect ? opts.protect(model) : 0;
+  const breaksProtected = (m1: NetworkModel) => !!opts.protect && opts.protect(m1) > protectBase;
   const collateralOf = (d: ReturnType<typeof diffExposure>) => d.deltas.filter((x) => (x.status === 'closed' || x.status === 'narrowed') && compareSeverity(x.severity, 'high') > 0);
 
   let m = model;
@@ -434,7 +756,12 @@ export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: 
           const svc = edgeOf.get(`${route[k - 1]!.eniId}>${route[k]!.eniId}`)?.services.find((s) => serviceLabel(s) === route[k]!.service);
           for (const id of svc?.trace.find((h) => h.stage === 'dest-sg-ingress')?.ruleIds ?? []) {
             const r = findRule(m, id);
-            if (r) add({ title: `Remove ${id}`, rationale: `${id} (${ruleText(r)}) is a step on ${c0.steps.map((s) => s.name.replace(/ \(.*\)$/, '')).join(' → ')}.`, changes: [{ kind: 'revoke-sg-rule', ruleId: id }] }, g);
+            if (!r) continue;
+            const routeText = route.map((s) => s.name.replace(/ \(.*\)$/, '')).join(' → ');
+            add({ title: `Remove ${id}`, rationale: `${id} (${ruleText(r)}) is a step on ${routeText}.`, changes: [{ kind: 'revoke-sg-rule', ruleId: id }] }, g);
+            // Or keep the rule for everyone who uses it except the attacker's foothold.
+            const narrowed = narrowHop(m, r, route[k]!.eniId, route[k - 1]!.eniId);
+            if (narrowed) add({ ...narrowed, rationale: `${narrowed.rationale} It cuts ${routeText}.` }, g);
           }
         }
       }
@@ -444,17 +771,28 @@ export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: 
     const w0 = weight(e, b);
     let best: { key: string; c: Cand; ev: Eval; gain: number } | undefined;
     for (const [key, c] of [...pool].sort((x, y) => y[1].bound - x[1].bound)) {
-      if (best && c.bound <= best.gain && !forced.has(key)) continue;
+      if (best && c.bound - c.changes.length <= best.gain && !forced.has(key)) continue;
       const ev = evaluate(m, e, b, c.changes);
-      if (!ev || ev.diff.opened || ev.diff.chainsOpened.length) {
+      if (!ev || ev.diff.opened || ev.diff.chainsOpened.length || breaksProtected(ev.m)) {
         pool.delete(key);
         continue;
       }
       // Breaking traffic someone probably wants costs more than leaving one risk open:
       // a step with collateral only wins if nothing cleaner closes as much.
-      const gain = w0 - weight(ev.e, ev.b) - 15 * collateralOf(ev.diff).length - c.changes.length;
-      c.bound = gain;
-      if (gain > 0 && (!best || gain > best.gain)) best = { key, c, ev, gain };
+      // So does cutting internal traffic: a load balancer, a health check or a
+      // group-to-group connection is a break; address-range traffic is a smaller cost.
+      const closure = w0 - weight(ev.e, ev.b);
+      // The bound is on what a step closes; penalties only ever lower it further.
+      c.bound = closure;
+      const before = closure - 15 * collateralOf(ev.diff).length - c.changes.length;
+      // Breaks only lower the gain: skip measuring them when the step cannot win anyway.
+      if (closure <= 0 || (best && before <= best.gain)) continue;
+      const br = internalBreaks(m, ev.m, c.changes);
+      const brPairs = new Set(br.filter((x) => !isWanted(x)).map((x) => `${x.flow.from}>${x.flow.to}`)).size;
+      const gain = before - 15 * br.filter(isWanted).length - 0.5 * Math.min(brPairs, 6);
+      // A step that closes something is taken even at a cost, when nothing cleaner
+      // closes as much; its breaks are reported with it.
+      if (closure > 0 && (!best || gain > best.gain)) best = { key, c, ev, gain };
     }
     if (!best) {
       // Nothing closes the worst goal on its own: leave it to a person.
@@ -481,7 +819,7 @@ export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: 
   const replay = (list: Cand[]) => {
     let mm = model;
     for (const c of list) mm = applyChanges(mm, c.changes);
-    const ee = analyzeExposure(mm);
+    const ee = exposureAfter(model, mm, exposure, list.flatMap((c) => c.changes));
     stats.evaluations += 1;
     return { e: ee, b: analyzeBlastRadius(mm, ee) };
   };
@@ -502,6 +840,104 @@ export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: 
     }
   }
 
+  // Proof: is there a smaller plan among the candidates? Every closed goal
+  // must be touched by some step, which gives a lower bound; then every set of
+  // candidates smaller than the plan that touches every closed goal is tried.
+  const optimality: FixPlan['optimality'] = { status: 'optimal', lowerBound: plan.length, searched: 0 };
+  const budget = opts.proofBudget ?? 500;
+  if (plan.length > 1 && budget > 0) {
+    const all = [...new Map([...plan, ...pool.values()].map((c) => [keyOf(c), c])).values()];
+    const openKeys = new Set([...e.findings.filter(isGoalF).map((f) => `f:${findingKey(f)}`), ...b.chains.filter(isGoalC).map((c) => `c:${c.id}`)]);
+    const closedGoals = [
+      ...exposure.findings.filter((f) => isGoalF(f) && !openKeys.has(`f:${findingKey(f)}`)).map((f) => ({ key: `f:${findingKey(f)}`, needs: needsOf(model, exposure, { f }) })),
+      ...blast.chains.filter((c) => isGoalC(c) && !openKeys.has(`c:${c.id}`)).map((c) => ({ key: `c:${c.id}`, needs: needsOf(model, exposure, { c }) })),
+    ];
+    const closedNeeds = closedGoals.map((g) => g.needs);
+    // A goal closes only if some step can close one of the connections it needs.
+    const sets = closedNeeds.map((needs) => all.map((_, i) => i).filter((i) => all[i]!.changes.some((x) => needs.some((nd) => canClose(model, x, nd)))));
+    const lb = minHittingSet(sets);
+    optimality.lowerBound = lb.exact ? lb.size : 1;
+    const wantedOf = (list: Cand[]) => {
+      let mm = model;
+      let n = 0;
+      for (const c of list) {
+        const next = applyChanges(mm, c.changes);
+        n += internalBreaks(mm, next, c.changes).filter(isWanted).length;
+        mm = next;
+      }
+      return n;
+    };
+    let planWanted = -1;
+    // Every set of k relevant candidates that touches every closed goal, for k
+    // from the lower bound up to one less than the plan. All of them, not just
+    // minimal ones: two candidates on the same goal can matter together.
+    // Candidates that touch the most goals come first.
+    const rel = [...new Set(sets.flat())].sort((x, y) => sets.filter((st) => st.includes(y)).length - sets.filter((st) => st.includes(x)).length);
+    const ruleSets = all.map((c) => new Set(c.changes.flatMap((x) => ('ruleId' in x ? [x.ruleId] : 'naclId' in x && 'ruleNumber' in x ? [`${x.naclId}:${x.egress}:${x.ruleNumber}`] : 'eniId' in x && 'publicIp' in x ? [`${x.eniId}:${x.publicIp}`] : []))));
+    const rulesOf = (i: number) => ruleSets[i]!;
+    const hitting = function* (k: number): Generator<number[]> {
+      const go = function* (start: number, chosen: number[]): Generator<number[]> {
+        if (chosen.length === k) {
+          if (sets.every((st) => st.some((x) => chosen.includes(x)))) yield chosen;
+          return;
+        }
+        // Not enough left to fill the set, or a goal no remaining candidate can touch.
+        if (rel.length - start < k - chosen.length) return;
+        const rest = new Set(rel.slice(start));
+        if (sets.some((st) => !st.some((x) => chosen.includes(x) || rest.has(x)))) return;
+        for (let i = start; i < rel.length; i++) {
+          // Two changes to the same rule cannot both be applied.
+          if (chosen.some((x) => [...rulesOf(x)].some((r) => rulesOf(rel[i]!).has(r)))) continue;
+          yield* go(i + 1, [...chosen, rel[i]!]);
+        }
+      };
+      yield* go(0, []);
+    };
+    const openParts: bigint[][] = [];
+    let exhausted = true;
+    search: for (let k = optimality.lowerBound; k < plan.length; k++) {
+      for (const idx of hitting(k)) {
+        if (optimality.searched >= budget) {
+          exhausted = false;
+          break search;
+        }
+        // Whether a goal closes depends only on the candidates that can touch it,
+        // and every candidate only takes access away, so if some candidates
+        // leave a goal open, any subset of them does too. A set whose part for
+        // some goal is inside a part already seen to fail is ruled out for free.
+        const parts = sets.map((st) => idx.filter((i) => st.includes(i)).reduce((m, i) => m | (1n << BigInt(i)), 0n));
+        if (parts.some((p, gi) => (openParts[gi] ?? []).some((q) => (p & q) === p))) continue;
+        optimality.searched += 1;
+        const trial = idx.map((i) => all[i]!);
+        let r: { e: ExposureReport; b: BlastReport };
+        try {
+          r = replay(trial);
+        } catch {
+          continue;
+        }
+        const stillOpen = new Set([...r.e.findings.map((f) => `f:${findingKey(f)}`), ...r.b.chains.map((c) => `c:${c.id}`)]);
+        closedGoals.forEach((g, gi) => {
+          if (stillOpen.has(g.key)) (openParts[gi] ??= []).push(parts[gi]!);
+        });
+        if (closedGoals.some((g) => stillOpen.has(g.key))) continue;
+        if (weight(r.e, r.b) > finalWeight) continue;
+        if (r.e.findings.length > exposure.findings.length || diffExposure(exposure, r.e).opened) continue;
+        if (opts.protect && breaksProtected(trial.reduce((mm, c) => applyChanges(mm, c.changes), model))) continue;
+        if (planWanted < 0) planWanted = wantedOf(plan);
+        if (wantedOf(trial) > planWanted) continue;
+        optimality.improvedFrom = plan.length;
+        plan = trial;
+        break search;
+      }
+    }
+    // Sizes are searched smallest first, so a plan found is the smallest there is.
+    if (!exhausted && !optimality.improvedFrom) optimality.status = 'bounded';
+    // Every smaller size was searched in full: the plan's size is the minimum.
+    if (exhausted) optimality.lowerBound = plan.length;
+    if (optimality.improvedFrom) optimality.lowerBound = plan.length;
+  }
+  if (plan.length <= 1) optimality.lowerBound = plan.length;
+
   // Describe the final steps against the model as it is when each one runs.
   const steps: PlanStep[] = [];
   let mm = model;
@@ -519,6 +955,7 @@ export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: 
       closes: lost.filter((d) => compareSeverity(d.severity, 'high') <= 0),
       chainsCut: ev.diff.chainsClosed.filter(isGoalC),
       collateral: lost.filter((d) => compareSeverity(d.severity, 'high') > 0),
+      breaks: internalBreaks(mm, ev.m, c.changes),
     });
     mm = ev.m;
     ee = ev.e;
@@ -530,5 +967,6 @@ export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: 
     after: { exposures: ee.findings.filter(isGoalF).length, chains: bb.chains.filter(isGoalC).length },
     unresolved,
     stats,
+    optimality,
   };
 }

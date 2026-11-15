@@ -172,6 +172,7 @@ export interface RawSecurityGroup {
   VpcId?: string;
   IpPermissions?: RawIpPermission[];
   IpPermissionsEgress?: RawIpPermission[];
+  Tags?: Tag[];
 }
 
 export interface RawSecurityGroupRule {
@@ -409,7 +410,7 @@ const SNAPSHOT: Spec = obj({
     TransitGatewayRouteTables: arr(obj({ TransitGatewayRouteTableId: id('tgw-rtb'), TransitGatewayId: id('tgw'), State: 'str' }, ['TransitGatewayRouteTableId', 'TransitGatewayId'])),
     TransitGatewayRoutes: { map: arr(obj({ DestinationCidrBlock: 'str', PrefixListId: 'str', TransitGatewayAttachments: arr(obj({ TransitGatewayAttachmentId: 'str', ResourceId: 'str', ResourceType: 'str' })), Type: 'str', State: 'str' })) },
     NetworkAcls: arr(obj({ NetworkAclId: id('acl'), VpcId: id('vpc'), IsDefault: 'bool', Entries: arr(obj({ RuleNumber: 'ruleNo', Protocol: 'str', RuleAction: { re: /^(allow|deny)$/, what: '"allow" or "deny"' }, Egress: 'bool', CidrBlock: 'str', Ipv6CidrBlock: 'str', PortRange: obj({ From: 'port', To: 'port' }), IcmpTypeCode: obj({ Type: 'int', Code: 'int' }) }, ['RuleNumber', 'Protocol', 'RuleAction', 'Egress'])), Associations: arr(obj({ SubnetId: 'str' })) }, ['NetworkAclId', 'VpcId'])),
-    SecurityGroups: arr(obj({ GroupId: id('sg'), GroupName: 'text', VpcId: 'str', IpPermissions: arr(PERM), IpPermissionsEgress: arr(PERM) }, ['GroupId'])),
+    SecurityGroups: arr(obj({ GroupId: id('sg'), GroupName: 'text', VpcId: 'str', IpPermissions: arr(PERM), IpPermissionsEgress: arr(PERM), Tags: TAGS }, ['GroupId'])),
     SecurityGroupRules: arr(obj({ SecurityGroupRuleId: id('sgr'), GroupId: id('sg'), IsEgress: 'bool', IpProtocol: 'str', FromPort: 'portAny', ToPort: 'portAny', CidrIpv4: 'str', CidrIpv6: 'str', PrefixListId: 'str', ReferencedGroupInfo: obj({ GroupId: 'str', VpcId: 'str', VpcPeeringConnectionId: 'str', PeeringStatus: 'str' }), Description: 'text' }, ['SecurityGroupRuleId', 'GroupId', 'IsEgress', 'IpProtocol'])),
     ManagedPrefixLists: arr(obj({ PrefixListId: id('pl'), PrefixListName: 'text', AddressFamily: 'str' }, ['PrefixListId'])),
     PrefixListEntries: { map: arr(obj({ Cidr: 'str', Description: 'text' })) },

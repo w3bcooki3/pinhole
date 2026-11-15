@@ -19,6 +19,8 @@ import { exposureMarkdown, exposureSarif } from './formats.js';
 import type { Change } from '@pinhole/engine';
 import { across, acrossText, blastText, canText, fixesFor, fixText, hygiene, hygieneText, LookupError, plan, planText, shortcutChanges, whatIf, whatIfText } from './advanced.js';
 import { VERSION } from './version.js';
+import { policyCheck, policyFailsAt, policyMarkdown, policyText, readPolicy } from './policy.js';
+import { applyChanges, diffPolicy, findMinCut, PolicyError } from '@pinhole/engine';
 
 export interface Io {
   stdout: (s: string) => void;
@@ -33,12 +35,15 @@ Usage:
                               [--fail-on LEVEL] [--verbose]
   pinhole can      SNAPSHOT --from WHO --to WHO [--port N] [--protocol tcp|udp|icmp]
   pinhole blast    SNAPSHOT [SNAPSHOT...] [--depth N] [--min-severity LEVEL] [--fail-on LEVEL]
-  pinhole fix      SNAPSHOT [--plan] [--min-severity LEVEL] [--all]
+  pinhole fix      SNAPSHOT [--plan [--policy POLICY.json]] [--min-severity LEVEL] [--all]
   pinhole hygiene  SNAPSHOT [--fail-on LEVEL]
   pinhole whatif   SNAPSHOT [--revoke SGR-ID]... [--remove-nacl ACL#ingress#N]...
                             [--remove-public-ip IP]... [--changes FILE.json]
   pinhole diff     OLD NEW [--format text|json|markdown] [--fail-on LEVEL]
   pinhole plan     SNAPSHOT PLAN.json [--format text|json|markdown] [--fail-on LEVEL]
+                            [--policy POLICY.json]
+  pinhole policy   SNAPSHOT POLICY.json [--format text|json|markdown] [--fail-on LEVEL]
+                            [--verbose]
   pinhole validate SNAPSHOT
   pinhole --version | --help
 
@@ -55,20 +60,31 @@ can       Whether one resource can reach another, and on which services.
           WHO is an interface ID, instance ID, private IP, instance Name tag,
           a public IP, or "internet". Without --port, lists every service.
 blast     What an attacker reaches after taking over each internet-exposed
-          resource, moving on through remote administration services.
+          resource, moving on through remote administration services, and
+          the smallest set of rules that cuts every path to the crown jewels
+          (tag them pinhole:crown-jewel=true or with a data classification).
           Given several snapshots, it also joins those linked by a VPC
           peering connection or transit gateway and follows chains from one
           account or Region into another, with a plan to cut them.
 fix       For each finding, the smallest verified change that closes it, as
           AWS CLI commands. With --plan, the fewest changes, in order, that
-          close every critical and high exposure and attack chain.
+          close every critical and high exposure and attack chain, each
+          checked for the internal traffic it would break. --policy keeps
+          every connection the policy's require rules need working.
           Nothing is run; review and run the commands yourself.
-hygiene   Redundant, shadowed, stale, unused and overly broad rules.
+hygiene   Redundant, shadowed, stale, unused and overly broad rules,
+          including rules that several others cover together, the smallest
+          equivalent rule set for each group, and rules near AWS quotas.
 whatif    Exposure and attack chains before and after proposed changes.
 diff      What changed between two snapshots of one account and region:
           new and closed internet exposure and attack chains, and the rule,
           route and address changes behind them. --fail-on exits 2 when
           anything new or wider is at or above LEVEL.
+policy    Checks your own rules: what must never be reachable (from the
+          internet, directly or through attack chains, or between groups of
+          resources) and what must always be. Every failure comes with the
+          connection, its path and the rules that let it through or the hop
+          that blocks it. See docs/policy.md for the format.
 plan      What a Terraform plan would do to internet exposure and attack
           chains, before it is applied. PLAN.json is the output of
           "terraform show -json PLANFILE". Changes that cannot be placed
@@ -229,8 +245,10 @@ function cmdBlast(args: string[], io: Io): number {
   const fails = (list: { severity: Severity }[]) => !!failOn && list.some((c) => SEVERITY_ORDER.indexOf(c.severity) <= SEVERITY_ORDER.indexOf(failOn));
   if (positionals.length <= 1) {
     const model = snapshotModel(positionals, 'blast');
-    const report = analyzeBlastRadius(model, analyzeExposure(model), opts);
-    io.stdout(format === 'json' ? json(report) : safeForTerminal(blastText(model, report, minSeverity)));
+    const exposure = analyzeExposure(model);
+    const report = analyzeBlastRadius(model, exposure, opts);
+    const cut = findMinCut(model, exposure, report);
+    io.stdout(format === 'json' ? json({ ...report, crownJewels: cut.jewels, cut }) : safeForTerminal(blastText(model, report, minSeverity, cut)));
     return fails(report.chains) ? 2 : 0;
   }
   // Several snapshots: each on its own, then the chains that cross between linked ones.
@@ -251,10 +269,15 @@ function cmdBlast(args: string[], io: Io): number {
 }
 
 function cmdFix(args: string[], io: Io): number {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, 'min-severity': { type: 'string' }, all: { type: 'boolean', default: false }, plan: { type: 'boolean', default: false } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, 'min-severity': { type: 'string' }, all: { type: 'boolean', default: false }, plan: { type: 'boolean', default: false }, policy: { type: 'string' } } });
   const format = checkFormat(values.format);
+  if (values.policy && !values.plan) throw new UsageError('--policy goes with --plan.');
   if (values.plan) {
-    const p = plan(snapshotModel(positionals, 'fix'));
+    // A policy's require rules are traffic the plan must keep working.
+    const policy = values.policy ? readPolicy(values.policy) : undefined;
+    const required = policy ? { ...policy, rules: policy.rules.filter((r) => r.require) } : undefined;
+    const protect = required?.rules.length ? (m: Parameters<typeof policyCheck>[0]) => policyCheck(m, required).results.reduce((n, r) => n + r.violations.length, 0) : undefined;
+    const p = plan(snapshotModel(positionals, 'fix'), protect);
     io.stdout(format === 'json' ? json(p) : safeForTerminal(planText(p)));
     return 0;
   }
@@ -267,7 +290,8 @@ function cmdHygiene(args: string[], io: Io): number {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, 'fail-on': { type: 'string' } } });
   const format = checkFormat(values.format);
   const failOn = severityArg(values['fail-on'], '--fail-on');
-  const list = hygiene(snapshotModel(positionals, 'hygiene'));
+  const model = snapshotModel(positionals, 'hygiene');
+  const list = hygiene(model);
   io.stdout(format === 'json' ? json(list) : safeForTerminal(hygieneText(list)));
   return failOn && list.some((h) => SEVERITY_ORDER.indexOf(h.severity) <= SEVERITY_ORDER.indexOf(failOn)) ? 2 : 0;
 }
@@ -327,8 +351,30 @@ function cmdDiff(args: string[], io: Io): number {
   return 0;
 }
 
+function cmdPolicy(args: string[], io: Io): number {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, 'fail-on': { type: 'string' }, verbose: { type: 'boolean', default: false } } });
+  if (positionals.length !== 2) throw new UsageError('policy takes a snapshot file and a policy file.');
+  const format = values.format;
+  if (format !== 'text' && format !== 'json' && format !== 'markdown') throw new UsageError('--format must be text, json or markdown');
+  const failOn = severityArg(values['fail-on'], '--fail-on');
+  const [snapFile, policyFile] = positionals as [string, string];
+  const policy = readPolicy(policyFile);
+  const r = policyCheck(normalize(readSnapshot(snapFile)), policy);
+  if (format === 'json') io.stdout(json({ tool: { name: 'pinhole', version: VERSION }, snapshot: snapFile, policy: policyFile, ...r }));
+  else if (format === 'markdown') io.stdout(policyMarkdown(r));
+  else io.stdout(safeForTerminal(policyText(r, values.verbose ?? false)));
+  if (failOn) {
+    const n = policyFailsAt(r, failOn);
+    if (n > 0) {
+      io.stderr(`${n} policy rule(s) at or above ${failOn} fail.\n`);
+      return 2;
+    }
+  }
+  return 0;
+}
+
 function cmdPlan(args: string[], io: Io): number {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, 'fail-on': { type: 'string' } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, 'fail-on': { type: 'string' }, policy: { type: 'string' } } });
   if (positionals.length !== 2) throw new UsageError('plan takes a snapshot file and a plan file (terraform show -json PLANFILE > plan.json).');
   const format = values.format;
   if (format !== 'text' && format !== 'json' && format !== 'markdown') throw new UsageError('--format must be text, json or markdown');
@@ -345,10 +391,21 @@ function cmdPlan(args: string[], io: Io): number {
   }
   const mapping = mapTerraformPlan(model, raw);
   const check = { mapping, exposure: whatIf(model, mapping.changes) };
-  if (format === 'json') io.stdout(json({ tool: { name: 'pinhole', version: VERSION }, snapshot: snapFile, plan: planFile, ...check }));
-  else if (format === 'markdown') io.stdout(tfPlanMarkdown(check, model));
-  else io.stdout(safeForTerminal(tfPlanText(check, model, snapFile, planFile)));
+  // With a policy: which rules the plan would start to break, and which it fixes.
+  const policyFile = values.policy;
+  const policy = policyFile ? (() => {
+    const p = readPolicy(policyFile);
+    return diffPolicy(policyCheck(model, p), policyCheck(applyChanges(model, mapping.changes), p));
+  })() : undefined;
+  if (format === 'json') io.stdout(json({ tool: { name: 'pinhole', version: VERSION }, snapshot: snapFile, plan: planFile, ...check, ...(policy ? { policy } : {}) }));
+  else if (format === 'markdown') io.stdout(tfPlanMarkdown(check, model) + (policy ? policyDiffText(policy, true) : ''));
+  else io.stdout(safeForTerminal(tfPlanText(check, model, snapFile, planFile) + (policy ? policyDiffText(policy, false) : '')));
   if (failOn) {
+    const broken = (policy ?? []).filter((x) => x.added.length && SEVERITY_ORDER.indexOf(x.severity) <= SEVERITY_ORDER.indexOf(failOn)).length;
+    if (broken > 0) {
+      io.stderr(`The plan breaks ${broken} policy rule(s) at or above ${failOn}.\n`);
+      return 2;
+    }
     const n = tfPlanNewAtOrAbove(check, failOn);
     if (n > 0) {
       io.stderr(`The plan opens ${n} new or wider exposure(s) or attack chain(s) at or above ${failOn}.\n`);
@@ -356,6 +413,16 @@ function cmdPlan(args: string[], io: Io): number {
     }
   }
   return 0;
+}
+
+function policyDiffText(d: ReturnType<typeof diffPolicy>, md: boolean): string {
+  const lines: string[] = ['', md ? '#### Policy' : 'Policy:'];
+  if (!d.length) lines.push(md ? 'No policy rule changes.' : '  No policy rule changes.');
+  for (const x of d) {
+    if (x.added.length) lines.push(`${md ? '- **breaks**' : '  BREAKS'} ${x.id} (${x.severity}): ${x.added.slice(0, 3).map((v) => v.detail).join('; ')}${x.added.length > 3 ? `; and ${x.added.length - 3} more` : ''}`);
+    if (x.resolved.length) lines.push(`${md ? '- fixes' : '  fixes '} ${x.id}: ${x.resolved.length} violation(s) resolved`);
+  }
+  return `${lines.join('\n')}\n`;
 }
 
 function cmdValidate(args: string[], io: Io): number {
@@ -426,11 +493,13 @@ export async function run(argv: string[], io: Io): Promise<number> {
         return cmdDiff(rest, io);
       case 'plan':
         return cmdPlan(rest, io);
+      case 'policy':
+        return cmdPolicy(rest, io);
       default:
         throw new UsageError(`Unknown command "${cmd}".`);
     }
   } catch (e) {
-    if (e instanceof LookupError || e instanceof ChangeError || e instanceof DriftError || e instanceof PlanError) {
+    if (e instanceof LookupError || e instanceof ChangeError || e instanceof DriftError || e instanceof PlanError || e instanceof PolicyError) {
       io.stderr(`error: ${e.message}\n`);
       return 1;
     }

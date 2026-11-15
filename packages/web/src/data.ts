@@ -3,8 +3,8 @@
  * labels, remediation text, rule impact and resource grouping. No DOM here
  * except the small file helpers.
  */
-import { analyzeBlastRadius, analyzeExposure, analyzeHygiene, crossChains, findChokepoints, findFixes, joinSnapshots, normalize, planFixes, assertSnapshot, SEVERITY_ORDER } from '@pinhole/engine';
-import type { AttackChain, BlastReport, JoinLink, Chokepoint, ExposureFinding, ExposureReport, FixCandidate, FixPlan, HygieneFinding, Hop, NetworkModel, Severity, Snapshot, Warning } from '@pinhole/engine';
+import { analyzeBlastRadius, analyzeCleanup, analyzeExposure, analyzeHygiene, cleanupFindings, crossChains, findChokepoints, findMinCut, findFixes, joinSnapshots, normalize, planFixes, assertSnapshot, SEVERITY_ORDER } from '@pinhole/engine';
+import type { AttackChain, BlastReport, CleanupReport, MinCut, JoinLink, Chokepoint, ExposureFinding, ExposureReport, FixCandidate, FixPlan, HygieneFinding, Hop, NetworkModel, Severity, Snapshot, Warning } from '@pinhole/engine';
 
 declare const __DEMO__: { name: string; snapshot: unknown }[];
 declare const __SCRIPT__: string;
@@ -70,7 +70,7 @@ export function blastOf(snap: Snap): BlastReport {
 export function hygieneOf(snap: Snap): HygieneFinding[] {
   let x = hygieneCache.get(snap);
   if (!x) {
-    x = analyzeHygiene(snap.model, reportOf(snap));
+    x = [...analyzeHygiene(snap.model, reportOf(snap)), ...cleanupFindings(snap.model, cleanupOf(snap))];
     hygieneCache.set(snap, x);
   }
   return x;
@@ -85,6 +85,28 @@ export function chokepointsOf(snap: Snap): Chokepoint[] {
   if (!c) {
     c = blastOf(snap).chains.length ? findChokepoints(snap.model, reportOf(snap), blastOf(snap), 12) : [];
     chokeCache.set(snap, c);
+  }
+  return c;
+}
+
+const cutCache = new WeakMap<Snap, MinCut>();
+/** Crown jewels and the smallest verified set of rules that cuts every path to them. */
+export function cutOf(snap: Snap): MinCut {
+  let c = cutCache.get(snap);
+  if (!c) {
+    c = findMinCut(snap.model, reportOf(snap), blastOf(snap));
+    cutCache.set(snap, c);
+  }
+  return c;
+}
+
+const cleanupCache = new WeakMap<Snap, CleanupReport>();
+/** Rules covered by others together, smallest equivalent rule sets, quotas. */
+export function cleanupOf(snap: Snap): CleanupReport {
+  let c = cleanupCache.get(snap);
+  if (!c) {
+    c = analyzeCleanup(snap.model);
+    cleanupCache.set(snap, c);
   }
   return c;
 }

@@ -3,8 +3,8 @@
  * rule hygiene, plus the command palette. They get the app's state and
  * navigation through a small context object, so they do not depend on app.ts.
  */
-import { analyzeBlastRadius, analyzeExposure, applyChanges, ChangeError, cliFor, describeChange, diffExposure, evaluatePath, isLateralTarget, reachServices, ruleText, serviceLabel } from '@pinhole/engine';
-import type { AttackChain, Change, ExposureDiff, NetworkModel, PathResult, ServiceReach } from '@pinhole/engine';
+import { analyzeBlastRadius, analyzeExposure, applyChanges, ChangeError, cliFor, describeBreak, describeChange, diffExposure, evaluatePath, isLateralTarget, reachServices, ruleText, serviceLabel, summarizeBreaks } from '@pinhole/engine';
+import type { AttackChain, Breakage, Change, ExposureDiff, NetworkModel, PathResult, ServiceReach } from '@pinhole/engine';
 import { h, on, toast } from './dom.js';
 import type { Child } from './dom.js';
 import * as D from './data.js';
@@ -110,6 +110,29 @@ const chainSentence = (c: AttackChain) => {
   return `If ${short(c.entry.name)} is compromised (the internet reaches it on ${c.entry.how.replace(/ from .*$/, '')}), an attacker can open ${what} on ${short(end.name)} in ${D.plural(c.steps.length - 1, 'hop')}.`;
 };
 
+/** Crown jewels and the smallest set of rules that cuts every attack path to them. */
+function jewelBox(ctx: Ctx, snap: Snap): HTMLElement | null {
+  if (snap.joined) return null;
+  const c = D.cutOf(snap);
+  if (!c.before) return null;
+  const body = h('div', { class: 'pad jewel' });
+  body.append(
+    h('div', { class: 'jewels' }, ...c.jewels.map((j) => h('div', { class: 'jewel-i' }, h('strong', {}, short(j.name)), h('span', { class: 'faint' }, ` ${j.reason}${j.chains ? `, ${D.plural(j.chains, 'chain')}` : ''}`)))),
+  );
+  if (c.uncuttable) {
+    body.append(h('p', { class: 'dim' }, 'A path to a crown jewel goes through a resource without security groups, so no set of rule removals cuts it. Look at its routes and network ACLs.'));
+  } else {
+    body.append(
+      h('p', { class: 'cut-sum' }, `Remove ${D.plural(c.ruleIds.length, 'rule')} and no attack path reaches any of them${c.verified ? '' : ' (not confirmed by re-analysis)'}.`),
+      h('ul', { class: 'cut-rules' }, ...c.rules.map((r) => h('li', {}, h('span', { class: 'mono' }, r.id), h('span', { class: 'dim' }, ` in ${r.groupId}: ${r.text}`)))),
+      h('div', { class: 'chips' }, ...breakChips(c.breaks)),
+      h('div', { class: 'cut-a' }, btn([iconSvg('flask', 13), 'Simulate'], 'sm', () => ctx.go('simulator', { simKey: snap.key, changes: c.changes })), btn([iconSvg('copy', 13), 'Copy commands'], 'sm', async () => { await D.copyText(c.cli.join('\n')); toast('Copied'); })),
+      h('p', { class: 'faint', style: 'margin:0.5rem 0 0' }, 'A minimum cut on the attack graph, weighted so public websites and rules that name a security group are kept where possible, then checked by removing the rules from a copy of the snapshot and running everything again.'),
+    );
+  }
+  return h('section', { class: 'box', style: 'margin-bottom:1rem', id: 'jewels' }, boxHead('Crown jewels', c.jewels.some((j) => j.reason.startsWith('tagged')) ? 'From your tags' : 'Data stores and control planes that attack chains end at. Tag your own with pinhole:crown-jewel=true'), body);
+}
+
 function chainOverview(ctx: Ctx, snap: Snap, graphBox: HTMLElement, sel: HTMLElement | null): HTMLElement {
   const blast = D.blastOf(snap);
   const cuts = D.chokepointsOf(snap);
@@ -130,6 +153,7 @@ function chainOverview(ctx: Ctx, snap: Snap, graphBox: HTMLElement, sel: HTMLEle
         ),
       ),
     ),
+    jewelBox(ctx, snap),
     h(
       'section',
       { class: 'box', style: 'margin-bottom:1rem', id: 'chains' },
@@ -153,7 +177,7 @@ function chainOverview(ctx: Ctx, snap: Snap, graphBox: HTMLElement, sel: HTMLEle
                       'tr',
                       { class: 'click chain-item', tabindex: 0 },
                       h('td', { class: 'first' }, sevPill(c.severity)),
-                      h('td', { class: 'tt' }, chainText(c), snap.joined ? h('div', { class: 'faint mono xs' }, [...new Set(c.steps.map((x) => D.scopeOf(snap, x.eniId) ?? ''))].join(' → ')) : null),
+                      h('td', { class: 'tt' }, chainText(c), c.crownJewel ? h('span', { class: 'tag jewel-tag', title: c.crownJewel }, 'crown jewel') : null, snap.joined ? h('div', { class: 'faint mono xs' }, [...new Set(c.steps.map((x) => D.scopeOf(snap, x.eniId) ?? ''))].join(' → ')) : null),
                       h('td', {}, h('div', {}, IMPACT[c.impact]), h('div', { class: 'faint' }, h('span', { class: 'mono' }, end.service ?? ''), end.serviceName ? ` ${end.serviceName}` : '')),
                       h('td', { class: 'hide-sm num' }, String(c.steps.length - 1)),
                       h('td', { class: 'last hide-sm mono' }, cut ? cut.ruleId : h('span', { class: 'faint' }, 'no single rule')),
@@ -658,6 +682,11 @@ const HYG_LABEL: Record<string, string> = {
   'redundant-sg-rule': 'Redundant rule',
   'stale-group-reference': 'Stale group reference',
   'unused-security-group': 'Unused group',
+  'redundant-together': 'Covered by other rules',
+  'redundant-attached': 'Covered by another group',
+  'shadowed-together': 'Never matches',
+  'compactable-group': 'Can be smaller',
+  'near-quota': 'Near quota',
 };
 
 export function hygienePage(ctx: Ctx): HTMLElement {
@@ -733,11 +762,12 @@ export function fixesSection(ctx: Ctx, row: Row): HTMLElement {
         h(
           'div',
           { class: `cut${i === 0 ? ' best' : ''}` },
-          h('div', { class: 'cut-h' }, h('span', { class: 'strong' }, x.changes.length === 1 && x.changes[0]!.kind === 'revoke-sg-rule' && x.steps[0] ? x.steps[0] : x.title), i === 0 ? h('span', { class: 'tag' }, 'Recommended') : null),
+          h('div', { class: 'cut-h' }, h('span', { class: 'strong' }, x.changes.length === 1 && x.changes[0]!.kind === 'revoke-sg-rule' && x.steps[0] ? x.steps[0] : x.title), i === 0 ? h('span', { class: 'tag' }, 'Recommended') : null, x.safe ? h('span', { class: 'tag safe-tag', title: 'Breaks no load balancer, health check or group-to-group traffic' }, 'Safe') : null),
           ...(x.changes.length === 1 && x.changes[0]!.kind === 'revoke-sg-rule' ? [] : x.steps.map((s) => h('div', { class: 'dim' }, s))),
           x.bonus.length ? h('div', { class: 'good-t' }, `Also closes ${x.bonus.map((d) => `${short(d.resourceName)} ${d.protocol}${d.ports ? `/${d.ports.from}` : ''}`).join(', ')}`) : null,
           x.stillReachable.length ? h('div', { class: 'warn' }, `Keeps access from inside, but ${[...new Set(x.stillReachable.map((c) => short(c.steps[0]!.name)))].join(' and ')} could still reach it if compromised.`) : null,
           x.collateral.length ? h('div', { class: 'warn' }, `Also affects ${x.collateral.map((d) => `${short(d.resourceName)} ${d.protocol}${d.ports ? `/${d.ports.from}` : ''} (${d.status})`).join(', ')}. Check these are not wanted.`) : null,
+          x.breaks.length ? h('div', { class: 'chips' }, ...breakChips(x.breaks)) : null,
           h('div', { class: 'cut-a' }, btn([iconSvg('flask', 13), 'Simulate'], 'sm', () => ctx.go('simulator', { simKey: row.snap.key, changes: x.changes })), btn([iconSvg('copy', 13), 'Copy command'], 'sm', async () => { await D.copyText(x.cli.join('\n')); toast('Copied'); })),
         ),
       ),
@@ -817,6 +847,17 @@ export function openPalette(ctx: Ctx, pages: { route: string; label: string; ico
 
 // ================================================================== fix plan (dashboard)
 
+/** Wanted internal traffic a change breaks, as warning chips; address-range cuts as one quiet chip. */
+export function breakChips(list: Breakage[]): HTMLElement[] {
+  const { wanted, network } = summarizeBreaks(list);
+  const label = (b: Breakage) => `${short(b.flow.fromName)} → ${short(b.flow.toName)} ${b.flow.protocol}${b.flow.ports ? `/${b.flow.ports.from === b.flow.ports.to ? b.flow.ports.from : `${b.flow.ports.from}-${b.flow.ports.to}`}` : ''}`;
+  const out = wanted.slice(0, 4).map((b) => h('span', { class: 'chip warn-chip', title: describeBreak(b) }, `breaks ${label(b)}`));
+  if (wanted.length > 4) out.push(h('span', { class: 'chip warn-chip' }, `and ${wanted.length - 4} more`));
+  const pairs = new Set(network.map((b) => `${b.flow.from}>${b.flow.to}`)).size;
+  if (pairs) out.push(h('span', { class: 'chip faint-chip', title: network.slice(0, 8).map(describeBreak).join('\n') }, `cuts ${D.plural(pairs, 'internal connection')} allowed only by address range`));
+  return out;
+}
+
 export function planBox(ctx: Ctx): HTMLElement {
   const plans = D.withJoined(ctx.st.snaps).map((snap) => ({ snap, plan: D.planOf(snap) })).filter((x) => x.plan.before.exposures || x.plan.before.chains);
   const box = h('section', { class: 'box', id: 'plan' }, boxHead('Fix plan', 'Fewest changes that close every critical and high risk, each proved by re-analysis'));
@@ -839,6 +880,13 @@ export function planBox(ctx: Ctx): HTMLElement {
       { class: 'pad plan-head' },
       h('p', { class: 'plan-sum' }, `${D.plural(steps.length, 'change')} close${steps.length === 1 ? 's' : ''} ${parts.join(' and ')}.`),
       h('p', { class: 'dim', style: 'margin:0' }, coll ? `${D.plural(coll, 'other path')} would also close; each is shown on its step. Check those are not wanted.` : 'Nothing else that is reachable today changes: no web or low-risk path is closed.'),
+      (() => {
+        const multi = plans.filter((x) => x.plan.steps.length > 1);
+        if (!multi.length) return null;
+        const proved = multi.every((x) => x.plan.optimality.status === 'optimal');
+        const floor = multi.reduce((n, x) => n + x.plan.optimality.lowerBound, 0) + plans.filter((x) => x.plan.steps.length <= 1).reduce((n, x) => n + x.plan.steps.length, 0);
+        return h('p', { class: 'plan-proof' }, proved ? 'Proved: no plan with fewer changes closes as much among the changes considered.' : `At least ${floor} changes are needed; the search for a shorter plan stopped early.`);
+      })(),
     ),
   );
   const lab = (d: { resourceName: string; protocol: string; ports?: { from: number; to: number } }) => `${short(d.resourceName)} ${d.protocol}${d.ports ? `/${d.ports.from === d.ports.to ? d.ports.from : `${d.ports.from}-${d.ports.to}`}` : ''}`;
@@ -865,6 +913,7 @@ export function planBox(ctx: Ctx): HTMLElement {
               ...step.closes.map((d) => sevPill(d.severity, `${d.status === 'narrowed' ? 'narrows' : 'closes'} ${lab(d)}`)),
               ...step.chainsCut.map((c) => sevPill(c.severity, `cuts ${chainText(c)}`)),
               ...step.collateral.map((d) => h('span', { class: 'chip warn-chip' }, `also ${d.status} ${lab(d)}`)),
+              ...breakChips(step.breaks),
             ),
           ),
           h('span', { class: 'plan-s mono faint hide-sm' }, `${snap.account} ${snap.region}`),

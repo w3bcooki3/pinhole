@@ -96,6 +96,7 @@ export interface SgRule {
 
 export interface SecurityGroup {
   id: string;
+  tags?: Tags;
   name: string;
   vpcId: string;
   ingress: SgRule[];
@@ -149,8 +150,12 @@ export interface RouteTable {
 
 // ---------------------------------------------------------------- Topology
 
+/** Resource tags (Key -> Value), when the snapshot has them. */
+export type Tags = Record<string, string>;
+
 export interface Vpc {
   id: string;
+  tags?: Tags;
   cidrs: Cidr[];
   ipv6CidrTexts: string[];
   ownerId?: string;
@@ -158,6 +163,7 @@ export interface Vpc {
 
 export interface Subnet {
   id: string;
+  tags?: Tags;
   vpcId: string;
   cidr: Cidr;
   availabilityZone: string;
@@ -249,6 +255,7 @@ export interface Eni {
 
 export interface Instance {
   id: string;
+  tags?: Tags;
   name?: string;
   state: string;
   primaryEniId?: string;

@@ -15,7 +15,7 @@ import { parseIpv4, rangeContains } from './ipv4.js';
 import { hasPorts, protocolName } from './packet.js';
 import { assessPorts, categorize, isPivotService, serviceName } from './risk.js';
 import type { ServiceCategory, Severity } from './risk.js';
-import { isElbNode } from './topology.js';
+import { isElbNode, naclForSubnet } from './topology.js';
 import { PROTO_ALL, PROTO_ICMP, PROTO_TCP, PROTO_UDP } from './types.js';
 import type { Eni, NetworkModel, PortRange, ProtocolNumber, SgRule } from './types.js';
 
@@ -122,6 +122,7 @@ export function reachServices(model: NetworkModel, srcId: string, dstId: string,
     }
   }
 
+  const acls = [...new Set([src.subnetId, dst.subnetId].map((id) => model.subnets.get(id)).map((sub) => (sub ? naclForSubnet(model, sub) : undefined)).filter((n): n is NonNullable<typeof n> => !!n))];
   const to = { eni: dst.id, ...(opts.dstIp ? { ip: opts.dstIp } : {}) };
   const from = { eni: src.id, ip: srcIpText };
   for (const protocol of protocols) {
@@ -135,7 +136,8 @@ export function reachServices(model: NetworkModel, srcId: string, dstId: string,
       const set = new Set<number>([within.from, within.to + 1]);
       if (rules !== 'any') for (const r of rules) if (r.protocol === protocol) cuts(set, r.fromPort, r.toPort, within);
       for (const gid of src.groupIds) for (const r of model.securityGroups.get(gid)?.egress ?? []) if (r.protocol === protocol) cuts(set, r.fromPort, r.toPort, within);
-      for (const n of model.nacls.values()) for (const e of n.entries) if (e.protocol === protocol && e.portRange) cuts(set, e.portRange.from, e.portRange.to, within);
+      // Only the source and destination subnets' network ACLs are on the path.
+      for (const n of acls) for (const e of n.entries) if (e.protocol === protocol && e.portRange) cuts(set, e.portRange.from, e.portRange.to, within);
       const sorted = [...set].sort((a, b) => a - b);
       cells = [];
       for (let i = 0; i + 1 < sorted.length; i++) cells.push({ from: sorted[i]!, to: sorted[i + 1]! - 1 });

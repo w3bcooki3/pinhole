@@ -256,10 +256,10 @@ describe('pinhole CLI', () => {
     });
     it('fix: prints the verified fix as an AWS CLI command', async () => {
       const r = await cli('fix', f9);
-      expect(r.stdout).toContain('Verified: Remove sgr-bastion-ssh-world');
+      expect(r.stdout).toContain('Verified, safe: Remove sgr-bastion-ssh-world');
       expect(r.stdout).toContain('$ aws ec2 revoke-security-group-ingress --region us-east-1 --group-id sg-bastion --security-group-rule-ids sgr-bastion-ssh-world');
       const all = await cli('fix', f9, '--all');
-      expect(all.stdout).toContain('Verified: Allow tcp/22 on sgr-bastion-ssh-world only from inside vpc-1');
+      expect(all.stdout).toContain('Verified, safe: Allow tcp/22 on sgr-bastion-ssh-world only from inside vpc-1');
       expect(all.stdout).toContain('Still reachable after a compromise of: web');
       expect(all.stdout).toContain(`$ aws ec2 modify-security-group-rules --region us-east-1 --group-id sg-bastion --security-group-rules '[{"SecurityGroupRuleId":"sgr-bastion-ssh-world","SecurityGroupRule":{"IpProtocol":"tcp","FromPort":22,"ToPort":22,"CidrIpv4":"10.0.0.0/16","Description":"SSH from anywhere"}}]'`);
     });
@@ -281,6 +281,46 @@ describe('pinhole CLI', () => {
       expect(r.stdout).toMatch(/Attack chains: 1 closed, 0 opened\./);
       expect((await cli('whatif', f9, '--revoke', 'sgr-nope')).stderr).toMatch(/sgr-nope is not in the snapshot/);
       expect((await cli('whatif', f9)).stderr).toMatch(/at least one change/);
+    });
+  });
+
+  describe('policy', () => {
+    const pol = join(here, '../../../fixtures/policies/09-policy.json');
+    it('lists failing rules with the connections that break them, and exits 2 with --fail-on', async () => {
+      const r = await cli('policy', fx('09-lateral-movement'), pol, '--fail-on', 'high');
+      expect(r.code).toBe(2);
+      expect(r.stdout).toMatch(/Policy: 1 of 3 rule\(s\) fail/);
+      expect(r.stdout).toMatch(/\[CRITICAL\] no-db-from-internet/);
+      expect(r.stdout).toMatch(/PASS +bastion-reaches-db/);
+      const j = JSON.parse((await cli('policy', fx('09-lateral-movement'), pol, '--format', 'json')).stdout);
+      expect(j.failed).toBe(1);
+      expect((await cli('policy', fx('09-lateral-movement'), pol, '--format', 'markdown')).stdout).toMatch(/\| no-db-from-internet \| critical \| \*\*fail\*\* \|/);
+    });
+    it('names the bad field in a bad policy', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'pinhole-'));
+      writeFileSync(join(dir, 'p.json'), JSON.stringify({ rules: [{ id: 'x', deny: { from: 'internet', to: 'nope' } }] }));
+      const r = await cli('policy', fx('09-lateral-movement'), join(dir, 'p.json'));
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/rules\[0\]\.deny\.to: "nope"/);
+    });
+    it('fix --plan --policy keeps the required connections working', async () => {
+      const plain = await cli('fix', fx('09-lateral-movement'), '--plan');
+      expect(plain.stdout).toMatch(/Remove sgr-db-ssh-vpc/);
+      const kept = await cli('fix', fx('09-lateral-movement'), '--plan', '--policy', pol);
+      expect(kept.stdout).not.toMatch(/Remove sgr-db-ssh-vpc/);
+      expect(kept.stdout).toMatch(/Allow sgr-db-ssh-vpc only from what uses it, not eni-web/);
+      expect(kept.stdout).toMatch(/No plan with fewer steps exists/);
+      const after = await cli('policy', fx('09-lateral-movement'), pol);
+      expect(after.code).toBe(0);
+    });
+    it('plan --policy reports the rules a Terraform plan would break', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'pinhole-'));
+      const tf = { resource_changes: [{ address: 'aws_vpc_security_group_ingress_rule.db_ssh', mode: 'managed', type: 'aws_vpc_security_group_ingress_rule', change: { actions: ['delete'], before: { id: 'sgr-db-ssh-vpc', security_group_rule_id: 'sgr-db-ssh-vpc', security_group_id: 'sg-db' }, after: null } }] };
+      writeFileSync(join(dir, 'plan.json'), JSON.stringify(tf));
+      const r = await cli('plan', fx('09-lateral-movement'), join(dir, 'plan.json'), '--policy', pol, '--fail-on', 'medium');
+      expect(r.stdout).toMatch(/BREAKS bastion-reaches-db/);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toMatch(/breaks 1 policy rule/);
     });
   });
 });

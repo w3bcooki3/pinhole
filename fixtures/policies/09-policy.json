@@ -1,0 +1,25 @@
+{
+  "groups": {
+    "databases": { "names": ["orders-db"] },
+    "bastions": { "names": ["bastion"] }
+  },
+  "rules": [
+    {
+      "id": "no-db-from-internet",
+      "description": "Databases are never reachable from the internet, even through a compromised server",
+      "severity": "critical",
+      "deny": { "from": "internet", "to": "databases", "indirect": true }
+    },
+    {
+      "id": "ssh-only-to-bastions",
+      "description": "Only bastions take SSH from the internet",
+      "severity": "high",
+      "deny": { "from": "internet", "to": { "not": "bastions" }, "ports": "tcp/22" }
+    },
+    {
+      "id": "bastion-reaches-db",
+      "description": "Operators keep SSH to the database through the bastion",
+      "require": { "from": "bastions", "to": "databases", "ports": "tcp/22" }
+    }
+  ]
+}

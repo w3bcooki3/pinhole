@@ -14,13 +14,14 @@ import { iconFor, iconSvg, renderGraph } from './graph.js';
 import { ALL, boxHead, btn, empty, linkBtn, sevPill, sevVar, softVar } from './ui.js';
 import { reportDoc, reportHtml, REPORT_CSS } from './report.js';
 import { comparePage } from './compare.js';
+import { policyPage } from './policy.js';
 import { askPage, blastPage, fixesSection, hygienePage, openPalette, planBox, simulatorPage } from './pages.js';
 import type { Ctx } from './pages.js';
 import type { Change } from '@pinhole/engine';
 
 
-type Route = 'dashboard' | 'graph' | 'blast' | 'issues' | 'resources' | 'hygiene' | 'coverage' | 'simulator' | 'compare' | 'ask' | 'report' | 'connect';
-const ROUTES: Route[] = ['dashboard', 'graph', 'blast', 'issues', 'resources', 'hygiene', 'coverage', 'simulator', 'compare', 'ask', 'report', 'connect'];
+type Route = 'dashboard' | 'graph' | 'blast' | 'issues' | 'resources' | 'hygiene' | 'policy' | 'coverage' | 'simulator' | 'compare' | 'ask' | 'report' | 'connect';
+const ROUTES: Route[] = ['dashboard', 'graph', 'blast', 'issues', 'resources', 'hygiene', 'policy', 'coverage', 'simulator', 'compare', 'ask', 'report', 'connect'];
 const PAGES: { route: Route; label: string; icon: string }[] = [
   { route: 'dashboard', label: 'Dashboard', icon: 'home' },
   { route: 'graph', label: 'Attack graph', icon: 'graph' },
@@ -28,6 +29,7 @@ const PAGES: { route: Route; label: string; icon: string }[] = [
   { route: 'issues', label: 'Exposures', icon: 'list' },
   { route: 'resources', label: 'Resources', icon: 'box' },
   { route: 'hygiene', label: 'Rule hygiene', icon: 'broom' },
+  { route: 'policy', label: 'Policies', icon: 'policy' },
   { route: 'coverage', label: 'Coverage', icon: 'shield' },
   { route: 'simulator', label: 'Simulator', icon: 'flask' },
   { route: 'compare', label: 'Compare snapshots', icon: 'compare' },
@@ -1048,6 +1050,7 @@ function renderNow() {
     case 'graph': view = graphPage(); break;
     case 'blast': view = blastPage(ctx); break;
     case 'hygiene': view = hygienePage(ctx); break;
+    case 'policy': view = policyPage(ctx); break;
     case 'simulator': view = simulatorPage(ctx); break;
     case 'ask': view = askPage(ctx); break;
     case 'issues': view = issuesPage(); break;
