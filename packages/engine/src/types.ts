@@ -312,6 +312,8 @@ export interface LoadBalancer {
   nodeEniIds: string[];
   /** ipv4, dualstack, or dualstack-without-public-ipv4; undefined when the snapshot does not say. Dual-stack listeners also take IPv6 clients. */
   ipAddressType?: 'ipv4' | 'dualstack' | 'dualstack-without-public-ipv4';
+  /** Network Load Balancers: false when inbound rules are not applied to PrivateLink traffic ("off"). On by default. */
+  privateLinkRules?: boolean;
 }
 
 export interface Listener {
@@ -342,6 +344,32 @@ export interface VpcEndpoint {
   vpcId: string;
   /** Subnets the endpoint has an interface in (Interface and Gateway Load Balancer endpoints). */
   subnetIds?: string[];
+  /** Interface endpoints: their network interfaces and security groups. */
+  eniIds?: string[];
+  groupIds?: string[];
+  /** The endpoint policy, as a JSON string; undefined when the snapshot does not have it. */
+  policy?: string;
+  state?: string;
+}
+
+/**
+ * An endpoint service this account provides through AWS PrivateLink, in front
+ * of a Network Load Balancer or a Gateway Load Balancer
+ * (https://docs.aws.amazon.com/vpc/latest/privatelink/privatelink-share-your-services.html).
+ */
+export interface EndpointService {
+  id: string;
+  name: string;
+  state: string;
+  acceptanceRequired: boolean;
+  nlbArns: string[];
+  gwlbArns: string[];
+  /** Allowed principals (ARNs, or "*"); undefined when the snapshot does not have them. */
+  principals?: { principal: string; type: string }[];
+  /** Endpoints connected to the service, from any account. */
+  connections: { endpointId: string; owner: string; state: string; region?: string }[];
+  /** Other Regions consumers may connect from (cross-Region PrivateLink). */
+  remoteRegions: string[];
 }
 
 /**
@@ -451,6 +479,7 @@ export interface NetworkModel {
   listeners: Listener[];
   targetGroups: Map<string, TargetGroup>;
   vpcEndpoints: Map<string, VpcEndpoint>;
+  endpointServices: Map<string, EndpointService>;
   firewalls: Map<string, Firewall>;
   firewallPolicies: Map<string, FirewallPolicy>;
   firewallRuleGroups: Map<string, FirewallRuleGroup>;

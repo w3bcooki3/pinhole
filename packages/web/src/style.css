@@ -667,3 +667,10 @@ table.xt tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offs
 .op-down { margin-left: 0.375rem; color: var(--critical); background: var(--critical-soft); }
 .op-detail .kv { margin-bottom: 0.75rem; }
 .op-note { margin-top: 0.75rem; }
+
+/* PrivateLink */
+.pl-services tr.sel td { background: var(--accent-soft); }
+.pl-detail .kv { margin-bottom: 0.75rem; }
+.pl-v { font-weight: 600; }
+.pl-v.reachable, .pl-v.partial { color: var(--critical); }
+.pl-v.blocked { color: var(--low-ink); }

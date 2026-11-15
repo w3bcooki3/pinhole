@@ -65,6 +65,17 @@ describe('pinhole CLI', () => {
     expect((await cli('onprem', fx('06-public-ip-without-igw-route'))).stdout).toMatch(/No VPN or Direct Connect links/);
   });
 
+  it('privatelink reports who may connect to each service and what it reaches', async () => {
+    const r = await cli('privatelink', fx('16-privatelink'));
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/\[CRITICAL\] com\.amazonaws\.vpce\.us-east-1\.vpce-svc-open/);
+    expect(r.stdout).toMatch(/who may connect: every AWS account, without approval/);
+    expect(r.stdout).toMatch(/tcp\/5432 on partner: consumers from any address \(security groups not applied to PrivateLink\) -> i-db:5432 reachable/);
+    expect(r.stdout).toMatch(/\[LOW\] vpce-s3 gateway/);
+    expect((await cli('privatelink', fx('16-privatelink'), '--fail-on', 'critical')).code).toBe(2);
+    expect((await cli('privatelink', fx('06-public-ip-without-igw-route'))).stdout).toMatch(/Endpoint services this account provides: 0/);
+  });
+
   it('can answers for addresses on-premises, both ways', async () => {
     const f = fx('15-hybrid');
     expect((await cli('can', f, '--from', '192.168.10.5', '--to', 'app')).stdout).toMatch(/tcp\/22 over vgw-1/);

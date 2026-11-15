@@ -24,6 +24,17 @@ All notable changes to this project are recorded here. The format follows
   CloudShell script read VPN gateways and connections with two new read-only
   permissions, and keep only state, routes and tunnel status: the tunnel
   keys never reach the snapshot. Fixture 15.
+- AWS PrivateLink, from both sides. For each endpoint service the account
+  provides: who may connect (every AWS account, with or without approval,
+  or named principals), which endpoints are connected and from which
+  accounts and Regions, which consumer addresses each Network Load
+  Balancer listener lets in (no security groups, or security groups not
+  applied to PrivateLink traffic, means any), and which targets they reach,
+  evaluated from the load balancer's own address. For the account's own
+  endpoints: endpoint policies that allow everything (on S3 and DynamoDB, a
+  way to copy data to any account), endpoints to other accounts' services,
+  and who can use them. `pinhole privatelink` and the console's PrivateLink
+  page. Three new read-only permissions. Fixture 16.
 - AWS Network Firewall and Gateway Load Balancer appliances in the path.
   Routes to firewall and appliance endpoints are followed: ingress routing on
   the internet gateway, replies through the firewall, east-west inspection,

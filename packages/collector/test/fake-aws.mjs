@@ -56,6 +56,9 @@ export function respond(snap, service, op, input, pageSize = 1) {
     case 'ec2:DescribeNetworkInterfaces': return page('NetworkInterfaces', ec2.NetworkInterfaces);
     case 'ec2:DescribeInstances': return page('Reservations', (ec2.Instances ?? []).map((i) => ({ Instances: [i] })));
     case 'ec2:DescribeVpcEndpoints': return page('VpcEndpoints', ec2.VpcEndpoints);
+    case 'ec2:DescribeVpcEndpointServiceConfigurations': return page('ServiceConfigurations', ec2.VpcEndpointServiceConfigurations);
+    case 'ec2:DescribeVpcEndpointServicePermissions': return page('AllowedPrincipals', ((ec2.VpcEndpointServicePermissions ?? {})[input.ServiceId] ?? []).map((p) => ({ ...p, ServiceId: input.ServiceId, ServicePermissionId: 'vpce-svc-perm-1' })));
+    case 'ec2:DescribeVpcEndpointConnections': return page('VpcEndpointConnections', (ec2.VpcEndpointConnections ?? []).map((c) => ({ ...c, DnsEntries: [], CreationTimestamp: '2026-01-01T00:00:00Z' })));
     case 'elbv2:DescribeLoadBalancers': return page('LoadBalancers', elb.LoadBalancers);
     case 'elbv2:DescribeListeners': return page('Listeners', (elb.Listeners ?? []).filter((l) => l.LoadBalancerArn === input.LoadBalancerArn));
     case 'elbv2:DescribeRules':

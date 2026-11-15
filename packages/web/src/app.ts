@@ -17,13 +17,14 @@ import { comparePage } from './compare.js';
 import { policyPage } from './policy.js';
 import { egressPage } from './egress.js';
 import { onPremPage } from './onprem.js';
+import { privateLinkPage } from './privatelink.js';
 import { askPage, blastPage, fixesSection, hygienePage, openPalette, planBox, simulatorPage } from './pages.js';
 import type { Ctx } from './pages.js';
 import type { Change } from '@pinhole/engine';
 
 
-type Route = 'dashboard' | 'graph' | 'blast' | 'issues' | 'resources' | 'hygiene' | 'policy' | 'egress' | 'onprem' | 'coverage' | 'simulator' | 'compare' | 'ask' | 'report' | 'connect';
-const ROUTES: Route[] = ['dashboard', 'graph', 'blast', 'issues', 'resources', 'hygiene', 'policy', 'egress', 'onprem', 'coverage', 'simulator', 'compare', 'ask', 'report', 'connect'];
+type Route = 'dashboard' | 'graph' | 'blast' | 'issues' | 'resources' | 'hygiene' | 'policy' | 'egress' | 'onprem' | 'privatelink' | 'coverage' | 'simulator' | 'compare' | 'ask' | 'report' | 'connect';
+const ROUTES: Route[] = ['dashboard', 'graph', 'blast', 'issues', 'resources', 'hygiene', 'policy', 'egress', 'onprem', 'privatelink', 'coverage', 'simulator', 'compare', 'ask', 'report', 'connect'];
 const PAGES: { route: Route; label: string; icon: string }[] = [
   { route: 'dashboard', label: 'Dashboard', icon: 'home' },
   { route: 'graph', label: 'Attack graph', icon: 'graph' },
@@ -32,6 +33,7 @@ const PAGES: { route: Route; label: string; icon: string }[] = [
   { route: 'resources', label: 'Resources', icon: 'box' },
   { route: 'egress', label: 'Outbound', icon: 'outbound' },
   { route: 'onprem', label: 'On-premises', icon: 'onprem' },
+  { route: 'privatelink', label: 'PrivateLink', icon: 'link' },
   { route: 'hygiene', label: 'Rule hygiene', icon: 'broom' },
   { route: 'policy', label: 'Policies', icon: 'policy' },
   { route: 'coverage', label: 'Coverage', icon: 'shield' },
@@ -1060,6 +1062,7 @@ function renderNow() {
     case 'policy': view = policyPage(ctx); break;
     case 'egress': view = egressPage(ctx); break;
     case 'onprem': view = onPremPage(ctx); break;
+    case 'privatelink': view = privateLinkPage(ctx); break;
     case 'simulator': view = simulatorPage(ctx); break;
     case 'ask': view = askPage(ctx); break;
     case 'issues': view = issuesPage(); break;

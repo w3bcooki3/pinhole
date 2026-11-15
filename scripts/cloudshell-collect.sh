@@ -79,6 +79,18 @@ call "${WORK}/pls.json"       ec2 describe-managed-prefix-lists
 call "${WORK}/enis.json"      ec2 describe-network-interfaces
 call "${WORK}/instances.json" ec2 describe-instances
 call "${WORK}/vpces.json"     ec2 describe-vpc-endpoints
+call "${WORK}/svcs.json"      ec2 describe-vpc-endpoint-service-configurations
+call "${WORK}/svcconns.json"  ec2 describe-vpc-endpoint-connections
+
+# PrivateLink: who may connect to each endpoint service this account provides.
+echo '{}' > "${WORK}/svcperms.json"
+for svc in $(jq -r '.ServiceConfigurations[]?.ServiceId' "${WORK}/svcs.json"); do
+  call "${WORK}/svcp-${svc}.json" ec2 describe-vpc-endpoint-service-permissions --service-id "${svc}"
+  if jq -e 'has("AllowedPrincipals")' "${WORK}/svcp-${svc}.json" >/dev/null; then
+    jq --arg id "${svc}" --slurpfile p "${WORK}/svcp-${svc}.json" '. + {($id): ($p[0].AllowedPrincipals | map({Principal, PrincipalType}))}' \
+      "${WORK}/svcperms.json" > "${WORK}/tmp.json" && mv "${WORK}/tmp.json" "${WORK}/svcperms.json"
+  fi
+done
 
 # Transit gateway routes, one search per route table.
 echo '{}' > "${WORK}/tgwroutes.json"
@@ -182,6 +194,7 @@ jq -n \
   --slurpfile sgrules "${WORK}/sgrules.json" --slurpfile pls "${WORK}/pls.json" \
   --slurpfile plentries "${WORK}/plentries.json" --slurpfile enis "${WORK}/enis.json" \
   --slurpfile instances "${WORK}/instances.json" --slurpfile vpces "${WORK}/vpces.json" \
+  --slurpfile svcs "${WORK}/svcs.json" --slurpfile svcconns "${WORK}/svcconns.json" --slurpfile svcperms "${WORK}/svcperms.json" \
   --slurpfile lbs "${WORK}/lbs.json" --slurpfile listeners "${WORK}/listeners.json" \
   --slurpfile rules "${WORK}/rules.json" --slurpfile tgs "${WORK}/tgs.json" \
   --slurpfile health "${WORK}/health.json" --slurpfile tgattrs "${WORK}/tgattrs.json" \
@@ -216,7 +229,10 @@ jq -n \
       PrefixListEntries: $plentries[0],
       NetworkInterfaces: ($enis[0].NetworkInterfaces // []),
       Instances: [($instances[0].Reservations // [])[] | .Instances[]?],
-      VpcEndpoints: ($vpces[0].VpcEndpoints // [])
+      VpcEndpoints: ($vpces[0].VpcEndpoints // []),
+      VpcEndpointServiceConfigurations: ($svcs[0].ServiceConfigurations // []),
+      VpcEndpointServicePermissions: $svcperms[0],
+      VpcEndpointConnections: (($svcconns[0].VpcEndpointConnections // []) | map({ServiceId, VpcEndpointId, VpcEndpointOwner, VpcEndpointState} + (if .VpcEndpointRegion then {VpcEndpointRegion} else {} end)))
     },
     elbv2: {
       LoadBalancers: ($lbs[0].LoadBalancers // []),

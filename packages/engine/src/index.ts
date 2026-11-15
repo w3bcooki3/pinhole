@@ -39,6 +39,8 @@ export { mapTerraformPlan, PlanError } from './terraform.js';
 export type { PlanMapping, PlanResourceResult } from './terraform.js';
 export { analyzeEgress } from './egress.js';
 export { analyzeOnPrem } from './hybrid.js';
+export { analyzePrivateLink, fullAccessPolicy, privateLinkWorst } from './privatelink.js';
+export type { PrivateLinkReport, PrivateLinkService, PrivateLinkEndpoint, PrivateLinkListener } from './privatelink.js';
 export type { OnPremFinding, OnPremReport } from './hybrid.js';
 export { onPremLinks, onPremNetworks, describeLink } from './onprem.js';
 export type { OnPremLink, OnPremNetwork } from './onprem.js';

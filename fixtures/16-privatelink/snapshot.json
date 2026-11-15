@@ -1,0 +1,679 @@
+{
+ "schemaVersion": 1,
+ "source": "fixture",
+ "accountId": "111122223333",
+ "region": "us-east-1",
+ "ec2": {
+  "Vpcs": [
+   {
+    "VpcId": "vpc-p",
+    "CidrBlock": "10.0.0.0/16",
+    "OwnerId": "111122223333"
+   }
+  ],
+  "Subnets": [
+   {
+    "SubnetId": "subnet-lb",
+    "VpcId": "vpc-p",
+    "CidrBlock": "10.0.1.0/24",
+    "AvailabilityZone": "us-east-1a"
+   },
+   {
+    "SubnetId": "subnet-app",
+    "VpcId": "vpc-p",
+    "CidrBlock": "10.0.2.0/24",
+    "AvailabilityZone": "us-east-1a"
+   }
+  ],
+  "RouteTables": [
+   {
+    "RouteTableId": "rtb-p",
+    "VpcId": "vpc-p",
+    "Associations": [
+     {
+      "Main": true
+     }
+    ],
+    "Routes": [
+     {
+      "DestinationCidrBlock": "10.0.0.0/16",
+      "GatewayId": "local",
+      "State": "active",
+      "Origin": "CreateRouteTable"
+     },
+     {
+      "DestinationPrefixListId": "pl-s3",
+      "GatewayId": "vpce-s3",
+      "State": "active",
+      "Origin": "CreateRoute"
+     }
+    ]
+   }
+  ],
+  "NetworkAcls": [
+   {
+    "NetworkAclId": "acl-p",
+    "VpcId": "vpc-p",
+    "IsDefault": true,
+    "Associations": [
+     {
+      "SubnetId": "subnet-lb"
+     },
+     {
+      "SubnetId": "subnet-app"
+     }
+    ],
+    "Entries": [
+     {
+      "RuleNumber": 100,
+      "Protocol": "-1",
+      "RuleAction": "allow",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 100,
+      "Protocol": "-1",
+      "RuleAction": "allow",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     }
+    ]
+   }
+  ],
+  "SecurityGroups": [
+   {
+    "GroupId": "sg-nlb",
+    "GroupName": "nlb",
+    "VpcId": "vpc-p"
+   },
+   {
+    "GroupId": "sg-api",
+    "GroupName": "api",
+    "VpcId": "vpc-p"
+   },
+   {
+    "GroupId": "sg-pnlb",
+    "GroupName": "pnlb",
+    "VpcId": "vpc-p"
+   },
+   {
+    "GroupId": "sg-db",
+    "GroupName": "db",
+    "VpcId": "vpc-p"
+   },
+   {
+    "GroupId": "sg-vpce",
+    "GroupName": "vpce",
+    "VpcId": "vpc-p"
+   },
+   {
+    "GroupId": "sg-3p",
+    "GroupName": "3p",
+    "VpcId": "vpc-p"
+   }
+  ],
+  "SecurityGroupRules": [
+   {
+    "SecurityGroupRuleId": "sgr-nlb-https",
+    "GroupId": "sg-nlb",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 443,
+    "ToPort": 443,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-nlb-ssh",
+    "GroupId": "sg-nlb",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 22,
+    "ToPort": 22,
+    "CidrIpv4": "10.20.0.0/16"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-nlb-out",
+    "GroupId": "sg-nlb",
+    "IsEgress": true,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-api-https",
+    "GroupId": "sg-api",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 8443,
+    "ToPort": 8443,
+    "ReferencedGroupInfo": {
+     "GroupId": "sg-nlb"
+    }
+   },
+   {
+    "SecurityGroupRuleId": "sgr-api-ssh",
+    "GroupId": "sg-api",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 22,
+    "ToPort": 22,
+    "CidrIpv4": "10.0.1.0/24"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-api-out",
+    "GroupId": "sg-api",
+    "IsEgress": true,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-pnlb-pg",
+    "GroupId": "sg-pnlb",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 5432,
+    "ToPort": 5432,
+    "CidrIpv4": "10.0.0.0/16"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-pnlb-out",
+    "GroupId": "sg-pnlb",
+    "IsEgress": true,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-db-pg",
+    "GroupId": "sg-db",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 5432,
+    "ToPort": 5432,
+    "CidrIpv4": "10.0.1.0/24"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-db-out",
+    "GroupId": "sg-db",
+    "IsEgress": true,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-vpce-https",
+    "GroupId": "sg-vpce",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 443,
+    "ToPort": 443,
+    "CidrIpv4": "10.0.0.0/16"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-3p-all",
+    "GroupId": "sg-3p",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 443,
+    "ToPort": 443,
+    "CidrIpv4": "0.0.0.0/0"
+   }
+  ],
+  "NetworkInterfaces": [
+   {
+    "NetworkInterfaceId": "eni-nlb",
+    "SubnetId": "subnet-lb",
+    "VpcId": "vpc-p",
+    "InterfaceType": "network_load_balancer",
+    "PrivateIpAddress": "10.0.1.100",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.1.100",
+      "Primary": true
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-nlb"
+     }
+    ],
+    "Status": "in-use",
+    "Description": "ELB net/svc/1111111111111111"
+   },
+   {
+    "NetworkInterfaceId": "eni-pnlb",
+    "SubnetId": "subnet-lb",
+    "VpcId": "vpc-p",
+    "InterfaceType": "network_load_balancer",
+    "PrivateIpAddress": "10.0.1.101",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.1.101",
+      "Primary": true
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-pnlb"
+     }
+    ],
+    "Status": "in-use",
+    "Description": "ELB net/partner/2222222222222222"
+   },
+   {
+    "NetworkInterfaceId": "eni-api",
+    "SubnetId": "subnet-app",
+    "VpcId": "vpc-p",
+    "InterfaceType": "interface",
+    "PrivateIpAddress": "10.0.2.10",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.2.10",
+      "Primary": true
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-api"
+     }
+    ],
+    "Status": "in-use",
+    "Attachment": {
+     "InstanceId": "i-api",
+     "DeviceIndex": 0
+    }
+   },
+   {
+    "NetworkInterfaceId": "eni-db",
+    "SubnetId": "subnet-app",
+    "VpcId": "vpc-p",
+    "InterfaceType": "interface",
+    "PrivateIpAddress": "10.0.2.20",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.2.20",
+      "Primary": true
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-db"
+     }
+    ],
+    "Status": "in-use",
+    "Attachment": {
+     "InstanceId": "i-db",
+     "DeviceIndex": 0
+    }
+   },
+   {
+    "NetworkInterfaceId": "eni-vpce-secrets",
+    "SubnetId": "subnet-app",
+    "VpcId": "vpc-p",
+    "InterfaceType": "vpc_endpoint",
+    "PrivateIpAddress": "10.0.2.50",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.2.50",
+      "Primary": true
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-vpce"
+     }
+    ],
+    "Status": "in-use",
+    "Description": "VPC Endpoint Interface vpce-secrets"
+   },
+   {
+    "NetworkInterfaceId": "eni-vpce-3p",
+    "SubnetId": "subnet-app",
+    "VpcId": "vpc-p",
+    "InterfaceType": "vpc_endpoint",
+    "PrivateIpAddress": "10.0.2.51",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.2.51",
+      "Primary": true
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-3p"
+     }
+    ],
+    "Status": "in-use",
+    "Description": "VPC Endpoint Interface vpce-3p"
+   }
+  ],
+  "Instances": [
+   {
+    "InstanceId": "i-api",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "api"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-api",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   },
+   {
+    "InstanceId": "i-db",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "db"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-db",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   }
+  ],
+  "ManagedPrefixLists": [
+   {
+    "PrefixListId": "pl-s3",
+    "PrefixListName": "com.amazonaws.us-east-1.s3",
+    "AddressFamily": "IPv4"
+   }
+  ],
+  "PrefixListEntries": {
+   "pl-s3": [
+    {
+     "Cidr": "52.216.0.0/15"
+    }
+   ]
+  },
+  "VpcEndpoints": [
+   {
+    "VpcEndpointId": "vpce-s3",
+    "VpcEndpointType": "Gateway",
+    "ServiceName": "com.amazonaws.us-east-1.s3",
+    "VpcId": "vpc-p",
+    "State": "available",
+    "PolicyDocument": "{\"Version\": \"2008-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Principal\": \"*\", \"Action\": \"*\", \"Resource\": \"*\"}]}"
+   },
+   {
+    "VpcEndpointId": "vpce-secrets",
+    "VpcEndpointType": "Interface",
+    "ServiceName": "com.amazonaws.us-east-1.secretsmanager",
+    "VpcId": "vpc-p",
+    "SubnetIds": [
+     "subnet-app"
+    ],
+    "NetworkInterfaceIds": [
+     "eni-vpce-secrets"
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-vpce"
+     }
+    ],
+    "State": "available",
+    "PolicyDocument": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Principal\": \"*\", \"Action\": \"secretsmanager:GetSecretValue\", \"Resource\": \"*\", \"Condition\": {\"StringEquals\": {\"aws:PrincipalOrgID\": \"o-abc123\"}}}]}"
+   },
+   {
+    "VpcEndpointId": "vpce-3p",
+    "VpcEndpointType": "Interface",
+    "ServiceName": "com.amazonaws.vpce.us-east-1.vpce-svc-0abc1230abc12300",
+    "VpcId": "vpc-p",
+    "SubnetIds": [
+     "subnet-app"
+    ],
+    "NetworkInterfaceIds": [
+     "eni-vpce-3p"
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-3p"
+     }
+    ],
+    "State": "available",
+    "PolicyDocument": "{\"Version\": \"2008-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Principal\": \"*\", \"Action\": \"*\", \"Resource\": \"*\"}]}"
+   }
+  ],
+  "VpcEndpointServiceConfigurations": [
+   {
+    "ServiceId": "vpce-svc-open",
+    "ServiceName": "com.amazonaws.vpce.us-east-1.vpce-svc-open",
+    "ServiceState": "Available",
+    "AcceptanceRequired": false,
+    "NetworkLoadBalancerArns": [
+     "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/net/svc/1111111111111111"
+    ]
+   },
+   {
+    "ServiceId": "vpce-svc-partner",
+    "ServiceName": "com.amazonaws.vpce.us-east-1.vpce-svc-partner",
+    "ServiceState": "Available",
+    "AcceptanceRequired": true,
+    "NetworkLoadBalancerArns": [
+     "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/net/partner/2222222222222222"
+    ],
+    "SupportedRegions": [
+     {
+      "Region": "us-east-1",
+      "ServiceState": "Available"
+     },
+     {
+      "Region": "eu-west-1",
+      "ServiceState": "Available"
+     }
+    ]
+   }
+  ],
+  "VpcEndpointServicePermissions": {
+   "vpce-svc-open": [
+    {
+     "Principal": "*",
+     "PrincipalType": "All"
+    }
+   ],
+   "vpce-svc-partner": [
+    {
+     "Principal": "arn:aws:iam::444455556666:root",
+     "PrincipalType": "Account"
+    },
+    {
+     "Principal": "arn:aws:iam::111122223333:root",
+     "PrincipalType": "Account"
+    }
+   ]
+  },
+  "VpcEndpointConnections": [
+   {
+    "ServiceId": "vpce-svc-partner",
+    "VpcEndpointId": "vpce-0partner",
+    "VpcEndpointOwner": "444455556666",
+    "VpcEndpointState": "Available"
+   },
+   {
+    "ServiceId": "vpce-svc-partner",
+    "VpcEndpointId": "vpce-0old",
+    "VpcEndpointOwner": "777788889999",
+    "VpcEndpointState": "Rejected"
+   },
+   {
+    "ServiceId": "vpce-svc-open",
+    "VpcEndpointId": "vpce-0stranger",
+    "VpcEndpointOwner": "999900001111",
+    "VpcEndpointState": "Available"
+   }
+  ]
+ },
+ "elbv2": {
+  "LoadBalancers": [
+   {
+    "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/net/svc/1111111111111111",
+    "LoadBalancerName": "svc",
+    "Type": "network",
+    "Scheme": "internal",
+    "VpcId": "vpc-p",
+    "AvailabilityZones": [
+     {
+      "SubnetId": "subnet-lb",
+      "ZoneName": "us-east-1a"
+     }
+    ],
+    "SecurityGroups": [
+     "sg-nlb"
+    ],
+    "EnforceSecurityGroupInboundRulesOnPrivateLinkTraffic": "on"
+   },
+   {
+    "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/net/partner/2222222222222222",
+    "LoadBalancerName": "partner",
+    "Type": "network",
+    "Scheme": "internal",
+    "VpcId": "vpc-p",
+    "AvailabilityZones": [
+     {
+      "SubnetId": "subnet-lb",
+      "ZoneName": "us-east-1a"
+     }
+    ],
+    "SecurityGroups": [
+     "sg-pnlb"
+    ],
+    "EnforceSecurityGroupInboundRulesOnPrivateLinkTraffic": "off"
+   }
+  ],
+  "Listeners": [
+   {
+    "ListenerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:listener/net/svc/1111111111111111/l443",
+    "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/net/svc/1111111111111111",
+    "Port": 443,
+    "Protocol": "TCP",
+    "DefaultActions": [
+     {
+      "Type": "forward",
+      "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/api/apiapiapiapi"
+     }
+    ]
+   },
+   {
+    "ListenerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:listener/net/svc/1111111111111111/l22",
+    "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/net/svc/1111111111111111",
+    "Port": 22,
+    "Protocol": "TCP",
+    "DefaultActions": [
+     {
+      "Type": "forward",
+      "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/ssh/sshsshsshssh"
+     }
+    ]
+   },
+   {
+    "ListenerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:listener/net/partner/2222222222222222/l5432",
+    "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/net/partner/2222222222222222",
+    "Port": 5432,
+    "Protocol": "TCP",
+    "DefaultActions": [
+     {
+      "Type": "forward",
+      "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/pgdb/pgdbpgdbpgdbpgdb"
+     }
+    ]
+   }
+  ],
+  "TargetGroups": [
+   {
+    "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/api/apiapiapiapi",
+    "TargetGroupName": "api",
+    "Protocol": "TCP",
+    "Port": 8443,
+    "TargetType": "instance",
+    "VpcId": "vpc-p"
+   },
+   {
+    "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/ssh/sshsshsshssh",
+    "TargetGroupName": "ssh",
+    "Protocol": "TCP",
+    "Port": 22,
+    "TargetType": "instance",
+    "VpcId": "vpc-p"
+   },
+   {
+    "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/pgdb/pgdbpgdbpgdbpgdb",
+    "TargetGroupName": "pgdb",
+    "Protocol": "TCP",
+    "Port": 5432,
+    "TargetType": "instance",
+    "VpcId": "vpc-p"
+   }
+  ],
+  "TargetHealth": {
+   "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/api/apiapiapiapi": [
+    {
+     "Target": {
+      "Id": "i-api",
+      "Port": 8443
+     }
+    }
+   ],
+   "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/ssh/sshsshsshssh": [
+    {
+     "Target": {
+      "Id": "i-api",
+      "Port": 22
+     }
+    }
+   ],
+   "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/pgdb/pgdbpgdbpgdbpgdb": [
+    {
+     "Target": {
+      "Id": "i-db",
+      "Port": 5432
+     }
+    }
+   ]
+  },
+  "TargetGroupAttributes": {
+   "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/api/apiapiapiapi": [
+    {
+     "Key": "preserve_client_ip.enabled",
+     "Value": "true"
+    }
+   ]
+  }
+ }
+}

@@ -21,7 +21,8 @@ import { across, acrossText, blastText, canText, fixesFor, fixText, hygiene, hyg
 import { VERSION } from './version.js';
 import { egress, egressFailsAt, egressMarkdown, egressText } from './egress.js';
 import { onPremFailsAt, onPremMarkdown, onPremText } from './onprem.js';
-import { analyzeOnPrem } from '@pinhole/engine';
+import { privateLinkFailsAt, privateLinkMarkdown, privateLinkText } from './privatelink.js';
+import { analyzeOnPrem, analyzePrivateLink } from '@pinhole/engine';
 import { policyCheck, policyFailsAt, policyMarkdown, policyText, readPolicy } from './policy.js';
 import { applyChanges, diffPolicy, findMinCut, PolicyError } from '@pinhole/engine';
 
@@ -43,6 +44,8 @@ Usage:
   pinhole egress   SNAPSHOT [--format text|json|markdown] [--min-severity LEVEL]
                             [--fail-on LEVEL] [--verbose]
   pinhole onprem   SNAPSHOT [--format text|json|markdown] [--min-severity LEVEL]
+                            [--fail-on LEVEL] [--verbose]
+  pinhole privatelink SNAPSHOT [--format text|json|markdown] [--min-severity LEVEL]
                             [--fail-on LEVEL] [--verbose]
   pinhole whatif   SNAPSHOT [--revoke SGR-ID]... [--remove-nacl ACL#ingress#N]...
                             [--remove-public-ip IP]... [--changes FILE.json]
@@ -90,6 +93,13 @@ onprem    What clients on-premises can reach over Site-to-Site VPN and
           each, and every server and port reachable from them, with the
           addresses that work and the path. On-premises routers and
           firewalls are not visible to AWS and are assumed to pass.
+privatelink
+          Who can reach this account's services through AWS PrivateLink:
+          the principals allowed on each endpoint service (every AWS
+          account, with or without approval), the endpoints connected,
+          which consumer addresses the load balancer lets in and which
+          targets they reach. Also VPC endpoints whose policy allows
+          anything, and endpoints to other accounts' services.
 hygiene   Redundant, shadowed, stale, unused and overly broad rules,
           including rules that several others cover together, the smallest
           equivalent rule set for each group, and rules near AWS quotas.
@@ -348,6 +358,23 @@ function cmdOnPrem(args: string[], io: Io): number {
   return 0;
 }
 
+function cmdPrivateLink(args: string[], io: Io): number {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, 'min-severity': { type: 'string' }, 'fail-on': { type: 'string' }, verbose: { type: 'boolean', default: false } } });
+  const format = values.format;
+  if (format !== 'text' && format !== 'json' && format !== 'markdown') throw new UsageError('--format must be text, json or markdown');
+  const min = severityArg(values['min-severity'], '--min-severity') ?? 'info';
+  const failOn = severityArg(values['fail-on'], '--fail-on');
+  const r = analyzePrivateLink(snapshotModel(positionals, 'privatelink'));
+  if (format === 'json') io.stdout(json({ tool: { name: 'pinhole', version: VERSION }, ...r }));
+  else if (format === 'markdown') io.stdout(privateLinkMarkdown(r, min));
+  else io.stdout(safeForTerminal(privateLinkText(r, min, values.verbose ?? false)));
+  if (failOn && privateLinkFailsAt(r, failOn)) {
+    io.stderr(`${privateLinkFailsAt(r, failOn)} PrivateLink finding(s) at or above ${failOn}.\n`);
+    return 2;
+  }
+  return 0;
+}
+
 function cmdWhatIf(args: string[], io: Io): number {
   const { values, positionals } = parseArgs({
     args,
@@ -543,6 +570,8 @@ export async function run(argv: string[], io: Io): Promise<number> {
         return cmdEgress(rest, io);
       case 'onprem':
         return cmdOnPrem(rest, io);
+      case 'privatelink':
+        return cmdPrivateLink(rest, io);
       case 'whatif':
         return cmdWhatIf(rest, io);
       case 'diff':

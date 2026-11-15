@@ -136,7 +136,7 @@ pinhole collect --profile audit --region us-east-1,eu-west-1 --out-dir snapshots
   </details>
 
   <h3 id="what-is-in">What a snapshot contains</h3>
-  <p>VPCs, subnets, route tables, internet, NAT and egress-only gateways, virtual private gateways and VPN connections (state, routes and tunnel status only; never the tunnel keys), peering connections, transit gateways and their route tables, network ACLs, security groups and rules, prefix lists, network interfaces, instance names, VPC endpoints, and load balancers with their listeners, rules, target groups and target health. No data from inside your servers, no credentials, no logs. It does contain your account ID, private and public IP addresses and resource names, so treat it as internal.</p>
+  <p>VPCs, subnets, route tables, internet, NAT and egress-only gateways, virtual private gateways and VPN connections (state, routes and tunnel status only; never the tunnel keys), peering connections, transit gateways and their route tables, network ACLs, security groups and rules, prefix lists, network interfaces, instance names, VPC endpoints and the PrivateLink endpoint services you provide (with who may connect, and who has), and load balancers with their listeners, rules, target groups and target health. No data from inside your servers, no credentials, no logs. It does contain your account ID, private and public IP addresses and resource names, so treat it as internal.</p>
 </section>
 
 <section id="console" data-group="Use it" data-title="The console">
@@ -149,6 +149,7 @@ pinhole collect --profile audit --region us-east-1,eu-west-1 --out-dir snapshots
     <div class="card"><h4>Exposures</h4><p>Every service the internet can open a connection to. Each opens as a page with a plain verdict, the path hop by hop, and verified fixes with commands, each marked safe or with the internal traffic it would break.</p></div>
     <div class="card"><h4>Outbound</h4><p>What each server can send to the internet: to which addresses and ports, through which gateway, and as which public address. Data stores that can send anything anywhere are flagged as exfiltration paths.</p></div>
     <div class="card"><h4>On-premises</h4><p>Your Site-to-Site VPN and Direct Connect links, the on-premises networks AWS routes to each, and every server and port reachable from them, with the path.</p></div>
+    <div class="card"><h4>PrivateLink</h4><p>Who can reach your services through endpoint services, what they reach behind the load balancer, and VPC endpoints whose policy allows anything.</p></div>
     <div class="card"><h4>Rule hygiene</h4><p>Rules that are redundant, shadowed, stale, unused or broader than they need to be, groups that can be smaller with exactly the same effect, and rules near AWS quotas.</p></div>
     <div class="card"><h4>Policies</h4><p>Your own rules about what must never and must always be reachable, checked against every snapshot as you type, with the connection that breaks each one.</p></div>
     <div class="card"><h4>Simulator</h4><p>Switch rules off, edit them, or drop public IPs, and see which paths and chains close or open. Exports the changes for the CLI.</p></div>
@@ -364,6 +365,14 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
   <p>Outbound to an on-premises address is decided the same way, ending at the link. <code>pinhole can</code> and the console's query page take on-premises addresses on either side, and policies take <code>"from": "onprem"</code>.</p>
 </section>
 
+<section id="privatelink" data-group="Concepts" data-title="PrivateLink">
+  <h2>PrivateLink</h2>
+  <p class="lede">An endpoint service puts a load balancer inside other accounts' networks. Who may connect is a list of principals, and "*" means every AWS account.</p>
+  <!--run lines=16 privatelink fixtures/16-privatelink/snapshot.json-->
+  <p>For each endpoint service you provide, Pinhole reads the allowed principals, whether connections need your approval, and the endpoints connected from other accounts and Regions. Behind it, for each Network Load Balancer listener, it works out which consumer addresses get in: the load balancer's security groups apply to PrivateLink traffic unless that is switched off, and then, as with no security groups at all, any address gets in. Targets see the load balancer's own address, never the consumer's, so each target is checked from the load balancer with the full path model.</p>
+  <p>On your side, it lists your interface and gateway endpoints: who in the network can use them, whether the service belongs to another account, and whether the endpoint policy still allows everything. On an S3 or DynamoDB endpoint, a policy like that lets data be copied to buckets and tables in any account; limiting it to your organization's resources closes that.</p>
+</section>
+
 <section id="privacy" data-group="Trust" data-title="Privacy and security">
   <h2>Privacy and security</h2>
   <ul class="ticks">
@@ -399,6 +408,7 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
       <tr><td>13</td><td>Centralised inspection through a transit gateway and an inspection VPC</td></tr>
       <tr><td>14</td><td>What servers can send out, through an internet gateway or a NAT gateway</td></tr>
       <tr><td>15</td><td>Site-to-Site VPN and Direct Connect, through a virtual private gateway and a transit gateway</td></tr>
+      <tr><td>16</td><td>PrivateLink services open to every account or a partner, and endpoint policies that allow everything</td></tr>
     </tbody>
   </table>
   </div>

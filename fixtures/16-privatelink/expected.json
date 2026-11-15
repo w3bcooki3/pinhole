@@ -1,0 +1,26 @@
+{
+  "description": "AWS PrivateLink, from both sides. This account provides two endpoint services. One lets every AWS account connect without approval and sits in front of a Network Load Balancer whose listeners reach an API and SSH on the same instance: the security group filters SSH to one consumer range, but anyone may connect to the API. The other is shared with one partner account (and from another Region), with acceptance required, but its load balancer does not apply its security group to PrivateLink traffic, so every connected consumer reaches the database. Targets see the load balancer's own address, so the database's rule for the load balancer subnet lets them in even though client IP preservation is on for the API. On the consumer side, the S3 gateway endpoint keeps the default policy that allows copying data to any bucket, an interface endpoint to another account's service is open to any address in the VPC, and the Secrets Manager endpoint has a restricted policy.",
+  "docs": [
+    "https://docs.aws.amazon.com/vpc/latest/privatelink/privatelink-share-your-services.html",
+    "https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html",
+    "https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-security-groups.html",
+    "https://docs.aws.amazon.com/elasticloadbalancing/latest/network/edit-target-group-attributes.html",
+    "https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-access.html"
+  ],
+  "privatelink": {
+    "services": [
+      { "id": "vpce-svc-open", "severity": "critical", "open": true, "listeners": [
+        { "port": 443, "filter": "security-groups", "consumers": ["any address"], "targets": ["i-api:8443:reachable"] },
+        { "port": 22, "filter": "security-groups", "consumers": ["10.20.0.0/16"], "targets": ["i-api:22:reachable"] }
+      ], "externalConsumers": ["999900001111"] },
+      { "id": "vpce-svc-partner", "severity": "low", "open": false, "external": ["arn:aws:iam::444455556666:root"], "listeners": [
+        { "port": 5432, "filter": "rules-off-for-privatelink", "consumers": ["any address"], "targets": ["i-db:5432:reachable"] }
+      ], "externalConsumers": ["444455556666"], "remoteRegions": ["eu-west-1"] }
+    ],
+    "endpoints": [
+      { "id": "vpce-s3", "severity": "low", "policy": "full", "otherAccount": false },
+      { "id": "vpce-secrets", "severity": "info", "policy": "restricted", "otherAccount": false },
+      { "id": "vpce-3p", "severity": "info", "policy": "full", "otherAccount": true }
+    ]
+  }
+}

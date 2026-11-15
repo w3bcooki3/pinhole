@@ -317,7 +317,7 @@ export function inspection(hops: Hop[]): { inspectedBy?: string[]; caveats?: str
 
 // ------------------------------------------------------------------ load balancers
 
-function listenerProtocols(lb: LoadBalancer, protocol: string): ProtocolNumber[] {
+export function listenerProtocols(lb: LoadBalancer, protocol: string): ProtocolNumber[] {
   if (lb.type === 'application') return [PROTO_TCP]; // HTTP and HTTPS
   switch (protocol.toUpperCase()) {
     case 'UDP':
@@ -345,7 +345,7 @@ function clientIpPreserved(lb: LoadBalancer, tg: TargetGroup): boolean {
   return tg.targetType === 'instance';
 }
 
-function evaluateTargets(model: NetworkModel, lb: LoadBalancer, listenerPort: number, protocol: ProtocolNumber, clientSample: string | undefined, tgArns: string[]): LbTargetResult[] {
+export function evaluateTargets(model: NetworkModel, lb: LoadBalancer, listenerPort: number, protocol: ProtocolNumber, clientSample: string | undefined, tgArns: string[]): LbTargetResult[] {
   const nodes = lb.nodeEniIds.map((id) => model.enis.get(id)).filter((e): e is Eni => !!e);
   const results: LbTargetResult[] = [];
   for (const arn of tgArns) {

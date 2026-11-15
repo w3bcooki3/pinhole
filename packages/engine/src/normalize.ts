@@ -161,6 +161,7 @@ export function normalize(input: unknown): NetworkModel {
     listeners: [],
     targetGroups: new Map(),
     vpcEndpoints: new Map(),
+    endpointServices: new Map(),
     firewalls: new Map(),
     firewallPolicies: new Map(),
     firewallRuleGroups: new Map(),
@@ -459,7 +460,32 @@ export function normalize(input: unknown): NetworkModel {
   }
 
   for (const e of ec2.VpcEndpoints ?? []) {
-    model.vpcEndpoints.set(e.VpcEndpointId, { id: e.VpcEndpointId, type: e.VpcEndpointType ?? 'unknown', serviceName: e.ServiceName ?? '', vpcId: e.VpcId ?? '', ...(e.SubnetIds?.length ? { subnetIds: e.SubnetIds } : {}) });
+    model.vpcEndpoints.set(e.VpcEndpointId, {
+      id: e.VpcEndpointId,
+      type: e.VpcEndpointType ?? 'unknown',
+      serviceName: e.ServiceName ?? '',
+      vpcId: e.VpcId ?? '',
+      ...(e.SubnetIds?.length ? { subnetIds: e.SubnetIds } : {}),
+      ...(e.NetworkInterfaceIds?.length ? { eniIds: e.NetworkInterfaceIds } : {}),
+      ...(e.Groups?.length ? { groupIds: e.Groups.map((g) => g.GroupId).filter((x): x is string => !!x) } : {}),
+      ...(typeof e.PolicyDocument === 'string' ? { policy: e.PolicyDocument } : {}),
+      ...(e.State ? { state: e.State } : {}),
+    });
+  }
+  const perms = ec2.VpcEndpointServicePermissions;
+  for (const c of ec2.VpcEndpointServiceConfigurations ?? []) {
+    const p = perms?.[c.ServiceId];
+    model.endpointServices.set(c.ServiceId, {
+      id: c.ServiceId,
+      name: c.ServiceName ?? c.ServiceId,
+      state: c.ServiceState ?? 'Available',
+      acceptanceRequired: c.AcceptanceRequired !== false,
+      nlbArns: c.NetworkLoadBalancerArns ?? [],
+      gwlbArns: c.GatewayLoadBalancerArns ?? [],
+      ...(p ? { principals: p.filter((x) => x.Principal).map((x) => ({ principal: x.Principal!, type: x.PrincipalType ?? '' })) } : {}),
+      connections: (ec2.VpcEndpointConnections ?? []).filter((x) => x.ServiceId === c.ServiceId && x.VpcEndpointId).map((x) => ({ endpointId: x.VpcEndpointId!, owner: x.VpcEndpointOwner ?? '', state: x.VpcEndpointState ?? '', ...(x.VpcEndpointRegion ? { region: x.VpcEndpointRegion } : {}) })),
+      remoteRegions: (c.SupportedRegions ?? []).map((r) => r.Region).filter((r): r is string => !!r && r !== snap.region),
+    });
   }
   normalizeFirewalls(snap, model, warnings);
 
@@ -479,6 +505,7 @@ export function normalize(input: unknown): NetworkModel {
       nodeIps: nodeEnis.flatMap((e) => e.privateIps.slice(0, 1)),
       nodeEniIds: nodeEnis.map((e) => e.id),
       ...(lb.IpAddressType === 'ipv4' || lb.IpAddressType === 'dualstack' || lb.IpAddressType === 'dualstack-without-public-ipv4' ? { ipAddressType: lb.IpAddressType } : {}),
+      ...(type === 'network' && lb.EnforceSecurityGroupInboundRulesOnPrivateLinkTraffic ? { privateLinkRules: lb.EnforceSecurityGroupInboundRulesOnPrivateLinkTraffic !== 'off' } : {}),
     });
   }
   const rulesByListener = new Map<string, string[]>();

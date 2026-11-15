@@ -12,7 +12,7 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { analyzeEgress, analyzeOnPrem, normalize, evaluatePath, analyzeExposure, analyzeBlastRadius, analyzeHygiene, applyChanges, diffExposure, findFixes, reachServices, serviceLabel } from '../src/index.js';
+import { analyzeEgress, analyzeOnPrem, analyzePrivateLink, normalize, evaluatePath, analyzeExposure, analyzeBlastRadius, analyzeHygiene, applyChanges, diffExposure, findFixes, reachServices, serviceLabel } from '../src/index.js';
 import type { Change, Endpoint, ExposureFinding, PathResult } from '../src/index.js';
 import { INTERNET6, RangeSet6 } from '../src/ipv6.js';
 
@@ -49,6 +49,10 @@ interface Expected {
     open?: { resource: string; protocol: string; port: number; via: string; severity?: string; returnPath?: string; destinations?: string[] }[];
     closed?: { resource: string; protocol: string; port: number }[];
     counts?: { interfaces: number; open: number; wide: number };
+  };
+  privatelink?: {
+    services: { id: string; severity: string; open: boolean; external?: string[]; listeners: { port: number; filter: string; consumers: string[]; targets: string[] }[]; externalConsumers?: string[]; remoteRegions?: string[] }[];
+    endpoints: { id: string; severity: string; policy: string; otherAccount: boolean }[];
   };
   onprem?: {
     links?: { id: string; kind: string; networks: string[] }[];
@@ -137,6 +141,36 @@ describe('fixtures', () => {
             const target = f?.targets?.find((x) => x.targetId === t.target && x.port === t.port);
             expect(target, `target ${t.target}:${t.port} missing`).toBeDefined();
             expect(target?.verdict).toBe(t.verdict);
+          }
+        });
+      }
+
+      const pl = expected.privatelink;
+      if (pl) {
+        it('PrivateLink report', () => {
+          const r = analyzePrivateLink(normalize(snapshot));
+          expect(r.services.map((x) => x.id).sort()).toEqual(pl.services.map((x) => x.id).sort());
+          for (const e of pl.services) {
+            const got = r.services.find((x) => x.id === e.id)!;
+            const ctx = JSON.stringify({ severity: got.severity, reasons: got.reasons });
+            expect(got.severity, ctx).toBe(e.severity);
+            expect(got.open).toBe(e.open);
+            if (e.external) expect(got.external).toEqual(e.external);
+            if (e.remoteRegions) expect(got.remoteRegions).toEqual(e.remoteRegions);
+            if (e.externalConsumers) expect([...new Set(got.consumers.filter((c) => c.external).map((c) => c.owner))]).toEqual(e.externalConsumers);
+            for (const l of e.listeners) {
+              const gl = got.listeners.find((x) => x.port === l.port);
+              expect(gl, `listener ${l.port}`).toBeDefined();
+              expect(gl?.filter).toBe(l.filter);
+              expect(gl?.consumers).toEqual(l.consumers);
+              expect(gl?.targets.map((t) => `${t.targetId}:${t.port}:${t.verdict}`)).toEqual(l.targets);
+              for (const t of gl?.targets ?? []) expect(t.clientIpPreserved).toBe(false);
+            }
+          }
+          expect(r.endpoints.map((x) => x.id).sort()).toEqual(pl.endpoints.map((x) => x.id).sort());
+          for (const e of pl.endpoints) {
+            const got = r.endpoints.find((x) => x.id === e.id)!;
+            expect({ severity: got.severity, policy: got.policy, otherAccount: got.otherAccount }, got.reasons.join('; ')).toEqual({ severity: e.severity, policy: e.policy, otherAccount: e.otherAccount });
           }
         });
       }

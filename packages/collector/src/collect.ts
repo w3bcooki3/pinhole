@@ -135,6 +135,17 @@ export async function collectSnapshot(send: Send, opts: CollectOptions): Promise
   const reservations = await c.all('ec2', 'DescribeInstances', 'Reservations');
   set(ec2, 'Instances', reservations?.flatMap((r: Json) => r.Instances ?? []));
   set(ec2, 'VpcEndpoints', await c.all('ec2', 'DescribeVpcEndpoints', 'VpcEndpoints'));
+  // PrivateLink: the endpoint services this account provides, who may connect, and who has.
+  set(ec2, 'VpcEndpointServiceConfigurations', await c.all('ec2', 'DescribeVpcEndpointServiceConfigurations', 'ServiceConfigurations'));
+  if (ec2.VpcEndpointServiceConfigurations?.length) {
+    const perms: Record<string, Json[]> = {};
+    for (const s of ec2.VpcEndpointServiceConfigurations) {
+      const list = await c.all('ec2', 'DescribeVpcEndpointServicePermissions', 'AllowedPrincipals', { ServiceId: s.ServiceId });
+      if (list) perms[s.ServiceId] = list.map((p: Json) => ({ Principal: p.Principal, PrincipalType: p.PrincipalType }));
+    }
+    ec2.VpcEndpointServicePermissions = perms;
+    set(ec2, 'VpcEndpointConnections', (await c.all('ec2', 'DescribeVpcEndpointConnections', 'VpcEndpointConnections'))?.map((x: Json) => ({ ServiceId: x.ServiceId, VpcEndpointId: x.VpcEndpointId, VpcEndpointOwner: x.VpcEndpointOwner, VpcEndpointState: x.VpcEndpointState, ...(x.VpcEndpointRegion ? { VpcEndpointRegion: x.VpcEndpointRegion } : {}) })));
+  }
 
   // Transit gateway routes, per route table. Only route tables owned by this
   // account can be searched; others are recorded as errors.

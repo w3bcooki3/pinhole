@@ -242,6 +242,21 @@ export interface RawVpcEndpoint {
   ServiceName?: string;
   VpcId?: string;
   SubnetIds?: string[];
+  NetworkInterfaceIds?: string[];
+  Groups?: { GroupId?: string; GroupName?: string }[];
+  PolicyDocument?: string;
+  State?: string;
+}
+
+/** DescribeVpcEndpointServiceConfigurations: endpoint services this account provides. */
+export interface RawServiceConfiguration {
+  ServiceId: string;
+  ServiceName?: string;
+  ServiceState?: string;
+  AcceptanceRequired?: boolean;
+  NetworkLoadBalancerArns?: string[];
+  GatewayLoadBalancerArns?: string[];
+  SupportedRegions?: { Region?: string; ServiceState?: string }[];
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -292,6 +307,8 @@ export interface RawLoadBalancer {
   SecurityGroups?: string[];
   /** ipv4, dualstack, or dualstack-without-public-ipv4. */
   IpAddressType?: string;
+  /** "on" or "off". */
+  EnforceSecurityGroupInboundRulesOnPrivateLinkTraffic?: string;
 }
 
 export interface RawAction {
@@ -364,6 +381,11 @@ export interface Snapshot {
     /** Flattened from DescribeInstances reservations. */
     Instances?: RawInstance[];
     VpcEndpoints?: RawVpcEndpoint[];
+    VpcEndpointServiceConfigurations?: RawServiceConfiguration[];
+    /** DescribeVpcEndpointServicePermissions output, keyed by service ID. */
+    VpcEndpointServicePermissions?: Record<string, { Principal?: string; PrincipalType?: string }[]>;
+    /** DescribeVpcEndpointConnections: endpoints connected to this account's services. */
+    VpcEndpointConnections?: { ServiceId?: string; VpcEndpointId?: string; VpcEndpointOwner?: string; VpcEndpointState?: string; VpcEndpointRegion?: string }[];
   };
   elbv2?: {
     LoadBalancers?: RawLoadBalancer[];
@@ -408,7 +430,7 @@ export function assertSnapshot(value: unknown): asserts value is Snapshot {
   }
   const ec2 = (v.ec2 ?? {}) as Record<string, unknown>;
   for (const [k, list] of Object.entries(ec2)) {
-    const keyed = k === 'TransitGatewayRoutes' || k === 'PrefixListEntries';
+    const keyed = k === 'TransitGatewayRoutes' || k === 'PrefixListEntries' || k === 'VpcEndpointServicePermissions';
     if (keyed ? typeof list !== 'object' || list === null || Array.isArray(list) : !Array.isArray(list)) {
       throw new SnapshotError(`Snapshot field "ec2.${k}" has the wrong type.`);
     }
@@ -490,10 +512,13 @@ const SNAPSHOT: Spec = obj({
       Ipv6Addresses: arr(obj({ Ipv6Address: 'str' })), Status: 'str',
     }, ['NetworkInterfaceId', 'SubnetId', 'VpcId'])),
     Instances: arr(obj({ InstanceId: id('i'), State: obj({ Name: 'str' }), NetworkInterfaces: arr(obj({ NetworkInterfaceId: 'str', Attachment: obj({ DeviceIndex: 'int' }) })), Tags: TAGS }, ['InstanceId'])),
-    VpcEndpoints: arr(obj({ VpcEndpointId: id('vpce'), VpcEndpointType: 'str', ServiceName: 'text', VpcId: 'str', SubnetIds: arr('str') }, ['VpcEndpointId'])),
+    VpcEndpoints: arr(obj({ VpcEndpointId: id('vpce'), VpcEndpointType: 'str', ServiceName: 'text', VpcId: 'str', SubnetIds: arr('str'), NetworkInterfaceIds: arr('str'), Groups: arr(obj({ GroupId: 'str', GroupName: 'text' })), PolicyDocument: 'text', State: 'str' }, ['VpcEndpointId'])),
+    VpcEndpointServiceConfigurations: arr(obj({ ServiceId: id('vpce-svc'), ServiceName: 'text', ServiceState: 'str', AcceptanceRequired: 'bool', NetworkLoadBalancerArns: arr('str'), GatewayLoadBalancerArns: arr('str'), SupportedRegions: arr(obj({ Region: 'str', ServiceState: 'str' })) }, ['ServiceId'])),
+    VpcEndpointServicePermissions: { map: arr(obj({ Principal: 'text', PrincipalType: 'str' })) },
+    VpcEndpointConnections: arr(obj({ ServiceId: 'str', VpcEndpointId: 'str', VpcEndpointOwner: 'str', VpcEndpointState: 'str', VpcEndpointRegion: 'str' })),
   }),
   elbv2: obj({
-    LoadBalancers: arr(obj({ LoadBalancerArn: ARN, LoadBalancerName: 'text', Type: 'str', Scheme: 'str', VpcId: 'str', AvailabilityZones: arr(obj({ SubnetId: 'str', ZoneName: 'str' })), SecurityGroups: arr('str'), IpAddressType: 'str' }, ['LoadBalancerArn'])),
+    LoadBalancers: arr(obj({ LoadBalancerArn: ARN, LoadBalancerName: 'text', Type: 'str', Scheme: 'str', VpcId: 'str', AvailabilityZones: arr(obj({ SubnetId: 'str', ZoneName: 'str' })), SecurityGroups: arr('str'), IpAddressType: 'str', EnforceSecurityGroupInboundRulesOnPrivateLinkTraffic: 'str' }, ['LoadBalancerArn'])),
     Listeners: arr(obj({ ListenerArn: ARN, LoadBalancerArn: ARN, Port: 'port', Protocol: 'str', DefaultActions: arr(ACTION) }, ['ListenerArn', 'LoadBalancerArn'])),
     Rules: arr(obj({ RuleArn: ARN, ListenerArn: ARN, Actions: arr(ACTION) })),
     TargetGroups: arr(obj({ TargetGroupArn: ARN, TargetGroupName: 'text', Protocol: 'str', Port: 'port', TargetType: 'str', VpcId: 'str', HealthCheckPort: 'str', LoadBalancerArns: arr(ARN) }, ['TargetGroupArn'])),

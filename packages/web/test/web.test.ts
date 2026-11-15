@@ -330,6 +330,19 @@ describe('web console', () => {
       expect(text(doc, '.ask-results')).toMatch(/reachable/i);
     });
 
+    it('PrivateLink lists who may connect to each service and what the endpoints allow', () => {
+      const { doc, api } = page();
+      api.loadText(fixture('16-privatelink'), 'pl.json');
+      api.go('privatelink');
+      const rows = [...doc.querySelectorAll('.pl-services tbody tr')] as HTMLElement[];
+      expect(rows.length).toBe(2);
+      expect(rows[0]!.textContent).toMatch(/vpce-svc-open.*Every AWS account.*Not required/);
+      rows[1]!.click();
+      expect(text(doc, '.pl-listeners')).toMatch(/security groups not applied to PrivateLink/);
+      expect(text(doc, '.pl-listeners')).toMatch(/i-db:5432/);
+      expect(text(doc, '.pl-endpoints')).toMatch(/vpce-s3.*Allows everything/);
+    });
+
     it('on-premises says so when there are no links', () => {
       const { doc, api } = page();
       api.loadText(fixture('06-public-ip-without-igw-route'), 'x.json');
@@ -460,7 +473,7 @@ describe('web console', () => {
 describe('documentation', () => {
   it('builds, with every example produced by the real CLI', () => {
     const out = execFileSync(process.execPath, [join(root, 'scripts/build-docs.mjs')], { cwd: root, encoding: 'utf8' });
-    expect(out).toMatch(/20 sections, 14 live examples/);
+    expect(out).toMatch(/21 sections, 15 live examples/);
     const html = readFileSync(join(root, 'site/docs/index.html'), 'utf8');
     expect(html).not.toMatch(/<!--(run|trace|policy)/);
     expect(html).toContain('pinhole blast account-a/snapshot.json account-b/snapshot.json');

@@ -264,6 +264,19 @@ The report cuts destination addresses at every security group egress rule, netwo
 
 Every path over a link carries a caveat: on-premises routers and firewalls are not visible to AWS. The report (`analyzeOnPrem`) uses the exposure method on the on-premises address space, cut at every security group rule, network ACL entry and route of the interface's VPC, transit gateway route, gateway route table entry and firewall rule. Severity is the internet rating of the service lowered one level, and one more when only 256 or fewer on-premises addresses reach it.
 
+## PrivateLink
+
+`packages/engine/src/privatelink.ts`.
+
+**Services this account provides** (`DescribeVpcEndpointServiceConfigurations`, `DescribeVpcEndpointServicePermissions`, `DescribeVpcEndpointConnections`):
+
+- *Who may connect.* The allowed principals. `*` (type `All`) is every AWS account. Without acceptance required, an allowed principal's endpoint connects at once ([configure an endpoint service](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html)). Principals whose ARN is not in this account are listed as outside principals.
+- *Who has.* Endpoint connections that are not deleted, rejected, failed or expired, with the owner account and Region.
+- *What they reach.* For each listener of each Network Load Balancer behind the service: the consumer addresses its security groups let in on the listener port. With no security groups, or with "Enforce inbound rules on PrivateLink traffic" off, that is any address; otherwise the CIDR and prefix list rules (the source is the consumer's private address, and a rule that names a security group cannot match it) ([NLB security groups](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-security-groups.html)). Targets see the load balancer's own address whatever the client IP preservation setting ([target group attributes](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/edit-target-group-attributes.html)), so each target is evaluated from every load balancer node with the full path model.
+- *Severity.* Every account without approval is high, with approval medium, outside principals low, otherwise info. An open service (medium or above) that reaches a target port rated high or critical (remote administration, databases, admin panels) is raised one level.
+
+**This account's endpoints.** For interface and gateway endpoints: the security group's inbound rules, whether the service belongs to another account (a `vpce-svc-` service not in this snapshot), and whether the endpoint policy has an unconditional statement allowing every principal every action (`*` or `service:*`) on every resource. On S3 and DynamoDB endpoints that is low: data can be copied to buckets and tables in any account ([control access with endpoint policies](https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-access.html)).
+
 ## Out of scope, detected and warned about
 
 | Detected | How |
