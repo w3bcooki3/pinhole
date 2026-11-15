@@ -194,10 +194,16 @@ Mapped exactly, when every value is known at plan time and the resources are in 
 | `aws_network_interface_sg_attachment` | security group attached or detached |
 | `aws_instance`, `aws_network_interface` (updates) | `vpc_security_group_ids` / `security_groups` changes |
 | `aws_eip_association` | public IP added or removed |
+| `aws_route_table_association`, `aws_main_route_table_association` | subnet moved to another route table, or back to the main one; main route table changed |
+| `aws_network_acl_association` | subnet moved to another network ACL; removing it returns the subnet to the default ACL |
+| `aws_internet_gateway`, `aws_internet_gateway_attachment` | gateway attached to or detached from a VPC |
+| `aws_lb_listener`, `aws_alb_listener` | listener added to or removed from a load balancer |
 
-Security groups the plan creates get a placeholder ID (`sg-plan1`, `sg-plan2`, ...). Where a rule, an attachment or a source group is unknown until apply, Pinhole follows the plan's `configuration` references, through module outputs, to the resource it comes from; if that is a security group the plan creates, the placeholder is used. A new group with its rules, attached to an existing instance in the same plan, is therefore checked end to end. A reference that could mean several instances (`count` or `for_each` without an index) is not resolved.
+IPv6 is handled throughout: `ipv6_cidr_blocks` on security group rules, `ipv6_cidr_block` on network ACL entries, and `destination_ipv6_cidr_block` on routes are placed exactly like their IPv4 forms.
 
-Listed as not analysed, with the reason: values known only after apply that do not lead to a security group the plan creates (for example a route to a gateway the plan creates); resources not in the snapshot (another account, region or VPC); IPv6 rules and routes; new instances and interfaces; and other network resource types (load balancers, listeners, subnets, gateways, peering, endpoints). Everything outside networking is counted and ignored.
+Security groups and internet gateways the plan creates get a placeholder ID (`sg-plan1`, `igw-plan1`, ...). Where a rule, an attachment or a source group is unknown until apply, Pinhole follows the plan's `configuration` references, through module outputs, to the resource it comes from; if that is a security group or internet gateway the plan creates, the placeholder is used. A new group with its rules, attached to an existing instance in the same plan, is therefore checked end to end, and so is a new internet gateway with a route to it. A second internet gateway on a VPC that keeps its first is refused, as AWS refuses it. A reference that could mean several instances (`count` or `for_each` without an index) is not resolved.
+
+Listed as not analysed, with the reason: values known only after apply that do not lead to a security group or internet gateway the plan creates; resources not in the snapshot (another account, region or VPC); listeners whose load balancer the plan does not name; new instances, interfaces, subnets and load balancers; and other network resource types (NAT gateways, peering, transit gateways, endpoints). Everything outside networking is counted and ignored.
 
 Every mapped change passes the same validation as a hand-written `--changes` file before it is used.
 
@@ -215,4 +221,4 @@ The analysis is exact over ports and over 128-bit source address ranges. "Every 
 
 Dual-stack load balancers ([IP address types](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-ip-address-type.html)) take IPv6 clients on every listener. Each load balancer node interface is analysed as above, limited to the listener's port, and the nodes are merged as for IPv4. A network load balancer without security groups filters no client, so only its network ACL and routes decide. Behind the listener, targets are evaluated from the nodes' own addresses: an IPv6 client's address cannot be carried to an IPv4 target, so client IP preservation does not apply. A load balancer with `IpAddressType` `dualstack-without-public-ipv4` has no public IPv4 address and is reachable over IPv6 only. Snapshots collected before this field was read do not say whether a load balancer is dual-stack; those in IPv6 VPCs are listed in Coverage.
 
-Not analysed for IPv6: ICMPv6, prefix lists with IPv6 entries, lateral movement between IPv6 addresses, and IPv6 rules in Terraform plans. IPv6 findings are marked as such in every output.
+Not analysed for IPv6: ICMPv6, prefix lists with IPv6 entries, and lateral movement between IPv6 addresses. IPv6 findings are marked as such in every output.

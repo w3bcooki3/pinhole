@@ -187,7 +187,7 @@ pinhole collect --profile audit --region us-east-1,eu-west-1 --out-dir snapshots
   <p class="lede">Catch new internet exposure before it ships: check a Terraform plan, compare snapshots, or publish findings to GitHub code scanning.</p>
 
   <h3 id="terraform">Check a Terraform plan</h3>
-  <p>Pinhole places each security group, rule, network ACL, route, attachment and Elastic IP change from the plan onto the snapshot, including groups the plan creates, and runs the full analysis. Anything it cannot place exactly is listed as not analysed, never guessed.</p>
+  <p>Pinhole places each security group, rule, network ACL, route, attachment, Elastic IP, subnet association, internet gateway and listener change from the plan onto the snapshot, IPv4 and IPv6, including groups and gateways the plan creates, and runs the full analysis. Anything it cannot place exactly is listed as not analysed, never guessed.</p>
 <pre class="code"><code>terraform plan -out tfplan &amp;&amp; terraform show -json tfplan &gt; plan.json
 pinhole plan snapshot.json plan.json --fail-on high</code></pre>
   <!--run lines=18 plan fixtures/09-lateral-movement/snapshot.json fixtures/plans/09-plan.json-->
@@ -303,7 +303,7 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
   <ul class="plain">
     <li><b>Scope.</b> VPC network paths to interfaces and Application and Network Load Balancers. Not S3, API Gateway, Lambda function URLs, CloudFront, or other services that are public outside a VPC. Use a configuration scanner such as Prowler or AWS Security Hub for those.</li>
     <li><b>Detected, not modelled.</b> AWS Network Firewall, Gateway Load Balancer, routes to appliances, gateway route tables, Global Accelerator, Classic Load Balancers, VPN and Direct Connect. Paths through them are reported as unknown.</li>
-    <li><b>IPv6</b> is analysed for TCP and UDP to interfaces and dual-stack load balancers. Not yet for ICMPv6, IPv6 lateral movement, or IPv6 rules in Terraform plans.</li>
+    <li><b>IPv6</b> is analysed for TCP and UDP to interfaces and dual-stack load balancers. Not yet for ICMPv6 or IPv6 lateral movement.</li>
     <li><b>Configuration, not traffic.</b> Host firewalls, the operating system and whether anything listens on the port are outside the model. Existing connections can outlive a rule change.</li>
     <li><b>Snapshots are a point in time.</b> Collect again after changes, or compare two snapshots.</li>
     <li><b>Size.</b> The console handles files up to 200 MB. Very large accounts are faster with the CLI.</li>

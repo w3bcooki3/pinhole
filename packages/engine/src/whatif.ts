@@ -31,19 +31,47 @@ export type Change =
   /** A route to an internet gateway, NAT gateway, peering connection, transit gateway, interface or endpoint. */
   | { kind: 'add-route'; routeTableId: string; destination: string; targetId: string }
   /** A public IP that will be attached; `publicIp` may be a placeholder when it is only known after apply. */
-  | { kind: 'add-public-ip'; eniId: string; publicIp: string; elastic?: boolean };
+  | { kind: 'add-public-ip'; eniId: string; publicIp: string; elastic?: boolean }
+  /** Move a subnet to another route table; without a table, back to the VPC's main one. */
+  | { kind: 'associate-route-table'; subnetId: string; routeTableId?: string }
+  /** Make a route table the main one of its VPC: every subnet without its own association uses it. */
+  | { kind: 'set-main-route-table'; vpcId: string; routeTableId: string }
+  /** Move a subnet to another network ACL; without one, back to the VPC's default ACL. */
+  | { kind: 'associate-nacl'; subnetId: string; naclId?: string }
+  /** Attach an internet gateway to a VPC (created if it is new), or detach it. */
+  | { kind: 'attach-igw'; igwId: string; vpcId: string }
+  | { kind: 'detach-igw'; igwId: string }
+  /** A load balancer listener added or removed, such as one a Terraform plan creates. */
+  | { kind: 'add-listener'; loadBalancerArn: string; listenerArn: string; port: number; protocol: string; targetGroupArns: string[] }
+  | { kind: 'remove-listener'; listenerArn: string };
 
 export class ChangeError extends Error {}
+
+/** IPv6 CIDRs are written with colons; every change that takes a CIDR takes either family. */
+export const isV6 = (cidr: string) => cidr.includes(':');
+/** The canonical text of an IPv6 CIDR (host bits cleared, shortest form), so equal blocks compare equal. */
+export function canon6(cidr: string): string {
+  try {
+    const out = RangeSet6.fromCidrs([cidr]).toCidrs();
+    if (out.length === 1) return out[0]!;
+  } catch {
+    /* fall through */
+  }
+  throw new ChangeError(`${cidr} is not an IPv6 CIDR.`);
+}
 
 /**
  * Check a list of changes read from a file before using it: every field the
  * right type, ports and rule numbers in range, IDs and CIDRs plain text. The
  * changes are turned into AWS CLI commands, so nothing unexpected may get in.
  */
+const ELB_ARN = /^arn:aws[\w-]*:elasticloadbalancing:[\w-]*:\d{12}:(loadbalancer|listener|targetgroup)\/[\w./-]{1,200}$/;
+
 export function assertChanges(value: unknown): asserts value is Change[] {
   if (!Array.isArray(value)) throw new ChangeError('Changes must be a JSON array.');
   if (value.length > 1000) throw new ChangeError('At most 1000 changes at a time.');
-  const plain = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+  // IDs and addresses; IPv6 CIDRs may start with a colon (::/0).
+  const plain = /^[A-Za-z0-9:][A-Za-z0-9._:/-]{0,127}$/;
   value.forEach((c, i) => {
     const bad = (what: string): never => { throw new ChangeError(`Change ${i + 1}: ${what}.`); };
     if (typeof c !== 'object' || c === null || Array.isArray(c)) bad('must be an object');
@@ -51,6 +79,7 @@ export function assertChanges(value: unknown): asserts value is Change[] {
     const str = (k: string, opt = false) => { const v = o[k]; if (v === undefined && opt) return; if (typeof v !== 'string' || !plain.test(v)) bad(`"${k}" must be an ID or address`); };
     const bool = (k: string) => { if (typeof o[k] !== 'boolean') bad(`"${k}" must be true or false`); };
     const port = (k: string) => { const v = o[k]; if (v !== undefined && (!Number.isInteger(v) || (v as number) < -1 || (v as number) > 65535)) bad(`"${k}" must be a port from -1 to 65535`); };
+    const arnOf = (k: string) => { if (typeof o[k] !== 'string' || !ELB_ARN.test(o[k] as string)) bad(`"${k}" must be a load balancer, listener or target group ARN`); };
     const ruleNo = () => { const v = o.ruleNumber; if (!Number.isInteger(v) || (v as number) < 1 || (v as number) > 32766) bad('"ruleNumber" must be from 1 to 32766'); };
     switch (o.kind) {
       case 'revoke-sg-rule': str('ruleId'); break;
@@ -68,6 +97,19 @@ export function assertChanges(value: unknown): asserts value is Change[] {
       case 'detach-sg': case 'attach-sg': str('eniId'); str('groupId'); break;
       case 'create-sg': str('groupId'); str('vpcId', true); if (typeof o.name !== 'string' || o.name.length > 255 || /[\u0000-\u001f\u007f-\u009f]/.test(o.name)) bad('"name" must be one line of at most 255 characters'); break;
       case 'add-route': str('routeTableId'); str('destination'); str('targetId'); break;
+      case 'associate-route-table': str('subnetId'); str('routeTableId', true); break;
+      case 'set-main-route-table': str('vpcId'); str('routeTableId'); break;
+      case 'associate-nacl': str('subnetId'); str('naclId', true); break;
+      case 'attach-igw': str('igwId'); str('vpcId'); break;
+      case 'detach-igw': str('igwId'); break;
+      case 'add-listener': {
+        arnOf('loadBalancerArn'); arnOf('listenerArn'); port('port'); str('protocol');
+        if (!Number.isInteger(o.port) || (o.port as number) < 1) bad('"port" must be from 1 to 65535');
+        if (!Array.isArray(o.targetGroupArns) || o.targetGroupArns.length > 50) bad('"targetGroupArns" must be a list');
+        (o.targetGroupArns as unknown[]).forEach((t) => { if (typeof t !== 'string' || !ELB_ARN.test(t)) bad('"targetGroupArns" must hold target group ARNs'); });
+        break;
+      }
+      case 'remove-listener': arnOf('listenerArn'); break;
       case 'add-public-ip': str('eniId'); if (typeof o.publicIp !== 'string' || !/^[A-Za-z0-9.:() -]{1,40}$/.test(o.publicIp)) bad('"publicIp" must be an address or a short label'); if (o.elastic !== undefined) bool('elastic'); break;
       default: bad('unknown "kind"');
     }
@@ -93,6 +135,12 @@ export function applyChanges(model: NetworkModel, changes: Change[]): NetworkMod
   const tables = () => (owned.has('rt') ? out.routeTables : (owned.add('rt'), (out.routeTables = new Map(out.routeTables))));
   const enis = () => (owned.has('eni') ? out.enis : (owned.add('eni'), (out.enis = new Map(out.enis))));
   const setGroup = (g: SecurityGroup) => groups().set(g.id, g);
+  const igws = () => (owned.has('igw') ? out.internetGateways : (owned.add('igw'), (out.internetGateways = new Map(out.internetGateways))));
+  const subnetOf = (id: string) => {
+    const s = out.subnets.get(id);
+    if (!s) throw new ChangeError(`Subnet ${id} is not in the snapshot.`);
+    return s;
+  };
 
   for (const c of changes) {
     switch (c.kind) {
@@ -107,7 +155,10 @@ export function applyChanges(model: NetworkModel, changes: Change[]): NetworkMod
         if (c.cidr !== undefined) {
           delete next.prefixListId;
           delete next.referencedGroupId;
-          next.cidr = parseCidr(c.cidr);
+          delete next.cidr;
+          delete next.ipv6CidrText;
+          if (isV6(c.cidr)) next.ipv6CidrText = canon6(c.cidr);
+          else next.cidr = parseCidr(c.cidr);
         }
         if (c.fromPort !== undefined) next.fromPort = c.fromPort;
         if (c.toPort !== undefined) next.toPort = c.toPort;
@@ -127,7 +178,7 @@ export function applyChanges(model: NetworkModel, changes: Change[]): NetworkMod
           egress: c.egress,
           protocol,
           ...(hasPorts(protocol) ? { fromPort: c.fromPort ?? 0, toPort: c.toPort ?? c.fromPort ?? 65535 } : {}),
-          ...(c.cidr ? { cidr: parseCidr(c.cidr) } : {}),
+          ...(c.cidr ? (isV6(c.cidr) ? { ipv6CidrText: canon6(c.cidr) } : { cidr: parseCidr(c.cidr) }) : {}),
           ...(c.referencedGroupId ? { referencedGroupId: c.referencedGroupId } : {}),
           ...(c.prefixListId ? { prefixListId: c.prefixListId } : {}),
           ...(c.description ? { description: c.description } : {}),
@@ -150,7 +201,7 @@ export function applyChanges(model: NetworkModel, changes: Change[]): NetworkMod
             egress: c.egress,
             action: c.action,
             protocol,
-            cidr: parseCidr(c.cidr),
+            ...(isV6(c.cidr) ? { ipv6CidrText: canon6(c.cidr) } : { cidr: parseCidr(c.cidr) }),
             ...(hasPorts(protocol) ? { portRange: { from: c.fromPort ?? 0, to: c.toPort ?? c.fromPort ?? 65535 } } : {}),
           };
           entries = [...entries, entry];
@@ -162,6 +213,13 @@ export function applyChanges(model: NetworkModel, changes: Change[]): NetworkMod
       case 'remove-route': {
         const rt = out.routeTables.get(c.routeTableId);
         if (!rt) throw new ChangeError(`Route table ${c.routeTableId} is not in the snapshot.`);
+        if (isV6(c.destination)) {
+          const d = canon6(c.destination);
+          const routes6 = (rt.routes6 ?? []).filter((r) => canon6(r.destination) !== d);
+          if (routes6.length === (rt.routes6 ?? []).length) throw new ChangeError(`${c.routeTableId} has no route to ${c.destination}.`);
+          tables().set(rt.id, { ...rt, routes6 } satisfies RouteTable);
+          break;
+        }
         const routes = rt.routes.filter((r) => (r.destination?.text ?? r.destinationPrefixListId) !== c.destination);
         if (routes.length === rt.routes.length) throw new ChangeError(`${c.routeTableId} has no route to ${c.destination}.`);
         tables().set(rt.id, { ...rt, routes } satisfies RouteTable);
@@ -175,10 +233,74 @@ export function applyChanges(model: NetworkModel, changes: Change[]): NetworkMod
       case 'add-route': {
         const rt = out.routeTables.get(c.routeTableId);
         if (!rt) throw new ChangeError(`Route table ${c.routeTableId} is not in the snapshot.`);
+        if (isV6(c.destination)) {
+          const d = canon6(c.destination);
+          const routes6 = (rt.routes6 ?? []).filter((r) => canon6(r.destination) !== d);
+          routes6.push({ destination: d, target: targetOf(c.targetId), state: 'active' });
+          tables().set(rt.id, { ...rt, routes6 } satisfies RouteTable);
+          break;
+        }
         const isPl = c.destination.startsWith('pl-');
         const routes = rt.routes.filter((r) => (r.destination?.text ?? r.destinationPrefixListId) !== c.destination);
         routes.push({ ...(isPl ? { destinationPrefixListId: c.destination } : { destination: parseCidr(c.destination) }), target: targetOf(c.targetId), state: 'active', origin: 'static' });
         tables().set(rt.id, { ...rt, routes } satisfies RouteTable);
+        break;
+      }
+      case 'associate-route-table': {
+        const subnet = subnetOf(c.subnetId);
+        const target = c.routeTableId ? out.routeTables.get(c.routeTableId) : undefined;
+        if (c.routeTableId && !target) throw new ChangeError(`Route table ${c.routeTableId} is not in the snapshot.`);
+        if (target && target.vpcId !== subnet.vpcId) throw new ChangeError(`${target.id} is in ${target.vpcId}, not in ${subnet.vpcId}.`);
+        const t = tables();
+        for (const rt of [...t.values()]) {
+          const has = rt.subnetIds.includes(subnet.id);
+          const want = rt.id === target?.id;
+          if (has !== want) t.set(rt.id, { ...rt, subnetIds: want ? [...rt.subnetIds, subnet.id] : rt.subnetIds.filter((x) => x !== subnet.id) });
+        }
+        break;
+      }
+      case 'set-main-route-table': {
+        const target = out.routeTables.get(c.routeTableId);
+        if (!target) throw new ChangeError(`Route table ${c.routeTableId} is not in the snapshot.`);
+        if (target.vpcId !== c.vpcId) throw new ChangeError(`${target.id} is in ${target.vpcId}, not in ${c.vpcId}.`);
+        const t = tables();
+        for (const rt of [...t.values()]) if (rt.vpcId === c.vpcId && rt.isMain !== (rt.id === target.id)) t.set(rt.id, { ...rt, isMain: rt.id === target.id });
+        break;
+      }
+      case 'associate-nacl': {
+        const subnet = subnetOf(c.subnetId);
+        const target = c.naclId ? out.nacls.get(c.naclId) : [...out.nacls.values()].find((n) => n.vpcId === subnet.vpcId && n.isDefault);
+        if (!target) throw new ChangeError(c.naclId ? `Network ACL ${c.naclId} is not in the snapshot.` : `The default network ACL of ${subnet.vpcId} is not in the snapshot.`);
+        if (target.vpcId !== subnet.vpcId) throw new ChangeError(`${target.id} is in ${target.vpcId}, not in ${subnet.vpcId}.`);
+        const n = nacls();
+        for (const acl of [...n.values()]) {
+          const has = acl.subnetIds.includes(subnet.id);
+          const want = acl.id === target.id;
+          if (has !== want) n.set(acl.id, { ...acl, subnetIds: want ? [...acl.subnetIds, subnet.id] : acl.subnetIds.filter((x) => x !== subnet.id) });
+        }
+        break;
+      }
+      case 'attach-igw': {
+        if (!out.vpcs.has(c.vpcId)) throw new ChangeError(`VPC ${c.vpcId} is not in the snapshot.`);
+        const other = [...out.internetGateways.values()].find((g) => g.vpcId === c.vpcId && g.id !== c.igwId);
+        if (other) throw new ChangeError(`${c.vpcId} already has internet gateway ${other.id}; a VPC can have only one.`);
+        igws().set(c.igwId, { id: c.igwId, vpcId: c.vpcId });
+        break;
+      }
+      case 'detach-igw': {
+        const g = out.internetGateways.get(c.igwId);
+        if (!g) throw new ChangeError(`Internet gateway ${c.igwId} is not in the snapshot.`);
+        igws().set(g.id, { id: g.id });
+        break;
+      }
+      case 'add-listener': {
+        if (!out.loadBalancers.has(c.loadBalancerArn)) throw new ChangeError(`Load balancer ${c.loadBalancerArn} is not in the snapshot.`);
+        out.listeners = [...out.listeners.filter((l) => l.arn !== c.listenerArn), { arn: c.listenerArn, loadBalancerArn: c.loadBalancerArn, port: c.port, protocol: c.protocol, targetGroupArns: [...c.targetGroupArns] }];
+        break;
+      }
+      case 'remove-listener': {
+        if (!out.listeners.some((l) => l.arn === c.listenerArn)) throw new ChangeError(`Listener ${c.listenerArn} is not in the snapshot.`);
+        out.listeners = out.listeners.filter((l) => l.arn !== c.listenerArn);
         break;
       }
       case 'remove-public-ip':
@@ -244,6 +366,20 @@ export function describeChange(model: NetworkModel, c: Change): string {
       return `Add a route to ${c.destination} via ${c.targetId} in ${c.routeTableId}`;
     case 'add-public-ip':
       return `Attach ${c.elastic ? 'Elastic IP' : 'public IP'} ${c.publicIp} to ${c.eniId}`;
+    case 'associate-route-table':
+      return c.routeTableId ? `Use route table ${c.routeTableId} for ${c.subnetId}` : `Remove the route table association of ${c.subnetId}, so it uses the main route table`;
+    case 'set-main-route-table':
+      return `Make ${c.routeTableId} the main route table of ${c.vpcId}`;
+    case 'associate-nacl':
+      return c.naclId ? `Use network ACL ${c.naclId} for ${c.subnetId}` : `Return ${c.subnetId} to the default network ACL`;
+    case 'attach-igw':
+      return `Attach internet gateway ${c.igwId} to ${c.vpcId}`;
+    case 'detach-igw':
+      return `Detach internet gateway ${c.igwId}`;
+    case 'add-listener':
+      return `Add a ${oneLine(c.protocol)}:${c.port} listener to ${c.loadBalancerArn.split('/').slice(-2, -1)[0] ?? c.loadBalancerArn}`;
+    case 'remove-listener':
+      return `Remove listener ${c.listenerArn.split('/').pop()}`;
   }
 }
 
@@ -285,14 +421,14 @@ export function cliFor(model: NetworkModel, c: Change): string[] {
     case 'edit-sg-rule': {
       const { group, rule } = findRule(model, c.ruleId);
       const proto = protocolName(rule.protocol);
-      const cidr = c.cidr ?? rule.cidr?.text;
+      const cidr = c.cidr ?? rule.cidr?.text ?? rule.ipv6CidrText;
       const from = c.fromPort ?? rule.fromPort ?? -1;
       const to = c.toPort ?? rule.toPort ?? -1;
       // JSON, not shorthand: a description holding "," or "}" would otherwise change what the command sets.
       const spec = {
         IpProtocol: protoArg(proto),
         ...(hasPorts(rule.protocol) ? { FromPort: from, ToPort: to } : {}),
-        ...(cidr ? { CidrIpv4: cidr } : rule.referencedGroupId ? { ReferencedGroupId: rule.referencedGroupId } : rule.prefixListId ? { PrefixListId: rule.prefixListId } : {}),
+        ...(cidr ? (isV6(cidr) ? { CidrIpv6: cidr } : { CidrIpv4: cidr }) : rule.referencedGroupId ? { ReferencedGroupId: rule.referencedGroupId } : rule.prefixListId ? { PrefixListId: rule.prefixListId } : {}),
         ...(rule.description ? { Description: rule.description } : {}),
       };
       return [`aws ec2 modify-security-group-rules${region} --group-id ${q(group.id)} --security-group-rules ${q(JSON.stringify([{ SecurityGroupRuleId: rule.id, SecurityGroupRule: spec }]))}`];
@@ -301,19 +437,23 @@ export function cliFor(model: NetworkModel, c: Change): string[] {
       const perm = {
         IpProtocol: protoArg(c.protocol),
         ...(hasPorts(normalizeProtocol(c.protocol)) ? { FromPort: c.fromPort ?? 0, ToPort: c.toPort ?? c.fromPort ?? 65535 } : {}),
-        ...(c.cidr ? { IpRanges: [{ CidrIp: c.cidr, ...(c.description ? { Description: c.description } : {}) }] } : c.prefixListId ? { PrefixListIds: [{ PrefixListId: c.prefixListId }] } : { UserIdGroupPairs: [{ GroupId: c.referencedGroupId }] }),
+        ...(c.cidr
+          ? isV6(c.cidr)
+            ? { Ipv6Ranges: [{ CidrIpv6: c.cidr, ...(c.description ? { Description: c.description } : {}) }] }
+            : { IpRanges: [{ CidrIp: c.cidr, ...(c.description ? { Description: c.description } : {}) }] }
+          : c.prefixListId ? { PrefixListIds: [{ PrefixListId: c.prefixListId }] } : { UserIdGroupPairs: [{ GroupId: c.referencedGroupId }] }),
       };
       return [`aws ec2 authorize-security-group-${c.egress ? 'egress' : 'ingress'}${region} --group-id ${q(c.groupId)} --ip-permissions ${q(JSON.stringify([perm]))}`];
     }
     case 'add-nacl-entry': {
       const proto = protoArg(String(normalizeProtocol(c.protocol)));
       const ports = hasPorts(normalizeProtocol(c.protocol)) ? ` --port-range From=${int(c.fromPort ?? 0)},To=${int(c.toPort ?? c.fromPort ?? 65535)}` : '';
-      return [`aws ec2 create-network-acl-entry${region} --network-acl-id ${q(c.naclId)} ${c.egress ? '--egress' : '--ingress'} --rule-number ${int(c.ruleNumber)} --protocol ${q(proto)}${ports} --cidr-block ${q(c.cidr)} --rule-action ${c.action === 'allow' ? 'allow' : 'deny'}`];
+      return [`aws ec2 create-network-acl-entry${region} --network-acl-id ${q(c.naclId)} ${c.egress ? '--egress' : '--ingress'} --rule-number ${int(c.ruleNumber)} --protocol ${q(proto)}${ports} ${isV6(c.cidr) ? '--ipv6-cidr-block' : '--cidr-block'} ${q(c.cidr)} --rule-action ${c.action === 'allow' ? 'allow' : 'deny'}`];
     }
     case 'remove-nacl-entry':
       return [`aws ec2 delete-network-acl-entry${region} --network-acl-id ${q(c.naclId)} ${c.egress ? '--egress' : '--ingress'} --rule-number ${int(c.ruleNumber)}`];
     case 'remove-route': {
-      const flag = c.destination.startsWith('pl-') ? '--destination-prefix-list-id' : '--destination-cidr-block';
+      const flag = c.destination.startsWith('pl-') ? '--destination-prefix-list-id' : isV6(c.destination) ? '--destination-ipv6-cidr-block' : '--destination-cidr-block';
       return [`aws ec2 delete-route${region} --route-table-id ${q(c.routeTableId)} ${flag} ${q(c.destination)}`];
     }
     case 'remove-public-ip': {
@@ -331,13 +471,31 @@ export function cliFor(model: NetworkModel, c: Change): string[] {
     case 'add-route': {
       const t = targetOf(c.targetId);
       const flag = t.type === 'nat' ? '--nat-gateway-id' : t.type === 'pcx' ? '--vpc-peering-connection-id' : t.type === 'tgw' ? '--transit-gateway-id' : t.type === 'eni' ? '--network-interface-id' : t.type === 'instance' ? '--instance-id' : t.type === 'vpce' ? '--vpc-endpoint-id' : t.type === 'eigw' ? '--egress-only-internet-gateway-id' : '--gateway-id';
-      const dest = c.destination.startsWith('pl-') ? '--destination-prefix-list-id' : '--destination-cidr-block';
+      const dest = c.destination.startsWith('pl-') ? '--destination-prefix-list-id' : isV6(c.destination) ? '--destination-ipv6-cidr-block' : '--destination-cidr-block';
       return [`aws ec2 create-route${region} --route-table-id ${q(c.routeTableId)} ${dest} ${q(c.destination)} ${flag} ${q(c.targetId)}`];
     }
     case 'create-sg':
       return [`# ${oneLine(c.groupId)} (${oneLine(c.name)}) is created by the plan; its real ID is assigned on apply.`];
     case 'add-public-ip':
       return [`# Attach the public IP with the change that introduces it (Elastic IP association or the instance setting).`];
+    case 'associate-route-table':
+      return c.routeTableId
+        ? [`# If ${oneLine(c.subnetId)} already has its own route table, use replace-route-table-association with that association ID instead.`, `aws ec2 associate-route-table${region} --subnet-id ${q(c.subnetId)} --route-table-id ${q(c.routeTableId)}`]
+        : [`aws ec2 describe-route-tables${region} --filters Name=association.subnet-id,Values=${q(c.subnetId)} --query 'RouteTables[0].Associations[?SubnetId==\`${oneLine(c.subnetId).replace(/[^\w-]/g, '')}\`].RouteTableAssociationId' --output text`, `aws ec2 disassociate-route-table${region} --association-id <association-id>`];
+    case 'set-main-route-table':
+      return [`aws ec2 describe-route-tables${region} --filters Name=vpc-id,Values=${q(c.vpcId)} Name=association.main,Values=true --query 'RouteTables[0].Associations[?Main].RouteTableAssociationId' --output text`, `aws ec2 replace-route-table-association${region} --association-id <association-id> --route-table-id ${q(c.routeTableId)}`];
+    case 'associate-nacl':
+      return [`aws ec2 describe-network-acls${region} --filters Name=association.subnet-id,Values=${q(c.subnetId)} --query 'NetworkAcls[0].Associations[?SubnetId==\`${oneLine(c.subnetId).replace(/[^\w-]/g, '')}\`].NetworkAclAssociationId' --output text`, `aws ec2 replace-network-acl-association${region} --association-id <association-id> --network-acl-id ${q(c.naclId ?? '<default-acl-id>')}`];
+    case 'attach-igw':
+      return [`aws ec2 attach-internet-gateway${region} --internet-gateway-id ${q(c.igwId)} --vpc-id ${q(c.vpcId)}`];
+    case 'detach-igw': {
+      const vpc = model.internetGateways.get(c.igwId)?.vpcId;
+      return [`aws ec2 detach-internet-gateway${region} --internet-gateway-id ${q(c.igwId)} --vpc-id ${q(vpc ?? '<vpc-id>')}`];
+    }
+    case 'add-listener':
+      return [`# The listener is created by the change that introduces it; its ARN is assigned then.`];
+    case 'remove-listener':
+      return [`aws elbv2 delete-listener${region} --listener-arn ${q(c.listenerArn)}`];
     case 'detach-sg': {
       const eni = model.enis.get(c.eniId);
       const keep = (eni?.groupIds ?? []).filter((g) => g !== c.groupId);

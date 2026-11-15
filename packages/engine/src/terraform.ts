@@ -14,7 +14,7 @@
 import { parseCidr } from './ipv4.js';
 import { hasPorts, normalizeProtocol } from './packet.js';
 import type { NetworkModel, SgRule } from './types.js';
-import { assertChanges, ChangeError } from './whatif.js';
+import { assertChanges, canon6, ChangeError } from './whatif.js';
 import type { Change } from './whatif.js';
 
 export class PlanError extends Error {}
@@ -106,12 +106,19 @@ function expand(groupId: string, egress: boolean, r: Obj, shape: 'inline' | 'leg
   return out;
 }
 
+const same6 = (a: string, b: string) => {
+  try {
+    return canon6(a) === canon6(b);
+  } catch {
+    return false;
+  }
+};
 const sameRule = (m: SgRule, t: TfRule) =>
   m.groupId === t.groupId &&
   m.egress === t.egress &&
   m.protocol === t.protocol &&
   (!hasPorts(t.protocol) || ((m.fromPort ?? 0) === t.fromPort && (m.toPort ?? 65535) === t.toPort)) &&
-  (t.cidr ? m.cidr?.text === parseCidr(t.cidr).text : t.prefixListId ? m.prefixListId === t.prefixListId : t.referencedGroupId ? m.referencedGroupId === t.referencedGroupId : t.ipv6 ? m.ipv6CidrText === t.ipv6 : false);
+  (t.cidr ? m.cidr?.text === parseCidr(t.cidr).text : t.prefixListId ? m.prefixListId === t.prefixListId : t.referencedGroupId ? m.referencedGroupId === t.referencedGroupId : t.ipv6 ? !!m.ipv6CidrText && same6(m.ipv6CidrText, t.ipv6) : false);
 const ruleKey = (t: TfRule) => JSON.stringify([t.egress, t.protocol, t.fromPort, t.toPort, t.cidr, t.ipv6, t.prefixListId, t.referencedGroupId]);
 
 /** Strip instance keys: aws_security_group.web[0] and aws_security_group.web["a"] -> aws_security_group.web */
@@ -187,19 +194,21 @@ export function mapTerraformPlan(model: NetworkModel, plan: unknown): PlanMappin
   };
   const eniOfInstance = (instanceId: string) => model.instances.get(instanceId)?.primaryEniId ?? model.instances.get(instanceId)?.eniIds[0];
 
-  // Security groups this plan creates get a placeholder ID ("sg-plan1"), so
-  // rules and attachments that refer to them in the same plan can be checked.
+  // Security groups and internet gateways this plan creates get a placeholder
+  // ID ("sg-plan1", "igw-plan1"), so rules, attachments and routes that refer
+  // to them in the same plan can be checked.
   const config = configIndex(plan);
   const created = new Map<string, string>(); // address -> placeholder
   const createdBase = new Map<string, string[]>(); // base address -> placeholders
   let n = 0;
   for (const raw of rcs as RawChange[]) {
-    if (!isObj(raw) || str(raw.mode) === 'data' || str(raw.type) !== 'aws_security_group') continue;
+    const kind = isObj(raw) ? ({ aws_security_group: 'sg', aws_internet_gateway: 'igw' } as Record<string, string>)[str(raw.type) ?? ''] : undefined;
+    if (!isObj(raw) || str(raw.mode) === 'data' || !kind) continue;
     const ch = isObj(raw.change) ? raw.change : {};
     const acts = strs(ch.actions);
     if (!acts.includes('create') || acts.includes('delete') || !unknown(ch.after_unknown, 'id')) continue;
     const address = str(raw.address) ?? '';
-    const id = `sg-plan${++n}`;
+    const id = `${kind}-plan${++n}`;
     created.set(address, id);
     createdBase.set(baseAddress(address), [...(createdBase.get(baseAddress(address)) ?? []), id]);
   }
@@ -215,6 +224,16 @@ export function mapTerraformPlan(model: NetworkModel, plan: unknown): PlanMappin
     const ids = [...new Set(refsOf(config, address, attr).map(placeholderFor).filter((x): x is string => !!x))];
     return ids.length === 1 ? ids[0] : undefined;
   };
+  // Internet gateways this plan detaches anywhere, so a replacement in the same plan is allowed.
+  const detached = new Set<string>();
+  for (const raw of rcs as RawChange[]) {
+    if (!isObj(raw) || !['aws_internet_gateway', 'aws_internet_gateway_attachment'].includes(str(raw.type) ?? '')) continue;
+    const ch = isObj(raw.change) ? raw.change : {};
+    const acts = strs(ch.actions);
+    const b = isObj(ch.before) ? ch.before : undefined;
+    const id = str(raw.type) === 'aws_internet_gateway' ? str(b?.id) : str(b?.internet_gateway_id);
+    if (id && b && str(b.vpc_id) && (acts.includes('delete') || acts.includes('update'))) detached.add(id);
+  }
   const knownGroup = (id: string | undefined) => !!id && (model.securityGroups.has(id) || [...created.values()].includes(id));
 
   for (const raw of rcs as RawChange[]) {
@@ -243,8 +262,7 @@ export function mapTerraformPlan(model: NetworkModel, plan: unknown): PlanMappin
       for (const m of hits) if (!res.changes.some((c) => c.kind === 'revoke-sg-rule' && c.ruleId === m.id)) res.changes.push({ kind: 'revoke-sg-rule', ruleId: m.id });
     };
     const addRule = (t: TfRule) => {
-      if (t.ipv6) return skip(`IPv6 source ${t.ipv6} is not analysed`);
-      res.changes.push({ kind: 'add-sg-rule', groupId: t.groupId, egress: t.egress, protocol: t.protocol, ...(t.fromPort !== undefined ? { fromPort: t.fromPort, toPort: t.toPort! } : {}), ...(t.cidr ? { cidr: t.cidr } : {}), ...(t.prefixListId ? { prefixListId: t.prefixListId } : {}), ...(t.referencedGroupId ? { referencedGroupId: t.referencedGroupId } : {}) });
+      res.changes.push({ kind: 'add-sg-rule', groupId: t.groupId, egress: t.egress, protocol: t.protocol, ...(t.fromPort !== undefined ? { fromPort: t.fromPort, toPort: t.toPort! } : {}), ...(t.cidr ? { cidr: t.cidr } : t.ipv6 ? { cidr: t.ipv6 } : {}), ...(t.prefixListId ? { prefixListId: t.prefixListId } : {}), ...(t.referencedGroupId ? { referencedGroupId: t.referencedGroupId } : {}) });
     };
 
     try {
@@ -261,7 +279,7 @@ export function mapTerraformPlan(model: NetworkModel, plan: unknown): PlanMappin
           if (after && (creating || updating)) {
             const gid = groupRef(address, after.security_group_id, unknown(u, 'security_group_id'), 'security_group_id');
             const ref = after.referenced_security_group_id !== undefined || unknown(u, 'referenced_security_group_id') ? groupRef(address, after.referenced_security_group_id, unknown(u, 'referenced_security_group_id'), 'referenced_security_group_id') : undefined;
-            if (unknown(u, 'cidr_ipv4', 'prefix_list_id', 'from_port', 'to_port', 'ip_protocol')) skip('depends on values known only after apply');
+            if (unknown(u, 'cidr_ipv4', 'cidr_ipv6', 'prefix_list_id', 'from_port', 'to_port', 'ip_protocol')) skip('depends on values known only after apply');
             else if (!gid) skip(unknown(u, 'security_group_id') ? 'the security group is known only after apply and is not one this plan creates' : `security group ${str(after.security_group_id) ?? '?'} is not in the snapshot`);
             else if (!knownGroup(gid)) skip(`security group ${gid} is not in the snapshot`);
             else if (unknown(u, 'referenced_security_group_id') && !ref) skip('the source security group is known only after apply');
@@ -278,7 +296,7 @@ export function mapTerraformPlan(model: NetworkModel, plan: unknown): PlanMappin
           if (after && (creating || updating)) {
             const gid = groupRef(address, after.security_group_id, unknown(u, 'security_group_id'), 'security_group_id');
             const src = unknown(u, 'source_security_group_id') ? groupRef(address, undefined, true, 'source_security_group_id') : undefined;
-            if (unknown(u, 'cidr_blocks', 'prefix_list_ids', 'from_port', 'to_port', 'protocol')) skip('depends on values known only after apply');
+            if (unknown(u, 'cidr_blocks', 'ipv6_cidr_blocks', 'prefix_list_ids', 'from_port', 'to_port', 'protocol')) skip('depends on values known only after apply');
             else if (!gid) skip(unknown(u, 'security_group_id') ? 'the security group is known only after apply and is not one this plan creates' : `security group ${str(after.security_group_id) ?? '?'} is not in the snapshot`);
             else if (!knownGroup(gid)) skip(`security group ${gid} is not in the snapshot`);
             else if (unknown(u, 'source_security_group_id') && !src) skip('the source security group is known only after apply');
@@ -335,12 +353,13 @@ export function mapTerraformPlan(model: NetworkModel, plan: unknown): PlanMappin
           }
           if (after && (creating || updating)) {
             const e = entry(after);
-            if (unknown(u, 'network_acl_id', 'cidr_block', 'rule_number')) skip('depends on values known only after apply');
+            const cidr = str(after.cidr_block) ?? str(after.ipv6_cidr_block);
+            if (unknown(u, 'network_acl_id', 'cidr_block', 'ipv6_cidr_block', 'rule_number')) skip('depends on values known only after apply');
             else if (!e.naclId || !model.nacls.has(e.naclId)) skip(`network ACL ${e.naclId ?? '?'} is not in the snapshot`);
-            else if (!str(after.cidr_block)) skip('IPv6 network ACL rules are not analysed');
+            else if (!cidr) skip('the rule has no CIDR block');
             else {
               const protocol = tfProtocol(after.protocol);
-              res.changes.push({ kind: 'add-nacl-entry', naclId: e.naclId, egress: e.egress, ruleNumber: e.ruleNumber!, action: str(after.rule_action) === 'deny' ? 'deny' : 'allow', protocol, cidr: str(after.cidr_block)!, ...(hasPorts(protocol) ? { fromPort: num(after.from_port) ?? 0, toPort: num(after.to_port) ?? 65535 } : {}) });
+              res.changes.push({ kind: 'add-nacl-entry', naclId: e.naclId, egress: e.egress, ruleNumber: e.ruleNumber!, action: str(after.rule_action) === 'deny' ? 'deny' : 'allow', protocol, cidr, ...(hasPorts(protocol) ? { fromPort: num(after.from_port) ?? 0, toPort: num(after.to_port) ?? 65535 } : {}) });
             }
           }
           break;
@@ -370,31 +389,34 @@ export function mapTerraformPlan(model: NetworkModel, plan: unknown): PlanMappin
           for (const [k, r] of b) if (!a.has(k) || JSON.stringify(a.get(k)) !== JSON.stringify(r)) res.changes.push({ kind: 'remove-nacl-entry', naclId: id, egress: r.egress, ruleNumber: num(r.rule_no)! });
           for (const [k, r] of a) {
             if (b.has(k) && JSON.stringify(b.get(k)) === JSON.stringify(r)) continue;
-            if (!str(r.cidr_block)) {
-              skip(`IPv6 rule ${num(r.rule_no)} is not analysed`);
+            const cidr = str(r.cidr_block) ?? str(r.ipv6_cidr_block);
+            if (!cidr) {
+              skip(`rule ${num(r.rule_no)} has no CIDR block`);
               continue;
             }
             const protocol = tfProtocol(r.protocol);
-            res.changes.push({ kind: 'add-nacl-entry', naclId: id, egress: r.egress, ruleNumber: num(r.rule_no)!, action: str(r.action) === 'deny' ? 'deny' : 'allow', protocol, cidr: str(r.cidr_block)!, ...(hasPorts(protocol) ? { fromPort: num(r.from_port) ?? 0, toPort: num(r.to_port) ?? 65535 } : {}) });
+            res.changes.push({ kind: 'add-nacl-entry', naclId: id, egress: r.egress, ruleNumber: num(r.rule_no)!, action: str(r.action) === 'deny' ? 'deny' : 'allow', protocol, cidr, ...(hasPorts(protocol) ? { fromPort: num(r.from_port) ?? 0, toPort: num(r.to_port) ?? 65535 } : {}) });
           }
           break;
         }
         case 'aws_route': {
-          const dest = (o: Obj) => str(o.destination_cidr_block) ?? str(o.destination_prefix_list_id);
+          const dest = (o: Obj) => str(o.destination_cidr_block) ?? str(o.destination_ipv6_cidr_block) ?? str(o.destination_prefix_list_id);
           const target = (o: Obj) => str(o.gateway_id) ?? str(o.nat_gateway_id) ?? str(o.transit_gateway_id) ?? str(o.vpc_peering_connection_id) ?? str(o.network_interface_id) ?? str(o.vpc_endpoint_id) ?? str(o.egress_only_gateway_id);
           if (before && (removing || updating)) {
             const rt = str(before.route_table_id);
             if (rt && model.routeTables.has(rt) && dest(before)) res.changes.push({ kind: 'remove-route', routeTableId: rt, destination: dest(before)! });
-            else if (str(before.destination_ipv6_cidr_block)) skip('IPv6 routes are not analysed');
             else skip(`route table ${rt ?? '?'} is not in the snapshot`);
           }
           if (after && (creating || updating)) {
             const rt = str(after.route_table_id);
-            if (unknown(u, 'route_table_id', 'destination_cidr_block', 'gateway_id', 'nat_gateway_id', 'transit_gateway_id', 'vpc_peering_connection_id', 'network_interface_id', 'vpc_endpoint_id')) skip('depends on values known only after apply, such as a gateway created in this plan');
+            // An internet gateway created in this same plan: use its placeholder.
+            const newGw = unknown(u, 'gateway_id') ? groupRef(address, undefined, true, 'gateway_id') : undefined;
+            const to = newGw?.startsWith('igw-plan') ? { ...after, gateway_id: newGw } : after;
+            if (unknown(u, 'route_table_id', 'destination_cidr_block', 'destination_ipv6_cidr_block', 'nat_gateway_id', 'transit_gateway_id', 'vpc_peering_connection_id', 'network_interface_id', 'vpc_endpoint_id', 'egress_only_gateway_id') || (unknown(u, 'gateway_id') && !newGw?.startsWith('igw-plan'))) skip('depends on values known only after apply, such as a gateway created in this plan');
             else if (!rt || !model.routeTables.has(rt)) skip(`route table ${rt ?? '?'} is not in the snapshot`);
-            else if (!dest(after)) skip('IPv6 routes are not analysed');
-            else if (!target(after)) skip('the route target is not one Pinhole models');
-            else res.changes.push({ kind: 'add-route', routeTableId: rt, destination: dest(after)!, targetId: target(after)! });
+            else if (!dest(to)) skip('the route has no destination');
+            else if (!target(to)) skip('the route target is not one Pinhole models');
+            else res.changes.push({ kind: 'add-route', routeTableId: rt, destination: dest(to)!, targetId: target(to)! });
           }
           break;
         }
@@ -413,7 +435,7 @@ export function mapTerraformPlan(model: NetworkModel, plan: unknown): PlanMappin
           const routes = (o: Obj | undefined) => {
             const m = new Map<string, string>();
             for (const r of list(o?.route).filter(isObj)) {
-              const d = str(r.cidr_block) ?? str(r.destination_prefix_list_id);
+              const d = str(r.cidr_block) ?? str(r.ipv6_cidr_block) ?? str(r.destination_prefix_list_id);
               const t = str(r.gateway_id) ?? str(r.nat_gateway_id) ?? str(r.transit_gateway_id) ?? str(r.vpc_peering_connection_id) ?? str(r.network_interface_id) ?? str(r.vpc_endpoint_id) ?? str(r.egress_only_gateway_id);
               if (d && t) m.set(d, t);
             }
@@ -477,6 +499,99 @@ export function mapTerraformPlan(model: NetworkModel, plan: unknown): PlanMappin
           const eni = str(after.network_interface_id) ?? (str(after.instance_id) ? eniOfInstance(str(after.instance_id)!) : undefined);
           if (!eni || !model.enis.has(eni)) skip('the interface or instance is not in the snapshot');
           else res.changes.push({ kind: 'add-public-ip', eniId: eni, publicIp: str(after.public_ip) && !unknown(u, 'public_ip') ? str(after.public_ip)! : 'new Elastic IP', elastic: true });
+          break;
+        }
+        case 'aws_route_table_association': {
+          // Which route table a subnet uses decides whether it can reach the internet at all.
+          const subnetOf = (o: Obj | undefined) => str(o?.subnet_id);
+          if ((before && str(before.gateway_id)) || (after && str(after.gateway_id))) {
+            skip('gateway route tables (edge associations) are not modelled');
+            break;
+          }
+          if (after && (creating || updating)) {
+            const sub = subnetOf(after);
+            const rt = str(after.route_table_id);
+            if (unknown(u, 'subnet_id', 'route_table_id')) skip('the subnet or route table is known only after apply');
+            else if (!sub || !model.subnets.has(sub)) skip(`subnet ${sub ?? '?'} is not in the snapshot`);
+            else if (!rt || !model.routeTables.has(rt)) skip(`route table ${rt ?? '?'} is not in the snapshot`);
+            else res.changes.push({ kind: 'associate-route-table', subnetId: sub, routeTableId: rt });
+          } else if (before && removing) {
+            const sub = subnetOf(before);
+            if (sub && model.subnets.has(sub)) res.changes.push({ kind: 'associate-route-table', subnetId: sub });
+            else skip(`subnet ${sub ?? '?'} is not in the snapshot`);
+          }
+          break;
+        }
+        case 'aws_main_route_table_association': {
+          if (!after || !(creating || updating)) {
+            if (removing) skip('removing it returns the VPC to its original main route table, which the snapshot does not record');
+            break;
+          }
+          const vpc = str(after.vpc_id);
+          const rt = str(after.route_table_id);
+          if (unknown(u, 'vpc_id', 'route_table_id')) skip('the VPC or route table is known only after apply');
+          else if (!vpc || !rt || !model.routeTables.has(rt)) skip(`route table ${rt ?? '?'} is not in the snapshot`);
+          else res.changes.push({ kind: 'set-main-route-table', vpcId: vpc, routeTableId: rt });
+          break;
+        }
+        case 'aws_network_acl_association': {
+          if (after && (creating || updating)) {
+            const sub = str(after.subnet_id);
+            const acl = str(after.network_acl_id);
+            if (unknown(u, 'subnet_id', 'network_acl_id')) skip('the subnet or network ACL is known only after apply');
+            else if (!sub || !model.subnets.has(sub)) skip(`subnet ${sub ?? '?'} is not in the snapshot`);
+            else if (!acl || !model.nacls.has(acl)) skip(`network ACL ${acl ?? '?'} is not in the snapshot`);
+            else res.changes.push({ kind: 'associate-nacl', subnetId: sub, naclId: acl });
+          } else if (before && removing) {
+            const sub = str(before.subnet_id);
+            // A subnet always has a network ACL: without this association it returns to the default one.
+            if (sub && model.subnets.has(sub)) res.changes.push({ kind: 'associate-nacl', subnetId: sub });
+            else skip(`subnet ${sub ?? '?'} is not in the snapshot`);
+          }
+          break;
+        }
+        case 'aws_internet_gateway':
+        case 'aws_internet_gateway_attachment': {
+          const igwOf = (o: Obj | undefined) => (type === 'aws_internet_gateway' ? str(o?.id) : str(o?.internet_gateway_id));
+          if (before && (removing || updating) && str(before.vpc_id)) {
+            const id = igwOf(before);
+            if (id && model.internetGateways.has(id)) res.changes.push({ kind: 'detach-igw', igwId: id });
+            else skip(`internet gateway ${id ?? '?'} is not in the snapshot`);
+          }
+          if (after && (creating || updating) && (str(after.vpc_id) || unknown(u, 'vpc_id'))) {
+            const id = type === 'aws_internet_gateway' && unknown(u, 'id') ? created.get(address) : type === 'aws_internet_gateway_attachment' && unknown(u, 'internet_gateway_id') ? groupRef(address, undefined, true, 'internet_gateway_id') : igwOf(after);
+            const vpc = str(after.vpc_id);
+            let other: { id: string } | undefined;
+            if (unknown(u, 'vpc_id')) skip('the VPC is known only after apply');
+            else if (!vpc || !model.vpcs.has(vpc)) skip(`VPC ${vpc ?? '?'} is not in the snapshot`);
+            else if (!id) skip('the internet gateway is known only after apply');
+            else if ((other = [...model.internetGateways.values()].find((g) => g.vpcId === vpc && g.id !== id && !detached.has(g.id))))
+              skip(`${vpc} already has internet gateway ${other.id}; a VPC can have only one`);
+            else res.changes.push({ kind: 'attach-igw', igwId: id, vpcId: vpc });
+          }
+          break;
+        }
+        case 'aws_lb_listener':
+        case 'aws_alb_listener': {
+          if (before && (removing || updating)) {
+            const arn = str(before.arn) ?? str(before.id);
+            if (arn && model.listeners.some((l) => l.arn === arn)) res.changes.push({ kind: 'remove-listener', listenerArn: arn });
+            else skip(`listener ${arn ?? '?'} is not in the snapshot`);
+          }
+          if (after && (creating || updating)) {
+            const lb = str(after.load_balancer_arn);
+            const port = num(after.port);
+            if (unknown(u, 'load_balancer_arn', 'port')) skip('the load balancer or port is known only after apply');
+            else if (!lb) skip('the plan does not say which load balancer the listener is on');
+            else if (!model.loadBalancers.has(lb)) skip(`load balancer ${lb} is not in the snapshot`);
+            else if (port === undefined) skip('the listener has no port');
+            else {
+              // Target groups: the known ones are checked; one created in this plan has no targets yet.
+              const tgs = list(after.default_action).filter(isObj).map((a) => str(a.target_group_arn)).filter((x): x is string => !!x && model.targetGroups.has(x));
+              const arn = str(after.arn) && !unknown(u, 'arn') ? str(after.arn)! : `${lb.replace(':loadbalancer/', ':listener/')}/plan-${port}`;
+              res.changes.push({ kind: 'add-listener', loadBalancerArn: lb, listenerArn: arn, port, protocol: str(after.protocol) ?? (model.loadBalancers.get(lb)!.type === 'network' ? 'TCP' : 'HTTP'), targetGroupArns: tgs });
+            }
+          }
           break;
         }
         default:

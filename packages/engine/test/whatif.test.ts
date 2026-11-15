@@ -106,3 +106,28 @@ describe('fix plan', () => {
     expect(p.steps.every((s) => s.collateral.length === 0)).toBe(true);
   });
 });
+
+describe('IPv6 changes', () => {
+  const m10 = () => normalize(JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../fixtures/10-ipv6-exposure/snapshot.json'), 'utf8')));
+
+  it('applies IPv6 rules, ACL entries and routes to the IPv6 side of the model', () => {
+    const after = applyChanges(m10(), [
+      { kind: 'add-sg-rule', groupId: 'sg-dual', egress: false, protocol: 'tcp', fromPort: 25, toPort: 25, cidr: '2001:DB8::1/32' },
+      { kind: 'add-nacl-entry', naclId: 'acl-dual', egress: false, ruleNumber: 140, action: 'deny', protocol: 'tcp', cidr: '::/0', fromPort: 25, toPort: 25 },
+      { kind: 'add-route', routeTableId: 'rtb-dual', destination: '2001:db8:1::/48', targetId: 'eigw-1' },
+    ]);
+    expect(after.securityGroups.get('sg-dual')!.ingress.at(-1)).toMatchObject({ ipv6CidrText: '2001:db8::/32' });
+    expect(after.securityGroups.get('sg-dual')!.ingress.at(-1)!.cidr).toBeUndefined();
+    expect(after.nacls.get('acl-dual')!.entries.find((e) => e.ruleNumber === 140)).toMatchObject({ ipv6CidrText: '::/0', action: 'deny' });
+    expect(after.routeTables.get('rtb-dual')!.routes6!.at(-1)).toMatchObject({ destination: '2001:db8:1::/48', target: { type: 'eigw', id: 'eigw-1' } });
+    expect(() => applyChanges(m10(), [{ kind: 'remove-route', routeTableId: 'rtb-dual', destination: '2001:db8:9::/48' }])).toThrow(ChangeError);
+  });
+
+  it('prints the IPv6 form of each AWS CLI command', () => {
+    const m = m10();
+    expect(cliFor(m, { kind: 'add-sg-rule', groupId: 'sg-dual', egress: false, protocol: 'tcp', fromPort: 22, toPort: 22, cidr: '::/0' })[0]).toContain('"Ipv6Ranges":[{"CidrIpv6":"::/0"}]');
+    expect(cliFor(m, { kind: 'edit-sg-rule', ruleId: 'sgr-https-v6', cidr: '2001:db8::/32' })[0]).toContain('"CidrIpv6":"2001:db8::/32"');
+    expect(cliFor(m, { kind: 'add-nacl-entry', naclId: 'acl-dual', egress: false, ruleNumber: 99, action: 'deny', protocol: 'tcp', cidr: '::/0', fromPort: 22, toPort: 22 })[0]).toContain('--ipv6-cidr-block ::/0');
+    expect(cliFor(m, { kind: 'remove-route', routeTableId: 'rtb-dual', destination: '::/0' })[0]).toContain('--destination-ipv6-cidr-block ::/0');
+  });
+});

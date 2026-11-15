@@ -7,6 +7,12 @@ All notable changes to this project are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Terraform plans: IPv6 security group rules, network ACL entries and routes
+  are checked like IPv4 ones. New resource types: route table and main route
+  table associations, network ACL associations, internet gateways and their
+  attachments, and load balancer listeners. An internet gateway the plan
+  creates gets a placeholder ID, so a route to it in the same plan is checked;
+  a second gateway on a VPC is refused, as AWS refuses it.
 - Attack chains across accounts and Regions. Snapshots linked by a VPC
   peering connection or a transit gateway are joined, and chains are followed
   from one into the other with the same exact analysis on both sides,
