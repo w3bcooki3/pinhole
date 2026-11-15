@@ -3,8 +3,8 @@
  * labels, remediation text, rule impact and resource grouping. No DOM here
  * except the small file helpers.
  */
-import { analyzeBlastRadius, analyzeExposure, analyzeHygiene, findChokepoints, findFixes, normalize, planFixes, assertSnapshot, SEVERITY_ORDER } from '@pinhole/engine';
-import type { AttackChain, BlastReport, Chokepoint, ExposureFinding, ExposureReport, FixCandidate, FixPlan, HygieneFinding, Hop, NetworkModel, Severity, Snapshot, Warning } from '@pinhole/engine';
+import { analyzeBlastRadius, analyzeExposure, analyzeHygiene, crossChains, findChokepoints, findFixes, joinSnapshots, normalize, planFixes, assertSnapshot, SEVERITY_ORDER } from '@pinhole/engine';
+import type { AttackChain, BlastReport, JoinLink, Chokepoint, ExposureFinding, ExposureReport, FixCandidate, FixPlan, HygieneFinding, Hop, NetworkModel, Severity, Snapshot, Warning } from '@pinhole/engine';
 
 declare const __DEMO__: { name: string; snapshot: unknown }[];
 declare const __SCRIPT__: string;
@@ -27,6 +27,8 @@ export interface Snap {
   findings: ExposureFinding[];
   warnings: Warning[];
   stats: { interfacesWithPublicIp: number; interfacesAnalysed: number; loadBalancersAnalysed: number; cellsEvaluated: number };
+  /** Set on a joined view of several linked snapshots: only its cross-snapshot attack chains are shown. */
+  joined?: { members: Snap[]; links: JoinLink[]; owner: Map<string, string> };
 }
 export interface Row {
   id: string;
@@ -108,13 +110,59 @@ export function fixesOf(row: Row): FixCandidate[] {
   return f;
 }
 
+// ---------------------------------------------------------------- joined snapshots
+// Snapshots linked by a peering connection or transit gateway are merged so
+// attack chains can be followed from one account or Region into another. Each
+// merged group is a Snap of its own that carries only the chains that cross.
+
+export const scopeLabel = (x: Pick<Snap, 'account' | 'region' | 'joined'>) => (x.joined ? `Across accounts: ${x.joined.members.map((m) => `${m.account} / ${m.region}`).join(' + ')}` : `${x.account} / ${x.region}`);
+let joinMemo: { sig: string; out: Snap[]; skipped: { keys: string[]; reason: string }[] } = { sig: '', out: [], skipped: [] };
+export function joinedOf(snaps: Snap[]): Snap[] {
+  const sig = snaps.map((x) => x.key).join('|');
+  if (joinMemo.sig === sig) return joinMemo.out;
+  const res = joinSnapshots(snaps.map((x) => ({ key: x.key, model: x.model })));
+  const byKey = new Map(snaps.map((x) => [x.key, x]));
+  const out: Snap[] = [];
+  for (const estate of res.estates) {
+    const r = crossChains(estate);
+    if (!r.chains.length) continue;
+    const members = estate.keys.map((k) => byKey.get(k)!);
+    const owner = new Map([...estate.owner].map(([id, k]) => [id, scopeLabel(byKey.get(k)!)]));
+    const times = members.map((m) => m.collectedAt).filter((t): t is string => !!t).sort();
+    const v: Snap = {
+      key: `joined/${estate.keys.join('+')}`,
+      name: 'Across accounts',
+      account: [...new Set(members.map((m) => m.account))].join(' + '),
+      region: [...new Set(members.map((m) => m.region))].join(' + '),
+      ...(times[0] ? { collectedAt: times[0] } : {}),
+      model: estate.model,
+      // The merged exposure, so the simulator and chokepoints compare like with like.
+      findings: r.exposure.findings,
+      warnings: r.exposure.warnings,
+      stats: r.exposure.stats,
+      joined: { members, links: estate.links, owner },
+    };
+    blastCache.set(v, { ...r.blast, chains: r.chains });
+    const ids = new Set(r.chains.map((c) => c.id));
+    planCache.set(v, planFixes(estate.model, r.exposure, r.blast, { goals: { chain: (c) => ids.has(c.id) } }));
+    out.push(v);
+  }
+  joinMemo = { sig, out, skipped: res.skipped.map((x) => ({ keys: x.keys.map((k) => (byKey.get(k) ? scopeLabel(byKey.get(k)!) : k)), reason: x.reason })) };
+  return out;
+}
+export const joinSkipped = (snaps: Snap[]) => (joinedOf(snaps), joinMemo.skipped);
+/** The loaded snapshots plus a joined view for each group of linked ones. */
+export const withJoined = (snaps: Snap[]): Snap[] => [...snaps, ...joinedOf(snaps)];
+/** Which account and Region an interface belongs to, in a joined view. */
+export const scopeOf = (snap: Snap, eniId: string) => snap.joined?.owner.get(eniId);
+
 export interface ChainRow {
   id: string;
   c: AttackChain;
   snap: Snap;
 }
 export const chainsOf = (snaps: Snap[]): ChainRow[] =>
-  snaps
+  withJoined(snaps)
     .flatMap((snap) => blastOf(snap).chains.map((c) => ({ id: `${snap.key}#${c.id}`, c, snap })))
     .sort((a, b) => b.c.score - a.c.score || a.c.steps.length - b.c.steps.length);
 

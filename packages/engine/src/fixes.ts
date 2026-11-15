@@ -328,71 +328,138 @@ export interface FixPlan {
   after: { exposures: number; chains: number };
   /** Goals no single verified change could close. */
   unresolved: string[];
+  /** How the plan was found: candidate changes tried, full re-analyses run, redundant steps dropped. */
+  stats: { candidates: number; evaluations: number; pruned: number };
+}
+
+export interface PlanOptions {
+  /** Most steps to plan (default 10). */
+  maxSteps?: number;
+  /** Which exposures and chains the plan must close (default: critical and high). */
+  goals?: { finding?: (f: ExposureFinding) => boolean; chain?: (c: AttackChain) => boolean };
 }
 
 const W = { critical: 10, high: 6, medium: 0, low: 0, info: 0 } as const;
+const isSevere = (s: { severity: keyof typeof W }) => s.severity === 'critical' || s.severity === 'high';
+
+type Cand = { title: string; rationale: string; changes: Change[] };
+type Eval = { m: NetworkModel; e: ExposureReport; b: BlastReport; diff: ReturnType<typeof diffExposure> };
 
 /**
  * A short list of changes that, applied in order, closes every critical and
- * high exposure and attack chain it can. Greedy: at each step the candidates
- * are the verified fixes for the worst open exposure and the rule removals
- * on the worst open chain; each is applied to the current model and both
- * analyses re-run, and the one with the most weight closed for the least
- * collateral wins. Nothing is guessed: every number is from re-analysis.
+ * high exposure and attack chain it can. Nothing is guessed: every number
+ * comes from applying the change to a copy of the model and re-running both
+ * analyses.
+ *
+ * 1. Candidates: the verified fixes for the worst few open exposures, and the
+ *    removal of each rule on the worst few open attack chains (every route).
+ * 2. Lazy greedy selection (Minoux): each candidate keeps its last measured
+ *    gain as an upper bound, because closing goals only ever lowers what is
+ *    left for the others. Candidates are re-measured in bound order and the
+ *    search stops as soon as no bound can beat the best fresh gain, so most
+ *    candidates are not re-analysed at every step. Candidates for the goals
+ *    being worked on are always re-measured, since two rules that only matter
+ *    together break the bound.
+ * 3. Pruning: once the plan is built, each step is taken out in turn and the
+ *    rest re-applied; a step whose removal leaves every goal as closed as
+ *    before is redundant (a later, broader step covered it) and is dropped.
  */
-export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: BlastReport, maxSteps = 10): FixPlan {
-  const isGoalF = (f: ExposureFinding) => f.severity === 'critical' || f.severity === 'high';
-  const isGoalC = (c: AttackChain) => c.severity === 'critical' || c.severity === 'high';
+export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: BlastReport, maxStepsOrOpts: number | PlanOptions = 10): FixPlan {
+  const opts: PlanOptions = typeof maxStepsOrOpts === 'number' ? { maxSteps: maxStepsOrOpts } : maxStepsOrOpts;
+  const maxSteps = opts.maxSteps ?? 10;
+  const isGoalF = (f: ExposureFinding) => isSevere(f) && (opts.goals?.finding ? opts.goals.finding(f) : !opts.goals);
+  const isGoalC = (c: AttackChain) => isSevere(c) && (opts.goals?.chain ? opts.goals.chain(c) : !opts.goals);
   const weight = (e: ExposureReport, b: BlastReport) => e.findings.filter(isGoalF).reduce((n, f) => n + W[f.severity], 0) + b.chains.filter(isGoalC).reduce((n, c) => n + W[c.severity], 0);
+  const stats = { candidates: 0, evaluations: 0, pruned: 0 };
+
+  const evaluate = (m0: NetworkModel, e0: ExposureReport, b0: BlastReport, changes: Change[]): Eval | undefined => {
+    let m1: NetworkModel;
+    try {
+      m1 = applyChanges(m0, changes);
+    } catch {
+      return undefined;
+    }
+    stats.evaluations += 1;
+    const e1 = analyzeExposure(m1);
+    const b1 = analyzeBlastRadius(m1, e1);
+    return { m: m1, e: e1, b: b1, diff: diffExposure(e0, e1, { before: b0, after: b1 }) };
+  };
+  const collateralOf = (d: ReturnType<typeof diffExposure>) => d.deltas.filter((x) => (x.status === 'closed' || x.status === 'narrowed') && compareSeverity(x.severity, 'high') > 0);
+
   let m = model;
   let e = exposure;
   let b = blast;
-  const steps: PlanStep[] = [];
+  const chosen: Cand[] = [];
   const skipped = new Set<string>();
   const unresolved: string[] = [];
+  const pool = new Map<string, Cand & { bound: number }>();
+  const keyOf = (c: Cand) => c.changes.map((x) => JSON.stringify(x)).join('|');
+  const byGoal = new Map<string, Set<string>>();
+
   for (let i = 0; i < maxSteps; i++) {
     const goalF = e.findings.filter((f) => isGoalF(f) && !skipped.has(findingKey(f)));
     const goalC = b.chains.filter((c) => isGoalC(c) && !skipped.has(c.id));
     if (!goalF.length && !goalC.length) break;
-    const cands: { title: string; rationale: string; changes: Change[] }[] = [];
-    const f0 = goalF[0];
-    if (f0) for (const x of findFixes(m, f0).filter((x) => x.verified && !x.opened.length).slice(0, 4)) cands.push(x);
-    const c0 = goalC[0];
-    if (c0) {
-      const edgeOf = new Map(b.edges.map((x) => [`${x.from}>${x.to}`, x]));
+
+    // Candidates are generated once per goal (the worst few open ones) and kept in the pool.
+    // Those for the single worst goal are always re-measured; the rest use their bound.
+    const forced = new Set<string>();
+    const add = (c: Cand, goal: string) => {
+      const k = keyOf(c);
+      if (!pool.has(k)) {
+        stats.candidates += 1;
+        pool.set(k, { ...c, bound: Infinity });
+      }
+      (byGoal.get(goal) ?? byGoal.set(goal, new Set()).get(goal)!).add(k);
+    };
+    for (const f of goalF.slice(0, 3)) {
+      const g = `f:${findingKey(f)}`;
+      if (byGoal.has(g)) continue;
+      byGoal.set(g, new Set());
+      for (const x of findFixes(m, f).filter((x) => x.verified && !x.opened.length).slice(0, 3)) add(x, g);
+    }
+    const edgeOf = new Map(b.edges.map((x) => [`${x.from}>${x.to}`, x]));
+    for (const c0 of goalC.slice(0, 2)) {
+      const g = `c:${c0.id}`;
+      if (byGoal.has(g)) continue;
+      byGoal.set(g, new Set());
+      // Cutting the chain where it starts: the internet exposure of its entry points.
+      // One change there can break every chain from that entry at once.
+      const entryKeys = new Set(c0.entries.flatMap((x) => x.findingKeys));
+      for (const f of e.findings.filter((x) => entryKeys.has(findingKey(x))).slice(0, 2)) {
+        for (const x of findFixes(m, f).filter((x) => x.verified && !x.opened.length).slice(0, 2)) add(x, g);
+      }
       for (const route of [c0.steps, ...c0.altRoutes]) {
         for (let k = 1; k < route.length; k++) {
           const svc = edgeOf.get(`${route[k - 1]!.eniId}>${route[k]!.eniId}`)?.services.find((s) => serviceLabel(s) === route[k]!.service);
           for (const id of svc?.trace.find((h) => h.stage === 'dest-sg-ingress')?.ruleIds ?? []) {
             const r = findRule(m, id);
-            if (r && !cands.some((x) => x.changes.length === 1 && 'ruleId' in x.changes[0]! && x.changes[0]!.ruleId === id)) {
-              cands.push({ title: `Remove ${id}`, rationale: `${id} (${ruleText(r)}) is a step on ${c0.steps.map((s) => s.name.replace(/ \(.*\)$/, '')).join(' → ')}.`, changes: [{ kind: 'revoke-sg-rule', ruleId: id }] });
-            }
+            if (r) add({ title: `Remove ${id}`, rationale: `${id} (${ruleText(r)}) is a step on ${c0.steps.map((s) => s.name.replace(/ \(.*\)$/, '')).join(' → ')}.`, changes: [{ kind: 'revoke-sg-rule', ruleId: id }] }, g);
           }
         }
       }
     }
+    for (const g of [goalF[0] ? `f:${findingKey(goalF[0])}` : '', goalC[0] ? `c:${goalC[0].id}` : '']) for (const k of byGoal.get(g) ?? []) forced.add(k);
+
     const w0 = weight(e, b);
-    let best: { c: (typeof cands)[number]; m: NetworkModel; e: ExposureReport; b: BlastReport; gain: number; diff: ReturnType<typeof diffExposure> } | undefined;
-    for (const c of cands) {
-      let m1: NetworkModel;
-      try {
-        m1 = applyChanges(m, c.changes);
-      } catch {
+    let best: { key: string; c: Cand; ev: Eval; gain: number } | undefined;
+    for (const [key, c] of [...pool].sort((x, y) => y[1].bound - x[1].bound)) {
+      if (best && c.bound <= best.gain && !forced.has(key)) continue;
+      const ev = evaluate(m, e, b, c.changes);
+      if (!ev || ev.diff.opened || ev.diff.chainsOpened.length) {
+        pool.delete(key);
         continue;
       }
-      const e1 = analyzeExposure(m1);
-      const b1 = analyzeBlastRadius(m1, e1);
-      const diff = diffExposure(e, e1, { before: b, after: b1 });
-      if (diff.opened || diff.chainsOpened.length) continue;
-      const collateral = diff.deltas.filter((d) => (d.status === 'closed' || d.status === 'narrowed') && compareSeverity(d.severity, 'high') > 0);
       // Breaking traffic someone probably wants costs more than leaving one risk open:
       // a step with collateral only wins if nothing cleaner closes as much.
-      const gain = w0 - weight(e1, b1) - 15 * collateral.length - c.changes.length;
-      if (gain > 0 && (!best || gain > best.gain)) best = { c, m: m1, e: e1, b: b1, gain, diff };
+      const gain = w0 - weight(ev.e, ev.b) - 15 * collateralOf(ev.diff).length - c.changes.length;
+      c.bound = gain;
+      if (gain > 0 && (!best || gain > best.gain)) best = { key, c, ev, gain };
     }
     if (!best) {
       // Nothing closes the worst goal on its own: leave it to a person.
+      const f0 = goalF[0];
+      const c0 = goalC[0];
       if (f0) {
         skipped.add(findingKey(f0));
         unresolved.push(`${f0.resourceName}: ${serviceLabel(f0)} from ${f0.sources.join(', ')}`);
@@ -402,24 +469,66 @@ export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: 
       }
       continue;
     }
-    const lost = best.diff.deltas.filter((d) => d.status === 'closed' || d.status === 'narrowed');
+    chosen.push(best.c);
+    pool.delete(best.key);
+    m = best.ev.m;
+    e = best.ev.e;
+    b = best.ev.b;
+  }
+
+  // Pruning: drop any step the rest of the plan already covers.
+  const finalWeight = weight(e, b);
+  const replay = (list: Cand[]) => {
+    let mm = model;
+    for (const c of list) mm = applyChanges(mm, c.changes);
+    const ee = analyzeExposure(mm);
+    stats.evaluations += 1;
+    return { e: ee, b: analyzeBlastRadius(mm, ee) };
+  };
+  let plan = chosen;
+  if (plan.length > 1) {
+    for (let i = plan.length - 1; i >= 0; i--) {
+      const trial = plan.filter((_, j) => j !== i);
+      let r: { e: ExposureReport; b: BlastReport };
+      try {
+        r = replay(trial);
+      } catch {
+        continue;
+      }
+      if (weight(r.e, r.b) <= finalWeight) {
+        plan = trial;
+        stats.pruned += 1;
+      }
+    }
+  }
+
+  // Describe the final steps against the model as it is when each one runs.
+  const steps: PlanStep[] = [];
+  let mm = model;
+  let ee = exposure;
+  let bb = blast;
+  for (const c of plan) {
+    const ev = evaluate(mm, ee, bb, c.changes);
+    if (!ev) break;
+    const lost = ev.diff.deltas.filter((d) => d.status === 'closed' || d.status === 'narrowed');
     steps.push({
-      title: best.c.title,
-      rationale: best.c.rationale,
-      changes: best.c.changes,
-      cli: best.c.changes.flatMap((x) => cliFor(m, x)),
+      title: c.title,
+      rationale: c.rationale,
+      changes: c.changes,
+      cli: c.changes.flatMap((x) => cliFor(mm, x)),
       closes: lost.filter((d) => compareSeverity(d.severity, 'high') <= 0),
-      chainsCut: best.diff.chainsClosed.filter(isGoalC),
+      chainsCut: ev.diff.chainsClosed.filter(isGoalC),
       collateral: lost.filter((d) => compareSeverity(d.severity, 'high') > 0),
     });
-    m = best.m;
-    e = best.e;
-    b = best.b;
+    mm = ev.m;
+    ee = ev.e;
+    bb = ev.b;
   }
   return {
     steps,
     before: { exposures: exposure.findings.filter(isGoalF).length, chains: blast.chains.filter(isGoalC).length },
-    after: { exposures: e.findings.filter(isGoalF).length, chains: b.chains.filter(isGoalC).length },
+    after: { exposures: ee.findings.filter(isGoalF).length, chains: bb.chains.filter(isGoalC).length },
     unresolved,
+    stats,
   };
 }

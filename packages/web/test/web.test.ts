@@ -24,10 +24,23 @@ const fixture = (name: string) => readFileSync(join(root, 'fixtures', name, 'sna
 const text = (doc: Document, sel: string) => doc.querySelector(sel)?.textContent ?? '';
 
 describe('web console', () => {
+  it('follows attack chains across linked accounts in the demo', () => {
+    const { doc, api } = page();
+    api.go('blast', { blastKey: 'joined/111122223333/eu-central-1/2026-11-12T09:41:00Z+444455556666/eu-central-1/2026-11-12T09:42:00Z', chain: '' });
+    const head = text(doc, '.ph');
+    expect(head).toContain('Across accounts: 111122223333 / eu-central-1 + 444455556666 / eu-central-1');
+    expect(head).toContain('peering connection pcx-0c11');
+    const rows = [...doc.querySelectorAll('#chains tbody tr')].map((r) => r.textContent ?? '');
+    expect(rows).toHaveLength(2);
+    expect(rows.join('\n')).toMatch(/111122223333 \/ eu-central-1 → 444455556666 \/ eu-central-1/);
+    // The dashboard plan includes the one change that cuts both, in the account that owns the rule.
+    api.go('dashboard');
+    expect(text(doc, '#plan')).toMatch(/sgr-0a-ssh-world/);
+  });
   it('compares two snapshots of one account and region, and uses only the latest elsewhere', () => {
     const { doc, api } = page();
     // The demo has an older copy of prod us-east-1: it is kept for Compare and left out of the dashboard.
-    expect(text(doc, '#total')).toBe('19');
+    expect(text(doc, '#total')).toBe('20');
     expect(text(doc, '.chip-older')).toBe('+1 older');
     api.go('compare');
     expect(text(doc, '#cmp-verdict')).toMatch(/^2 new or wider internet exposures, no new attack chains, 1 closed or narrower, 3 configuration changes\./);

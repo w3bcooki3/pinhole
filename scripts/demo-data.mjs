@@ -62,6 +62,9 @@ function richProdEarlier() {
   s.ec2.SecurityGroupRules.push({ SecurityGroupRuleId: 'sgr-0prometheus01', GroupId: 'sg-grafana-ops', IsEgress: false, IpProtocol: 'tcp', FromPort: 9090, ToPort: 9090, CidrIpv4: '0.0.0.0/0', Description: 'Prometheus' });
   return s;
 }
+// Two accounts linked by VPC peering (fixture 11), moved to eu-central-1 so
+// they do not collide with the other demo scopes.
+const linked = (file) => JSON.parse(readFileSync(join(root, 'fixtures', '11-cross-account-peering', file), 'utf8').replaceAll('us-east-1', 'eu-central-1'));
 const withScope = (s, account, region) => ({ ...s, accountId: account, region, collectedAt: '2026-11-12T09:44:00Z' });
 export const DEMO = [
   { name: 'prod us-east-1', snapshot: richProd() },
@@ -70,6 +73,8 @@ export const DEMO = [
   { name: 'platform ap-southeast-2', snapshot: withScope(fx('01-nacl-ephemeral-return'), '444455556666', 'ap-southeast-2') },
   { name: 'orders us-west-2', snapshot: withScope(fx('09-lateral-movement'), '111122223333', 'us-west-2') },
   { name: 'edge us-east-2', snapshot: withScope(fx('10-ipv6-exposure'), '444455556666', 'us-east-2') },
+  { name: 'shared-services eu-central-1', snapshot: linked('account-a/snapshot.json') },
+  { name: 'payments eu-central-1', snapshot: linked('account-b/snapshot.json') },
   { name: 'prod us-east-1, a week earlier', snapshot: richProdEarlier() },
 ];
 

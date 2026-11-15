@@ -6,6 +6,29 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Attack chains across accounts and Regions. Snapshots linked by a VPC
+  peering connection or a transit gateway are joined, and chains are followed
+  from one into the other with the same exact analysis on both sides,
+  including security group references across the link where AWS allows them.
+  `pinhole blast` takes several snapshots; the console adds an "Across
+  accounts" view to Blast radius, and the dashboard plan and report include
+  it. Snapshots that are linked but share other resource IDs are not merged,
+  and the reason is shown.
+- Fixture 11: two accounts peered, with a chain into each of a database and an
+  SSH host, and a cache that has no route back.
+
+### Changed
+- The fix plan considers fixes for several open risks at once, including the
+  entry point of an attack chain, so one change can cut every chain from that
+  server. It re-measures candidates lazily (accelerated greedy) and drops
+  steps a later step made redundant. Plans report how they were found.
+- The demo includes two linked accounts.
+
+### Fixed
+- The attack chain detail page lost its two-column layout after the dashboard
+  layout change.
+
 ## [0.2.0] - 2026-11-13
 
 ### Added

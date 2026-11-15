@@ -125,9 +125,23 @@ The fix finder builds candidates for each finding: cut the finding's ports out o
 
 Fixes that keep access from inside the network (restricting a rule to the VPC CIDR) get a small preference. For those, the attack chains are analysed again: if another internet-facing server could still reach the resource after the change, the chains are reported with the fix and the fix is ranked below one that removes the access.
 
-The fix plan is greedy. Starting from the worst critical or high exposure or chain, it tries the verified fixes for it and the rules on the chain, applies the one that removes the most weighted risk (critical 10, high 6) with a penalty of 15 for each other path it closes, skips any change that opens an exposure or a chain, and repeats on the new model. Anything no single change closes is listed as unresolved.
+The fix plan is built in three passes, and every number in it comes from applying changes to a copy of the model and re-running both analyses.
+
+1. **Candidates.** The verified fixes for the three worst open critical or high exposures, and for the two worst open attack chains: the removal of each rule on every route of the chain, plus the fixes for the internet exposure of the chain's entry points. A change at the entry point often cuts every chain from that server at once. Candidates are generated once per goal and kept.
+2. **Lazy greedy selection** (Minoux's accelerated greedy). The gain of a change is the weighted risk it removes (critical 10, high 6), minus 15 for each other, probably wanted, path it closes, minus one per change. A change that opens an exposure or a chain is never picked. Closing a goal only lowers what is left for the other changes, so each candidate's last measured gain is an upper bound: candidates are re-measured in bound order and the step stops as soon as no bound can beat the best fresh gain. The candidates for the single worst goal are always re-measured, because two rules that only matter together break the bound.
+3. **Pruning.** Each step is taken out in turn and the rest re-applied. A step whose removal leaves every goal as closed as before is redundant (a later step covered it) and is dropped. The test suite checks the result: removing any step of a plan leaves something open.
+
+Anything no single change closes is listed as unresolved. The plan reports how many candidates it tried, how many full re-analyses it ran and how many steps it dropped.
 
 AWS CLI commands are printed for each change. Pinhole never runs them.
+
+### Across accounts and Regions
+
+A snapshot covers one account in one Region. Snapshots that share a VPC peering connection or a transit gateway are grouped (union-find over the shared IDs) and each group is merged into one model, so the same path analysis runs across the link: routes on both sides, NACLs on both sides, and security group references across the link where AWS allows them (same-Region peering; a transit gateway with security group referencing turned on, inbound only). A merged model is only built when the snapshots share nothing but the link: real accounts never share other IDs, so a clash means copies of one account or made-up data, and the group is analysed separately with the reason given.
+
+Only attack chains that cross from one snapshot into another are reported for a joined group; chains inside one snapshot are already in that snapshot's own report. The fix plan for a joined group has the crossing chains as its only goals and names the account and Region each change runs in.
+
+Sources: [VPC peering basics](https://docs.aws.amazon.com/vpc/latest/peering/vpc-peering-basics.html), [security groups across peering](https://docs.aws.amazon.com/vpc/latest/peering/vpc-peering-security-groups.html), [transit gateway security group referencing](https://docs.aws.amazon.com/vpc/latest/tgw/tgw-vpc-attachments.html).
 
 ### Rule hygiene
 

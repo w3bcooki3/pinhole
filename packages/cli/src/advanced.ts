@@ -8,17 +8,20 @@ import {
   analyzeExposure,
   analyzeHygiene,
   applyChanges,
+  changeScope,
   compareSeverity,
+  crossChains,
   diffExposure,
   evaluatePath,
   findFixes,
+  joinSnapshots,
   planFixes,
   parseIpv4,
   reachServices,
   serviceLabel,
   SEVERITY_ORDER,
 } from '@pinhole/engine';
-import type { BlastReport, Change, ExposureDiff, FixCandidate, FixPlan, HygieneFinding, NetworkModel, PathResult, ServiceReach, Severity } from '@pinhole/engine';
+import type { BlastReport, Change, CrossChain, ExposureDiff, JoinLink, JoinResult, FixCandidate, FixPlan, HygieneFinding, NetworkModel, PathResult, ServiceReach, Severity } from '@pinhole/engine';
 
 export class LookupError extends Error {}
 
@@ -113,6 +116,55 @@ export function blastText(model: NetworkModel, b: BlastReport, minSeverity: Seve
     for (const w of c.why) lines.push(`    ${w}`);
   }
   if (!chains.length) lines.push(`No attack chains at or above ${minSeverity}.`);
+  return `${lines.join('\n')}\n`;
+}
+
+// ------------------------------------------------------------------ across snapshots
+
+export interface AcrossResult {
+  keys: string[];
+  links: JoinLink[];
+  chains: CrossChain[];
+  plan: FixPlan;
+  /** For each plan step, the snapshot (account and Region) whose resources it changes. */
+  stepScopes: (string | undefined)[];
+}
+
+/** Joins linked snapshots and finds the attack chains that cross between them, with a plan to cut them. */
+export function across(inputs: { key: string; model: NetworkModel }[], depth: number): { across: AcrossResult[]; skipped: JoinResult['skipped'] } {
+  const joined = joinSnapshots(inputs);
+  return {
+    across: joined.estates.map((estate) => {
+      const r = crossChains(estate, { maxDepth: depth });
+      const ids = new Set(r.chains.map((c) => c.id));
+      const plan = planFixes(estate.model, r.exposure, r.blast, { goals: { chain: (c) => ids.has(c.id) } });
+      return { keys: estate.keys, links: estate.links, chains: r.chains, plan, stepScopes: plan.steps.map((s) => (s.changes[0] ? changeScope(estate, s.changes[0] as never) : undefined)) };
+    }),
+    skipped: joined.skipped,
+  };
+}
+
+export function acrossText(res: { across: AcrossResult[]; skipped: JoinResult['skipped'] }, minSeverity: Severity): string {
+  const limit = SEVERITY_ORDER.indexOf(minSeverity);
+  const lines: string[] = ['Across snapshots'];
+  if (!res.across.length && !res.skipped.length) lines.push('  None of these snapshots are linked by a VPC peering connection or a transit gateway.');
+  for (const a of res.across) {
+    lines.push('', `${a.keys.join(' + ')}, linked by ${a.links.map((l) => `${l.kind === 'peering' ? 'peering connection' : 'transit gateway'} ${l.id}`).join(', ')}:`);
+    const chains = a.chains.filter((c) => SEVERITY_ORDER.indexOf(c.severity) <= limit);
+    for (const c of chains) {
+      lines.push(`${sevTag(c.severity)} ${c.steps.map((s, i) => (i ? `--${s.service}${s.serviceName ? ` ${s.serviceName}` : ''}--> ${s.name} [${c.scopes[i]}]` : `internet --> ${s.name} [${c.scopes[i]}]`)).join(' ')}`);
+      for (const w of c.why) lines.push(`    ${w}`);
+    }
+    if (!chains.length) lines.push(`  No attack chain crosses between them at or above ${minSeverity}.`);
+    if (a.plan.steps.length) {
+      lines.push('', `  To cut ${a.plan.before.chains - a.plan.after.chains} of ${a.plan.before.chains} with ${a.plan.steps.length} change(s), verified by re-analysis:`);
+      a.plan.steps.forEach((s, i) => {
+        lines.push(`  ${i + 1}. ${s.title}${a.stepScopes[i] ? ` (in ${a.stepScopes[i]})` : ''}`);
+        for (const c of s.cli) lines.push(`     $ ${c}`);
+      });
+    }
+  }
+  for (const s of res.skipped) lines.push('', `Not joined: ${s.keys.join(' + ')}. ${s.reason}`);
   return `${lines.join('\n')}\n`;
 }
 

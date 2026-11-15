@@ -26,7 +26,7 @@ export function reportDoc(snaps: Snap[], rows: Row[], now = new Date()): HTMLEle
   const urgent = rows.filter((r) => r.f.severity === 'critical' || r.f.severity === 'high');
   const rest = rows.filter((r) => !(r.f.severity === 'critical' || r.f.severity === 'high'));
   const chains = D.chainsOf(snaps);
-  const plans = snaps.map((snap) => ({ snap, plan: D.planOf(snap) }));
+  const plans = D.withJoined(snaps).map((snap) => ({ snap, plan: D.planOf(snap) }));
   const steps = plans.flatMap(({ snap, plan }) => plan.steps.map((step) => ({ snap, step })));
   const closedE = plans.reduce((n, x) => n + x.plan.before.exposures - x.plan.after.exposures, 0);
   const allE = plans.reduce((n, x) => n + x.plan.before.exposures, 0);

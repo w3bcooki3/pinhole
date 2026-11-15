@@ -12,6 +12,9 @@ export type { ExposureFinding, ExposureReport, ExposureOptions, LbTargetResult }
 export { applyChanges, cliFor, describeChange, diffExposure, ruleText, ChangeError, assertChanges } from './whatif.js';
 export type { Change, DiffStatus, ExposureDelta, ExposureDiff } from './whatif.js';
 export { findChokepoints, findFixes, planFixes } from './fixes.js';
+export type { PlanOptions } from './fixes.js';
+export { changeScope, crossChains, joinSnapshots } from './join.js';
+export type { CrossChain, CrossReport, JoinedEstate, JoinInput, JoinLink, JoinResult } from './join.js';
 export type { Chokepoint, FixCandidate, FixPlan, PlanStep } from './fixes.js';
 export { analyzeHygiene } from './hygiene.js';
 export type { HygieneCode, HygieneFinding } from './hygiene.js';

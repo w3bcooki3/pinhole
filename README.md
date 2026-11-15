@@ -170,6 +170,10 @@ pinhole can snapshot.json --from internet --to web
 pinhole blast snapshot.json --min-severity high
 pinhole blast snapshot.json --fail-on critical
 
+# Across accounts and Regions: snapshots linked by VPC peering or a transit
+# gateway are joined, and chains are followed from one into the other
+pinhole blast shared-services.json payments.json
+
 # The smallest verified change that closes each finding, as AWS CLI commands
 pinhole fix snapshot.json                 # critical and high findings
 pinhole fix snapshot.json --all           # every candidate, not just the best
@@ -268,6 +272,7 @@ Every evaluation rule has unit tests, written before the implementation. On top 
 | [08](fixtures/08-nlb-client-ip-preservation) | NLB without security groups; client IP preservation on and off |
 | [09](fixtures/09-lateral-movement) | Attack chains, merged per target; the best fix; what a change closes and leaves open |
 | [10](fixtures/10-ipv6-exposure) | IPv6 without a public IP; egress-only gateways; network ACL IPv6 rules and return ports |
+| [11](fixtures/11-cross-account-peering) | Attack chains across two accounts: peering routes on both sides, security group references across peering, no route back |
 
 CI runs every test and fixture on each push, on Node 22 and 24. It also runs both collectors (SDK and CloudShell script) against a fake AWS backed by the fixtures.
 
@@ -277,7 +282,7 @@ npm run test:fixtures    # fixtures only
 npm run fixture-count    # refresh the count at the top of this file
 ```
 
-To add a fixture, create `fixtures/NN-name/` with `snapshot.json`, `expected.json` (see existing ones for the format) and a `README.md` that cites the AWS documentation.
+To add a fixture, create `fixtures/NN-name/` with `snapshot.json`, `expected.json` (see existing ones for the format) and a `README.md` that cites the AWS documentation. Fixture 11 has two snapshots and its own tests in `packages/engine/test/join.test.ts`.
 
 ## Limitations
 
@@ -286,7 +291,7 @@ Read these before relying on a clean report.
 - **Scope is VPC network paths to interfaces and Application/Network Load Balancers.** Services that are public by design and not reached through a VPC interface are not covered: S3 buckets, API Gateway, Lambda function URLs, CloudFront distributions, public RDS snapshots, and so on. Use a configuration scanner such as Prowler or AWS Security Hub alongside Pinhole for those.
 - **IPv6** exposure of network interfaces is analysed for TCP and UDP, exactly, the same way as IPv4: an IPv6 address needs no public IP, so any interface with one in a subnet routed to an internet gateway is checked. Not analysed for IPv6: ICMPv6, load balancer listeners (dual-stack load balancers are flagged in Coverage), prefix lists with IPv6 entries, IPv6 lateral movement, and IPv6 rules in Terraform plans. The IPv6 internet is taken to be global unicast space (`2000::/3`) outside the VPC's own IPv6 blocks.
 - **Not modelled, detected and warned about:** AWS Network Firewall, Gateway Load Balancer, routes to appliances (ENI or instance targets), gateway route tables (ingress routing on the internet gateway), Global Accelerator, CloudFront, Classic Load Balancers, VPN and Direct Connect paths. Results that pass through these are `unknown`, or incomplete where only a warning is possible.
-- **One account and one region per snapshot.** Peering or transit gateway paths into another account or region end as `unknown`. Transit gateway route tables shared from another account cannot be searched from the attachment owner's account.
+- **One account and one region per snapshot.** Load the snapshots on both sides of a peering connection or transit gateway together (in the console, or `pinhole blast A.json B.json`) and they are joined, so attack chains are followed across. Analysed alone, a path into a snapshot that is not loaded ends as `unknown`. Transit gateway route tables shared from another account can only be searched when the owner account's snapshot is loaded too. Only attack chains are followed across snapshots; internet exposure never needs to be, because it is decided inside one VPC.
 - **Configuration, not traffic.** The snapshot is a point in time. Existing connections can outlive a rule change, because security groups track connections. Host firewalls, the OS, and whether anything is listening on the port are outside the model.
 - **Transit gateway ECMP** (several attachments for one route) follows the first attachment. Appliance mode is not modelled.
 - **Load balancers:** health check reachability is not evaluated when the health check port differs from the traffic port. Lambda and ALB-as-target targets are reported as `unknown`. Listener rules are only used to find target groups; host or path conditions are not evaluated.
@@ -317,8 +322,8 @@ The engine has no dependencies so that it can later share a core with IAM Lens (
 - **M1 (0.1, done):** snapshot collection, SG/NACL/route/TGW/peering/load balancer engine, internet exposure report.
 - **M2 (0.2, done):** `pinhole can`, rule hygiene, blast radius and attack chains, verified fixes, what-if simulation, in the CLI and the console.
 - **M3 (0.2, done):** Terraform plan check, snapshot diff, SARIF and Markdown output, and a GitHub Action that fails pull requests that open new internet exposure.
+- **M4 (unreleased, done):** attack chains that cross accounts and Regions through peering and transit gateways, with a verified plan to cut them; a fix planner that considers several open risks at once, re-measures lazily and drops redundant steps.
 - **Next:** IPv6 for load balancers and lateral movement, IPv6 in Terraform plans, and more AWS services in plans (load balancers, subnets).
-- **M4:** attack chains that cross accounts through peering and transit gateways when snapshots of both sides are loaded.
 
 ## Security
 

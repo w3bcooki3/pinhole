@@ -1,0 +1,209 @@
+{
+ "schemaVersion": 1,
+ "source": "fixture",
+ "accountId": "111122223333",
+ "region": "us-east-1",
+ "collectedAt": "2026-11-12T09:41:00Z",
+ "ec2": {
+  "Vpcs": [
+   {
+    "VpcId": "vpc-0a11",
+    "CidrBlock": "10.0.0.0/16"
+   }
+  ],
+  "Subnets": [
+   {
+    "SubnetId": "subnet-0a11",
+    "VpcId": "vpc-0a11",
+    "CidrBlock": "10.0.1.0/24",
+    "AvailabilityZone": "us-east-1a"
+   }
+  ],
+  "InternetGateways": [
+   {
+    "InternetGatewayId": "igw-0a11",
+    "Attachments": [
+     {
+      "VpcId": "vpc-0a11",
+      "State": "available"
+     }
+    ]
+   }
+  ],
+  "VpcPeeringConnections": [
+   {
+    "VpcPeeringConnectionId": "pcx-0c11",
+    "Status": {
+     "Code": "active"
+    },
+    "RequesterVpcInfo": {
+     "VpcId": "vpc-0a11",
+     "CidrBlock": "10.0.0.0/16",
+     "OwnerId": "111122223333",
+     "Region": "us-east-1"
+    },
+    "AccepterVpcInfo": {
+     "VpcId": "vpc-0b22",
+     "CidrBlock": "10.20.0.0/16",
+     "OwnerId": "444455556666",
+     "Region": "us-east-1"
+    }
+   }
+  ],
+  "RouteTables": [
+   {
+    "RouteTableId": "rtb-0a11",
+    "VpcId": "vpc-0a11",
+    "Associations": [
+     {
+      "Main": true
+     }
+    ],
+    "Routes": [
+     {
+      "DestinationCidrBlock": "10.0.0.0/16",
+      "GatewayId": "local",
+      "State": "active",
+      "Origin": "CreateRouteTable"
+     },
+     {
+      "DestinationCidrBlock": "0.0.0.0/0",
+      "GatewayId": "igw-0a11",
+      "State": "active",
+      "Origin": "CreateRoute"
+     },
+     {
+      "DestinationCidrBlock": "10.20.0.0/16",
+      "VpcPeeringConnectionId": "pcx-0c11",
+      "State": "active",
+      "Origin": "CreateRoute"
+     }
+    ]
+   }
+  ],
+  "NetworkAcls": [
+   {
+    "NetworkAclId": "acl-0a11",
+    "VpcId": "vpc-0a11",
+    "IsDefault": true,
+    "Associations": [
+     {
+      "SubnetId": "subnet-0a11"
+     }
+    ],
+    "Entries": [
+     {
+      "RuleNumber": 100,
+      "Protocol": "-1",
+      "RuleAction": "allow",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 100,
+      "Protocol": "-1",
+      "RuleAction": "allow",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     }
+    ]
+   }
+  ],
+  "SecurityGroups": [
+   {
+    "GroupId": "sg-0a-bastion",
+    "GroupName": "bastion",
+    "VpcId": "vpc-0a11"
+   }
+  ],
+  "SecurityGroupRules": [
+   {
+    "SecurityGroupRuleId": "sgr-0a-ssh-world",
+    "GroupId": "sg-0a-bastion",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 22,
+    "ToPort": 22,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-0a-egress",
+    "GroupId": "sg-0a-bastion",
+    "IsEgress": true,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "0.0.0.0/0"
+   }
+  ],
+  "NetworkInterfaces": [
+   {
+    "NetworkInterfaceId": "eni-0a-bastion",
+    "SubnetId": "subnet-0a11",
+    "VpcId": "vpc-0a11",
+    "InterfaceType": "interface",
+    "Status": "in-use",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.1.10",
+      "Primary": true,
+      "Association": {
+       "PublicIp": "203.0.113.10",
+       "IpOwnerId": "amazon"
+      }
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-0a-bastion"
+     }
+    ],
+    "Association": {
+     "PublicIp": "203.0.113.10",
+     "IpOwnerId": "amazon"
+    },
+    "Attachment": {
+     "InstanceId": "i-0a-bastion",
+     "DeviceIndex": 0,
+     "Status": "attached"
+    }
+   }
+  ],
+  "Instances": [
+   {
+    "InstanceId": "i-0a-bastion",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "bastion"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-0a-bastion",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   }
+  ]
+ }
+}

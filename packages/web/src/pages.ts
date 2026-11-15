@@ -38,11 +38,11 @@ export interface Ctx {
   rows: () => Row[];
 }
 
-const snapByKey = (ctx: Ctx, key: string) => ctx.st.snaps.find((x) => x.key === key);
+const snapByKey = (ctx: Ctx, key: string) => D.withJoined(ctx.st.snaps).find((x) => x.key === key);
 const snapSelect = (ctx: Ctx, value: string, set: (key: string) => void, filter: (s: Snap) => boolean = () => true): HTMLElement | null => {
-  const list = ctx.st.snaps.filter(filter);
+  const list = D.withJoined(ctx.st.snaps).filter(filter);
   if (list.length < 2) return null;
-  const sel = h('select', { class: 'snap-select', 'aria-label': 'Snapshot' }, ...list.map((x) => h('option', { value: x.key }, `${x.account} / ${x.region}`))) as HTMLSelectElement;
+  const sel = h('select', { class: 'snap-select', 'aria-label': 'Snapshot' }, ...list.map((x) => h('option', { value: x.key }, D.scopeLabel(x)))) as HTMLSelectElement;
   sel.value = value;
   sel.addEventListener('change', () => set(sel.value));
   return sel;
@@ -71,7 +71,7 @@ const IMPACT: Record<string, string> = { data: 'Data store', control: 'Control p
 
 export function blastPage(ctx: Ctx): HTMLElement {
   const st = ctx.st;
-  const withChains = st.snaps.filter((x) => D.blastOf(x).entries.length);
+  const withChains = D.withJoined(st.snaps).filter((x) => D.blastOf(x).entries.length);
   if (!withChains.length) {
     return h('div', { class: 'page' }, h('div', { class: 'ph' }, h('div', {}, h('h1', {}, 'Blast radius'), h('p', {}, 'If a server that the internet can reach is compromised, what can the attacker reach next?'))), h('div', { class: 'box' }, empty('No entry points', 'Nothing in the loaded snapshots is reachable from the internet, so there is nothing to move on from.')));
   }
@@ -117,7 +117,7 @@ function chainOverview(ctx: Ctx, snap: Snap, graphBox: HTMLElement, sel: HTMLEle
   return h(
     'div',
     { class: 'page' },
-    h('div', { class: 'ph' }, h('div', {}, h('h1', {}, 'Blast radius'), h('p', {}, 'If a server that the internet can reach is compromised, what can the attacker reach next?'), h('p', { class: 'faint', style: 'margin-top:0.25rem' }, `${snap.account} / ${snap.region}. ${age.text}.`)), sel ? h('div', { class: 'acts' }, sel) : null),
+    h('div', { class: 'ph' }, h('div', {}, h('h1', {}, 'Blast radius'), h('p', {}, 'If a server that the internet can reach is compromised, what can the attacker reach next?'), h('p', { class: 'faint', style: 'margin-top:0.25rem' }, snap.joined ? `${D.scopeLabel(snap)}, linked by ${snap.joined.links.map((l) => `${l.kind === 'peering' ? 'peering connection' : 'transit gateway'} ${l.id}`).join(', ')}. Only chains that cross from one to the other are shown here. ${age.text}.` : `${snap.account} / ${snap.region}. ${age.text}.`)), sel ? h('div', { class: 'acts' }, sel) : null),
     h(
       'section',
       { class: 'box', style: 'margin-bottom:1rem' },
@@ -153,7 +153,7 @@ function chainOverview(ctx: Ctx, snap: Snap, graphBox: HTMLElement, sel: HTMLEle
                       'tr',
                       { class: 'click chain-item', tabindex: 0 },
                       h('td', { class: 'first' }, sevPill(c.severity)),
-                      h('td', { class: 'tt' }, chainText(c)),
+                      h('td', { class: 'tt' }, chainText(c), snap.joined ? h('div', { class: 'faint mono xs' }, [...new Set(c.steps.map((x) => D.scopeOf(snap, x.eniId) ?? ''))].join(' → ')) : null),
                       h('td', {}, h('div', {}, IMPACT[c.impact]), h('div', { class: 'faint' }, h('span', { class: 'mono' }, end.service ?? ''), end.serviceName ? ` ${end.serviceName}` : '')),
                       h('td', { class: 'hide-sm num' }, String(c.steps.length - 1)),
                       h('td', { class: 'last hide-sm mono' }, cut ? cut.ruleId : h('span', { class: 'faint' }, 'no single rule')),
@@ -201,12 +201,12 @@ function chainDetail(ctx: Ctx, snap: Snap, c: AttackChain, graphBox: HTMLElement
         h('div', { class: 'dh-k' }, sevPill(c.severity), h('span', {}, `${IMPACT[c.impact]} reached in ${D.plural(c.steps.length - 1, 'hop')}`)),
         h('h1', {}, chainText(c)),
         h('p', { class: 'lede' }, chainSentence(c)),
-        h('p', { class: 'meta' }, `${snap.account} / ${snap.region}. ${D.collected(snap).text}.`),
+        h('p', { class: 'meta' }, `${D.scopeLabel(snap)}. ${D.collected(snap).text}.`),
       ),
     ),
     h(
       'div',
-      { class: 'dgrid' },
+      { class: 'dtl-grid' },
       h(
         'div',
         { class: 'dcol' },
@@ -215,7 +215,7 @@ function chainDetail(ctx: Ctx, snap: Snap, c: AttackChain, graphBox: HTMLElement
           {},
           stepper([
             { k: 'Internet', v: [c.entry.how], state: 'pass' },
-            ...c.steps.map((x, k) => ({ k: short(x.name), v: k === 0 ? ['Open to the internet. Assume it can be compromised.'] : [h('code', {}, x.service ?? ''), x.serviceName ? ` ${x.serviceName}` : '', x.category === 'admin' || x.category === 'control' ? ': remote access, so the attacker can move on' : ''], state: (k === c.steps.length - 1 ? 'end' : 'pass') as 'pass' | 'end' })),
+            ...c.steps.map((x, k) => ({ k: snap.joined ? `${short(x.name)} (${D.scopeOf(snap, x.eniId) ?? ''})` : short(x.name), v: k === 0 ? ['Open to the internet. Assume it can be compromised.'] : [h('code', {}, x.service ?? ''), x.serviceName ? ` ${x.serviceName}` : '', x.category === 'admin' || x.category === 'control' ? ': remote access, so the attacker can move on' : ''], state: (k === c.steps.length - 1 ? 'end' : 'pass') as 'pass' | 'end' })),
           ]),
         ),
         sec('Why', {}, h('ul', { class: 'why' }, ...c.why.map((w) => h('li', {}, w)))),
@@ -818,7 +818,7 @@ export function openPalette(ctx: Ctx, pages: { route: string; label: string; ico
 // ================================================================== fix plan (dashboard)
 
 export function planBox(ctx: Ctx): HTMLElement {
-  const plans = ctx.st.snaps.map((snap) => ({ snap, plan: D.planOf(snap) })).filter((x) => x.plan.before.exposures || x.plan.before.chains);
+  const plans = D.withJoined(ctx.st.snaps).map((snap) => ({ snap, plan: D.planOf(snap) })).filter((x) => x.plan.before.exposures || x.plan.before.chains);
   const box = h('section', { class: 'box', id: 'plan' }, boxHead('Fix plan', 'Fewest changes that close every critical and high risk, each proved by re-analysis'));
   if (!plans.length) {
     box.append(h('div', { class: 'pad' }, h('p', { class: 'plan-sum' }, 'Nothing critical or high to fix.'), h('p', { class: 'dim', style: 'margin:0' }, 'No critical or high exposure and no attack chain in the loaded snapshots.')));

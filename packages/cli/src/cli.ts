@@ -17,7 +17,7 @@ import { analyzeBlastRadius, assertChanges, ChangeError, diffSnapshots, DriftErr
 import { diffMarkdown, diffText, newAtOrAbove, tfPlanMarkdown, tfPlanNewAtOrAbove, tfPlanText } from './drift.js';
 import { exposureMarkdown, exposureSarif } from './formats.js';
 import type { Change } from '@pinhole/engine';
-import { blastText, canText, fixesFor, fixText, hygiene, hygieneText, LookupError, plan, planText, shortcutChanges, whatIf, whatIfText } from './advanced.js';
+import { across, acrossText, blastText, canText, fixesFor, fixText, hygiene, hygieneText, LookupError, plan, planText, shortcutChanges, whatIf, whatIfText } from './advanced.js';
 import { VERSION } from './version.js';
 
 export interface Io {
@@ -32,7 +32,7 @@ Usage:
   pinhole exposure SNAPSHOT [--format text|json|sarif|markdown] [--min-severity LEVEL]
                               [--fail-on LEVEL] [--verbose]
   pinhole can      SNAPSHOT --from WHO --to WHO [--port N] [--protocol tcp|udp|icmp]
-  pinhole blast    SNAPSHOT [--depth N] [--min-severity LEVEL] [--fail-on LEVEL]
+  pinhole blast    SNAPSHOT [SNAPSHOT...] [--depth N] [--min-severity LEVEL] [--fail-on LEVEL]
   pinhole fix      SNAPSHOT [--plan] [--min-severity LEVEL] [--all]
   pinhole hygiene  SNAPSHOT [--fail-on LEVEL]
   pinhole whatif   SNAPSHOT [--revoke SGR-ID]... [--remove-nacl ACL#ingress#N]...
@@ -56,6 +56,9 @@ can       Whether one resource can reach another, and on which services.
           a public IP, or "internet". Without --port, lists every service.
 blast     What an attacker reaches after taking over each internet-exposed
           resource, moving on through remote administration services.
+          Given several snapshots, it also joins those linked by a VPC
+          peering connection or transit gateway and follows chains from one
+          account or Region into another, with a plan to cut them.
 fix       For each finding, the smallest verified change that closes it, as
           AWS CLI commands. With --plan, the fewest changes, in order, that
           close every critical and high exposure and attack chain.
@@ -221,10 +224,30 @@ function cmdBlast(args: string[], io: Io): number {
   const depth = Number(values.depth);
   if (!Number.isInteger(depth) || depth < 1 || depth > 6) throw new UsageError('--depth must be 1-6.');
   const failOn = severityArg(values['fail-on'], '--fail-on');
-  const model = snapshotModel(positionals, 'blast');
-  const report = analyzeBlastRadius(model, analyzeExposure(model), { maxDepth: depth, ...(values['max-pairs'] ? { maxPairs: Number(values['max-pairs']) } : {}) });
-  io.stdout(format === 'json' ? json(report) : safeForTerminal(blastText(model, report, severityArg(values['min-severity'], '--min-severity') ?? 'info')));
-  return failOn && report.chains.some((c) => SEVERITY_ORDER.indexOf(c.severity) <= SEVERITY_ORDER.indexOf(failOn)) ? 2 : 0;
+  const minSeverity = severityArg(values['min-severity'], '--min-severity') ?? 'info';
+  const opts = { maxDepth: depth, ...(values['max-pairs'] ? { maxPairs: Number(values['max-pairs']) } : {}) };
+  const fails = (list: { severity: Severity }[]) => !!failOn && list.some((c) => SEVERITY_ORDER.indexOf(c.severity) <= SEVERITY_ORDER.indexOf(failOn));
+  if (positionals.length <= 1) {
+    const model = snapshotModel(positionals, 'blast');
+    const report = analyzeBlastRadius(model, analyzeExposure(model), opts);
+    io.stdout(format === 'json' ? json(report) : safeForTerminal(blastText(model, report, minSeverity)));
+    return fails(report.chains) ? 2 : 0;
+  }
+  // Several snapshots: each on its own, then the chains that cross between linked ones.
+  const inputs = positionals.map((file) => {
+    const snap = readSnapshot(file);
+    return { file, key: snap.accountId && snap.region ? `${snap.accountId} ${snap.region}` : file, model: normalize(snap) };
+  });
+  const keys = new Set<string>();
+  for (const i of inputs) {
+    if (keys.has(i.key)) i.key = i.file;
+    keys.add(i.key);
+  }
+  const each = inputs.map((i) => ({ key: i.key, report: analyzeBlastRadius(i.model, analyzeExposure(i.model), opts) }));
+  const res = across(inputs, depth);
+  if (format === 'json') io.stdout(json({ snapshots: each, ...res }));
+  else io.stdout(safeForTerminal([...each.map((x, i) => `== ${x.key}\n${blastText(inputs[i]!.model, x.report, minSeverity)}`), acrossText(res, minSeverity)].join('\n')));
+  return fails([...each.flatMap((x) => x.report.chains), ...res.across.flatMap((a) => a.chains)]) ? 2 : 0;
 }
 
 function cmdFix(args: string[], io: Io): number {

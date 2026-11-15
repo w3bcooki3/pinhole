@@ -239,6 +239,21 @@ describe('pinhole CLI', () => {
       const j = JSON.parse((await cli('blast', f9, '--format', 'json')).stdout);
       expect(j.entries.map((e: { eniId: string }) => e.eniId).sort()).toEqual(['eni-bastion', 'eni-web']);
     });
+    it('blast: follows chains across accounts when given linked snapshots', async () => {
+      const a = join(here, '../../../fixtures/11-cross-account-peering/account-a/snapshot.json');
+      const b = join(here, '../../../fixtures/11-cross-account-peering/account-b/snapshot.json');
+      const r = await cli('blast', a, b, '--fail-on', 'critical');
+      expect(r.code).toBe(2);
+      expect(r.stdout).toContain('linked by peering connection pcx-0c11');
+      expect(r.stdout).toMatch(/\[CRITICAL\] internet --> bastion \(i-0a-bastion, eni-0a-bastion\) \[111122223333 us-east-1\] --tcp\/5432 PostgreSQL--> orders-db \(i-0b-db, eni-0b-db\) \[444455556666 us-east-1\]/);
+      expect(r.stdout).toContain('To cut 2 of 2 with 1 change(s)');
+      expect(r.stdout).toContain('(in 111122223333 us-east-1)');
+      const j = JSON.parse((await cli('blast', a, b, '--format', 'json')).stdout);
+      expect(j.snapshots.map((x: { key: string }) => x.key)).toEqual(['111122223333 us-east-1', '444455556666 us-east-1']);
+      expect(j.across[0].chains).toHaveLength(2);
+      // Unlinked snapshots: analysed side by side, nothing joined.
+      expect((await cli('blast', a, f9)).stdout).toContain('None of these snapshots are linked');
+    });
     it('fix: prints the verified fix as an AWS CLI command', async () => {
       const r = await cli('fix', f9);
       expect(r.stdout).toContain('Verified: Remove sgr-bastion-ssh-world');
