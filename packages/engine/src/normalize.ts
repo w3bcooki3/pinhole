@@ -444,6 +444,7 @@ export function normalize(input: unknown): NetworkModel {
       securityGroupIds: lb.SecurityGroups ?? [],
       nodeIps: nodeEnis.flatMap((e) => e.privateIps.slice(0, 1)),
       nodeEniIds: nodeEnis.map((e) => e.id),
+      ...(lb.IpAddressType === 'ipv4' || lb.IpAddressType === 'dualstack' || lb.IpAddressType === 'dualstack-without-public-ipv4' ? { ipAddressType: lb.IpAddressType } : {}),
     });
   }
   const rulesByListener = new Map<string, string[]>();

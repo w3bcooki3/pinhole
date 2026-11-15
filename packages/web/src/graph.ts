@@ -101,39 +101,103 @@ export function renderGraph(host: HTMLElement, rows: Row[], opts: GraphOptions =
   const parent = new Map<string, string>();
   for (const e of edges.values()) if (e.from !== 'internet') parent.set(e.to, e.from);
   right.sort((a, b) => a.lane.localeCompare(b.lane) || (parent.get(a.id) ?? '').localeCompare(parent.get(b.id) ?? '') || D.sevRank(a.sev ?? 'info') - D.sevRank(b.sev ?? 'info'));
-  let y = compact ? 6 : 64;
-  let lane = '';
-  const lanes: { name: string; y0: number; y1: number }[] = [];
+
+  // Lanes (one per account, Region and VPC) in order, each with its exposed resources.
+  const laneList: { name: string; items: GNode[] }[] = [];
   for (const n of right) {
-    if (!compact && n.lane !== lane) {
-      if (lanes.length) lanes[lanes.length - 1]!.y1 = y - 8;
-      y += lanes.length ? 28 : 0;
-      lanes.push({ name: n.lane, y0: y, y1: 0 });
-      y += 30;
-      lane = n.lane;
+    const last = laneList[laneList.length - 1];
+    if (!compact && last && last.name === n.lane) last.items.push(n);
+    else if (compact && last) last.items.push(n);
+    else laneList.push({ name: n.lane, items: [n] });
+  }
+  const laneH = (l: { items: GNode[] }) => (compact ? 0 : 58) + l.items.length * (NH + GAP);
+  // A tall graph in a wide canvas is split into columns, each with its own Internet node, so no
+  // edge crosses another column. The number of columns is the one that lets the whole graph fit
+  // at the largest scale.
+  const STRIDE = COLX[2]! + NW + 90;
+  const split = (cols: number) => {
+    const total = laneList.reduce((n, l) => n + laneH(l), 0);
+    const groups: (typeof laneList)[] = [[]];
+    let acc = 0;
+    for (const l of laneList) {
+      if (acc > 0 && acc + laneH(l) / 2 > total / cols && groups.length < cols) {
+        groups.push([]);
+        acc = 0;
+      }
+      groups[groups.length - 1]!.push(l);
+      acc += laneH(l);
     }
-    pos.set(n.id, { x: COLX[2]!, y });
-    y += NH + GAP;
+    return groups;
+  };
+  const area = host.getBoundingClientRect();
+  let groups = split(1);
+  if (!compact && area.width > 0 && area.height > 0) {
+    let best = 0;
+    for (let c = 1; c <= Math.min(4, laneList.length); c++) {
+      const g = split(c);
+      const h = 64 + Math.max(...g.map((x) => x.reduce((n, l) => n + laneH(l), 0)));
+      const w = g.length * STRIDE;
+      const k = Math.min((area.width - 40) / w, (area.height - 64) / h, 1.6);
+      if (k > best * 1.08) {
+        best = k;
+        groups = g;
+      }
+    }
   }
-  if (lanes.length) lanes[lanes.length - 1]!.y1 = y - 4;
+
+  const lanes: { name: string; y0: number; y1: number; c: number }[] = [];
+  const internetAt: { x: number; y: number }[] = [];
+  const colOf = new Map<string, number>();
+  let H = compact ? 120 : 300;
+  groups.forEach((group, c) => {
+    const dx = c * STRIDE;
+    let y = compact ? 6 : 64;
+    for (const l of group) {
+      if (!compact) {
+        if (lanes.length && lanes[lanes.length - 1]!.c === c) y += 28;
+        lanes.push({ name: l.name, y0: y, y1: 0, c });
+        y += 30;
+      }
+      for (const n of l.items) {
+        pos.set(n.id, { x: COLX[2]! + dx, y });
+        colOf.set(n.id, c);
+        y += NH + GAP;
+      }
+      if (!compact) lanes[lanes.length - 1]!.y1 = y - 4;
+    }
+    // Entry points sit beside the resources they lead to.
+    for (const n of nodes.values()) {
+      if (n.col !== 1) continue;
+      const kids = [...edges.values()].filter((e) => e.from === n.id && colOf.get(e.to) === c).map((e) => pos.get(e.to)!.y);
+      if (!kids.length) continue;
+      pos.set(n.id, { x: COLX[1]! + dx, y: (Math.min(...kids) + Math.max(...kids)) / 2 });
+      colOf.set(n.id, c);
+    }
+    const entryYs = [...nodes.values()].filter((n) => n.col === 1 && colOf.get(n.id) === c).map((n) => pos.get(n.id)!.y);
+    internetAt.push({ x: COLX[0]! + dx, y: entryYs.length ? (Math.min(...entryYs) + Math.max(...entryYs)) / 2 : 40 });
+    H = Math.max(H, y + 10);
+  });
+  // Entry points with nothing behind them (all targets hidden): below the first column.
   for (const n of nodes.values()) {
-    if (n.col !== 1) continue;
-    const kids = [...edges.values()].filter((e) => e.from === n.id).map((e) => pos.get(e.to)?.y).filter((v): v is number => v !== undefined);
-    pos.set(n.id, { x: COLX[1]!, y: kids.length ? (Math.min(...kids) + Math.max(...kids)) / 2 : y });
-    if (!kids.length) y += NH + GAP;
+    if (n.col !== 1 || pos.has(n.id)) continue;
+    pos.set(n.id, { x: COLX[1]!, y: H });
+    colOf.set(n.id, 0);
+    H += NH + GAP;
   }
-  const entryYs = [...nodes.values()].filter((n) => n.col === 1).map((n) => pos.get(n.id)!.y);
-  pos.set('internet', { x: COLX[0]!, y: entryYs.length ? (Math.min(...entryYs) + Math.max(...entryYs)) / 2 : 40 });
-  const H = Math.max(y + 10, compact ? 120 : 300);
-  const W = COLX[2]! + NW + (compact ? 10 : 60);
+  pos.set('internet', internetAt[0] ?? { x: COLX[0]!, y: 40 });
+  const W = groups.length * STRIDE - (compact ? 80 : 30);
 
   const svg = s('svg', { role: 'img', 'aria-label': `Attack surface graph with ${D.plural(rows.length, 'exposure')}`, class: 'graph', ...(compact ? { viewBox: `0 0 ${W} ${H}` } : {}) });
   const g = s('g');
   svg.append(g);
   if (!compact) {
-    g.append(s('text', { x: COLX[0]!, y: 32, class: 'g-col' }, 'Source'), s('text', { x: COLX[1]!, y: 32, class: 'g-col' }, 'Entry point'), s('text', { x: COLX[2]!, y: 32, class: 'g-col' }, 'Exposed resource'));
+    groups.forEach((_, c) => {
+      const dx = c * STRIDE;
+      g.append(s('text', { x: COLX[0]! + dx, y: 32, class: 'g-col' }, 'Source'), s('text', { x: COLX[1]! + dx, y: 32, class: 'g-col' }, 'Entry point'), s('text', { x: COLX[2]! + dx, y: 32, class: 'g-col' }, 'Exposed resource'));
+    });
     for (const l of lanes) {
-      g.append(s('rect', { x: COLX[1]! - 22, y: l.y0 - 8, width: W - COLX[1]!, height: l.y1 - l.y0 + 8, rx: 14, class: 'g-lane' }), s('text', { x: COLX[1]! - 6, y: l.y0 + 13, class: 'g-lane-t' }, l.name));
+      const dx = l.c * STRIDE;
+      g.append(s('rect', { x: COLX[1]! - 22 + dx, y: l.y0 - 8, width: COLX[2]! - COLX[1]! + NW + 44, height: l.y1 - l.y0 + 8, rx: 14, class: 'g-lane' }), s('text', { x: COLX[1]! - 6 + dx, y: l.y0 + 13, class: 'g-lane-t' }, l.name));
     }
   }
   const sel = opts.selected;
@@ -147,7 +211,7 @@ export function renderGraph(host: HTMLElement, rows: Row[], opts: GraphOptions =
   const anyFocus = focus ? [...nodes.values()].some(focused) : false;
 
   for (const e of edges.values()) {
-    const a = pos.get(e.from);
+    const a = e.from === 'internet' ? internetAt[colOf.get(e.to) ?? 0] : pos.get(e.from);
     const b = pos.get(e.to);
     if (!a || !b) continue;
     const x1 = a.x + NW;
@@ -167,8 +231,18 @@ export function renderGraph(host: HTMLElement, rows: Row[], opts: GraphOptions =
       }),
     );
   }
+  const drawList: { n: GNode; p: { x: number; y: number } }[] = [];
   for (const n of nodes.values()) {
-    const p = pos.get(n.id)!;
+    if (n.id === 'internet' && internetAt.length > 1) {
+      // Each column's Internet node counts only the exposures drawn in that column.
+      internetAt.forEach((p, c) => {
+        const k = [...nodes.values()].filter((x) => x.col === 1 && colOf.get(x.id) === c).reduce((sum, x) => sum + x.count, 0);
+        drawList.push({ n: { ...n, sub: D.plural(k, 'exposure') }, p });
+      });
+    } else if (n.id === 'internet') drawList.push({ n, p: internetAt[0] ?? pos.get(n.id)! });
+    else drawList.push({ n, p: pos.get(n.id)! });
+  }
+  for (const { n, p } of drawList) {
     const dim = (sel && !on.has(n.id)) || (anyFocus && !focused(n) && n.col > 0);
     const node = s('g', { class: `g-node${dim ? ' dim' : ''}${(sel && on.has(n.id) && n.col > 0) || (anyFocus && focused(n)) ? ' sel' : ''}`, transform: `translate(${p.x},${p.y})`, ...(compact ? {} : { tabindex: 0, role: 'button' }), 'aria-label': `${n.title}, ${n.sub}` });
     const ring = n.verdict ? (n.verdict === 'reachable' ? 'var(--low)' : n.verdict === 'blocked' ? 'var(--critical)' : 'var(--medium)') : n.col === 0 ? 'var(--accent)' : sevColor(n.sev);
@@ -213,7 +287,12 @@ export function attachPanZoom(host: HTMLElement, svg: SVGElement, g: SVGElement,
   const apply = () => g.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`);
   const fit = () => {
     const rect = host.getBoundingClientRect();
-    view.k = Math.max(0.7, Math.min(1.8, (rect.width - 40) / W, (rect.height - 80) / H)) || 1;
+    // Start below the toolbar over the canvas, however many rows it wraps to.
+    const bar = host.parentElement?.querySelector('.gtools') as HTMLElement | null;
+    top = Math.max(top, bar ? bar.offsetTop + bar.offsetHeight + 8 : 0);
+    // Fit the whole graph when that keeps labels readable (50% or more); otherwise
+    // start at 50%, top-aligned, and let the reader pan.
+    view.k = Math.max(0.5, Math.min(1.6, (rect.width - 40) / W, (rect.height - top - 24) / H)) || 1;
     view.x = Math.max(8, (rect.width - W * view.k) / 2);
     // Centre vertically when the graph is shorter than the canvas.
     view.y = Math.max(top, (rect.height - H * view.k) / 2);

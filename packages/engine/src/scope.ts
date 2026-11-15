@@ -76,9 +76,11 @@ export function detectOutOfScope(model: NetworkModel): Warning[] {
     add({ code: 'cloudfront', message: 'Security groups allow the CloudFront origin-facing prefix list. These origins are reachable from CloudFront edge addresses; CloudFront distributions themselves are not modelled.', resourceIds: cfUsed.map((p) => p.id), docUrl: DOCS.cloudfrontPrefixList });
   }
 
-  const ipv6 = [...model.loadBalancers.values()].filter((lb) => lb.scheme === 'internet-facing' && model.vpcs.get(lb.vpcId)?.ipv6CidrTexts.length).map((lb) => lb.name);
+  // Dual-stack listeners are analysed over IPv6 too. Only a snapshot that does not record the
+  // load balancer's IP address type (collected before this was read) leaves it open.
+  const ipv6 = [...model.loadBalancers.values()].filter((lb) => lb.scheme === 'internet-facing' && !lb.ipAddressType && model.vpcs.get(lb.vpcId)?.ipv6CidrTexts.length).map((lb) => lb.name);
   if (ipv6.length) {
-    add({ code: 'ipv6-load-balancer', message: 'Internet-facing load balancers in VPCs with IPv6 are analysed for IPv4 only; dual-stack listeners may also be reachable over IPv6.', resourceIds: ipv6 });
+    add({ code: 'ipv6-load-balancer', message: 'The snapshot does not say whether these internet-facing load balancers are dual-stack, so they are analysed for IPv4 only. Collect again to include IPv6.', resourceIds: ipv6 });
   }
 
   for (const t of model.tgwRouteTables.values()) {

@@ -136,8 +136,11 @@ interface Piece {
   sample: bigint;
 }
 
-function analyse(model: NetworkModel, eni: Eni, nacl: Nacl, igw: string, p: ProtocolNumber): Piece[] {
-  const rules = sgRules6(model, eni, p);
+/** A network load balancer without security groups admits every client: no rule filters it. */
+const OPEN_SG = (p: ProtocolNumber): SgRule => ({ id: 'no security group', groupId: '', egress: false, protocol: p, ipv6CidrText: '::/0' });
+
+function analyse(model: NetworkModel, eni: Eni, nacl: Nacl, igw: string, p: ProtocolNumber, openSg = false): Piece[] {
+  const rules = openSg ? [OPEN_SG(p)] : sgRules6(model, eni, p);
   if (!rules.length) return [];
   const inEntries = naclEntries6(nacl, false, p);
   const outEntries = naclEntries6(nacl, true, p);
@@ -190,20 +193,66 @@ function analyse(model: NetworkModel, eni: Eni, nacl: Nacl, igw: string, p: Prot
   return merged;
 }
 
-function trace(model: NetworkModel, eni: Eni, nacl: Nacl, igw: string, p: ProtocolNumber, x: Piece): Hop[] {
+function trace(model: NetworkModel, eni: Eni, nacl: Nacl, igw: string, p: ProtocolNumber, x: Piece, openSg = false): Hop[] {
   const port = x.ports.from;
   const proto = protocolName(p);
   const firstIn = naclEntries6(nacl, false, p).find((e) => covers(naclPorts(e), port) && RangeSet6.fromCidrs([e.ipv6CidrText!]).contains(x.sample));
-  const sg = sgRules6(model, eni, p).filter((r) => covers(sgPorts(r), port) && RangeSet6.fromCidrs([r.ipv6CidrText!]).contains(x.sample));
+  const sg = (openSg ? [OPEN_SG(p)] : sgRules6(model, eni, p)).filter((r) => covers(sgPorts(r), port) && RangeSet6.fromCidrs([r.ipv6CidrText!]).contains(x.sample));
   const rt = routeTableForSubnet(model, model.subnets.get(eni.subnetId)!);
   const back = (rt?.routes6 ?? []).filter((r) => r.target.id === igw).map((r) => r.destination);
   return [
     { stage: 'igw', decision: 'pass', resourceId: igw, detail: `${igw} attached to ${eni.vpcId}, reached directly over IPv6 with no public IP`, docUrl: DOCS.ipv6Addressing },
     { stage: 'dest-nacl-ingress', decision: 'pass', resourceId: nacl.id, detail: firstIn ? `inbound rule ${firstIn.ruleNumber} allows ${proto}/${port} from ${firstIn.ipv6CidrText}` : 'allowed', ...(firstIn ? { ruleIds: [`${nacl.id}#ingress#${firstIn.ruleNumber}`] } : {}), docUrl: DOCS.naclCustom },
-    { stage: 'dest-sg-ingress', decision: 'pass', resourceId: sg[0]?.groupId ?? eni.groupIds[0] ?? '', detail: `inbound ${proto}/${port} from ${sg.map((r) => r.ipv6CidrText).join(', ')} allowed by ${sg.map((r) => `${r.id} (${r.groupId})`).join(', ')}`, ruleIds: sg.map((r) => r.id), docUrl: DOCS.sgRules },
+    openSg
+      ? { stage: 'dest-sg-ingress', decision: 'pass', resourceId: eni.id, detail: 'the network load balancer has no security groups, so no rule filters clients', docUrl: DOCS.nlbSecurityGroups }
+      : { stage: 'dest-sg-ingress', decision: 'pass', resourceId: sg[0]?.groupId ?? eni.groupIds[0] ?? '', detail: `inbound ${proto}/${port} from ${sg.map((r) => r.ipv6CidrText).join(', ')} allowed by ${sg.map((r) => `${r.id} (${r.groupId})`).join(', ')}`, ruleIds: sg.map((r) => r.id), docUrl: DOCS.sgRules },
     { stage: 'return-route', decision: 'pass', resourceId: rt?.id ?? '', detail: `${rt?.id ?? 'route table'}: ${back.join(', ')} -> ${igw}`, docUrl: DOCS.routePriority },
     { stage: 'return-nacl', decision: 'pass', resourceId: nacl.id, detail: `outbound IPv6 to clients: ${x.profiles.map((y) => `${y.profile} ${y.coverage}`).join('; ')}`, docUrl: DOCS.naclCustom },
   ];
+}
+
+/** How a set of IPv6 sources is shown: "every internet address", "... except X", or the CIDRs. */
+export function labels6(model: NetworkModel, vpcId: string, sources: RangeSet6): { ranges: string[]; labels: string[] } {
+  // "Every internet address" for IPv6 means global unicast outside the VPC's own blocks,
+  // which are local to it, not internet.
+  const world = INTERNET6.subtract(RangeSet6.fromCidrs(model.vpcs.get(vpcId)?.ipv6CidrTexts ?? []));
+  const all = sources.equals(world) || sources.equals(INTERNET6);
+  const ranges = all ? [WORLD6] : sources.toCidrs();
+  const missing = all ? [] : world.subtract(sources).toCidrs();
+  return { ranges, labels: all ? [WORLD6] : missing.length && missing.length <= 3 ? [`${WORLD6} except ${missing.join(', ')}`] : ranges };
+}
+
+export interface ListenerPiece6 {
+  sources: RangeSet6;
+  returnPath: ReturnCoverage;
+  profiles: ReturnProfileResult[];
+  trace: Hop[];
+  addresses: string[];
+}
+
+/**
+ * IPv6 clients that reach one load balancer node on one listener port: the
+ * same exact analysis as for an interface, limited to the listener's port.
+ * `openSg` is for a network load balancer without security groups.
+ */
+export function listenerPieces6(model: NetworkModel, node: Eni, port: number, p: ProtocolNumber, openSg: boolean): ListenerPiece6[] {
+  const addresses = (node.ipv6Addresses ?? []).filter((a) => {
+    try {
+      return INTERNET6.contains(parseIpv6(a));
+    } catch {
+      return false;
+    }
+  });
+  const subnet = model.subnets.get(node.subnetId);
+  const igw = subnet ? attachedIgw(model, subnet.vpcId) : undefined;
+  const nacl = subnet ? naclForSubnet(model, subnet) : undefined;
+  if (!addresses.length || !igw || !nacl) return [];
+  return analyse(model, node, nacl, igw, p, openSg)
+    .filter((x) => x.ports.from <= port && port <= x.ports.to)
+    .map((x) => {
+      const one = { ...x, ports: { from: port, to: port } };
+      return { sources: x.sources, returnPath: x.returnPath, profiles: x.profiles, trace: trace(model, node, nacl, igw, p, one, openSg), addresses };
+    });
 }
 
 /** IPv6 findings for every interface with an IPv6 address. */
@@ -238,13 +287,7 @@ export function analyzeExposure6(model: NetworkModel, skip: (eni: Eni) => boolea
       for (const x of analyse(model, eni, nacl, igw, p)) {
         const proto = protocolName(p);
         const risk = assessPorts(proto, x.ports);
-        // "Every internet address" for IPv6 means global unicast outside the VPC's own blocks,
-        // which are local to it, not internet.
-        const world = INTERNET6.subtract(RangeSet6.fromCidrs(model.vpcs.get(eni.vpcId)?.ipv6CidrTexts ?? []));
-        const all = x.sources.equals(world) || x.sources.equals(INTERNET6);
-        const ranges = all ? [WORLD6] : x.sources.toCidrs();
-        const missing = all ? [] : world.subtract(x.sources).toCidrs();
-        const labels = all ? [WORLD6] : missing.length && missing.length <= 3 ? [`${WORLD6} except ${missing.join(', ')}`] : ranges;
+        const { ranges, labels } = labels6(model, eni.vpcId, x.sources);
         findings.push({
           kind: 'interface',
           family: 'ipv6',

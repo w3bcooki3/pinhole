@@ -40,7 +40,7 @@ describe('web console', () => {
   it('compares two snapshots of one account and region, and uses only the latest elsewhere', () => {
     const { doc, api } = page();
     // The demo has an older copy of prod us-east-1: it is kept for Compare and left out of the dashboard.
-    expect(text(doc, '#total')).toBe('20');
+    expect(text(doc, '#total')).toBe('21');
     expect(text(doc, '.chip-older')).toBe('+1 older');
     api.go('compare');
     expect(text(doc, '#cmp-verdict')).toMatch(/^2 new or wider internet exposures, no new attack chains, 1 closed or narrower, 3 configuration changes\./);

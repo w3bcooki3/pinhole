@@ -232,6 +232,8 @@ export interface RawLoadBalancer {
   VpcId?: string;
   AvailabilityZones?: { SubnetId?: string; ZoneName?: string }[];
   SecurityGroups?: string[];
+  /** ipv4, dualstack, or dualstack-without-public-ipv4. */
+  IpAddressType?: string;
 }
 
 export interface RawAction {
@@ -421,7 +423,7 @@ const SNAPSHOT: Spec = obj({
     VpcEndpoints: arr(obj({ VpcEndpointId: id('vpce'), VpcEndpointType: 'str', ServiceName: 'text', VpcId: 'str' }, ['VpcEndpointId'])),
   }),
   elbv2: obj({
-    LoadBalancers: arr(obj({ LoadBalancerArn: ARN, LoadBalancerName: 'text', Type: 'str', Scheme: 'str', VpcId: 'str', AvailabilityZones: arr(obj({ SubnetId: 'str', ZoneName: 'str' })), SecurityGroups: arr('str') }, ['LoadBalancerArn'])),
+    LoadBalancers: arr(obj({ LoadBalancerArn: ARN, LoadBalancerName: 'text', Type: 'str', Scheme: 'str', VpcId: 'str', AvailabilityZones: arr(obj({ SubnetId: 'str', ZoneName: 'str' })), SecurityGroups: arr('str'), IpAddressType: 'str' }, ['LoadBalancerArn'])),
     Listeners: arr(obj({ ListenerArn: ARN, LoadBalancerArn: ARN, Port: 'port', Protocol: 'str', DefaultActions: arr(ACTION) }, ['ListenerArn', 'LoadBalancerArn'])),
     Rules: arr(obj({ RuleArn: ARN, ListenerArn: ARN, Actions: arr(ACTION) })),
     TargetGroups: arr(obj({ TargetGroupArn: ARN, TargetGroupName: 'text', Protocol: 'str', Port: 'port', TargetType: 'str', VpcId: 'str', HealthCheckPort: 'str', LoadBalancerArns: arr(ARN) }, ['TargetGroupArn'])),

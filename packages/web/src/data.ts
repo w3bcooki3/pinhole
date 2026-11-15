@@ -258,7 +258,7 @@ export function hopDetail(h: Hop): string {
     case 'public-ip':
       return d.replace(/^public IP /, '').replace(/^Elastic IP /, 'Elastic IP ').replace(' -> ', ' → ');
     case 'igw':
-      return (m = / attached to (\S+)/.exec(d)) ? `attached to ${m[1]}` : d;
+      return (m = / attached to ([\w-]+)(.*over IPv6)?/.exec(d)) ? `attached to ${m[1]}${m[2] ? ', reached over IPv6 with no public IP' : ''}` : d;
     case 'dest-nacl-ingress':
     case 'tgw-nacl':
       return (m = / (allows|denies) (\S+)/.exec(d)) ? `${m[1]} ${m[2]}` : d;

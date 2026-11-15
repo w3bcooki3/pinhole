@@ -22,6 +22,11 @@ All notable changes to this project are recorded here. The format follows
   and usable on any screen size. Every example output is produced by running
   the CLI on the fixtures when the site is built, and a test checks it.
   The console links to it from the sidebar.
+- IPv6 on dual-stack load balancers. Every listener of an internet-facing
+  ALB or NLB with IP address type `dualstack` or
+  `dualstack-without-public-ipv4` is analysed for IPv6 clients, exactly, with
+  its targets checked from the load balancer nodes. NLBs without security
+  groups are handled. The demo includes a dual-stack ALB.
 - Fixture 11: two accounts peered, with a chain into each of a database and an
   SSH host, and a cache that has no route back.
 
@@ -33,6 +38,13 @@ All notable changes to this project are recorded here. The format follows
 - The demo includes two linked accounts.
 
 ### Fixed
+- The attack graph fits on screen when it opens. A tall graph is laid out in
+  side-by-side columns, each with its own Internet node, instead of shrinking
+  to an unreadable strip.
+- The accounts and Regions grid on the dashboard keeps Region names readable
+  with many Regions, scrolling sideways instead of overlapping.
+- The demo's public addresses are now in the documentation range
+  192.0.2.0/24 rather than addresses that look like real EC2 ones.
 - The attack chain detail page lost its two-column layout after the dashboard
   layout change.
 

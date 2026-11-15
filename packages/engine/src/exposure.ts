@@ -13,7 +13,8 @@
  * evaluatePath() therefore gives the answer for the whole cell. Adjacent cells
  * with the same answer and the same deciding rules are merged into a finding.
  */
-import { analyzeExposure6 } from './exposure6.js';
+import { analyzeExposure6, labels6, listenerPieces6 } from './exposure6.js';
+import type { ListenerPiece6 } from './exposure6.js';
 import { DOCS } from './docs.js';
 import { INTERNET, RangeSet, formatIpv4, parseIpv4 } from './ipv4.js';
 import { hasPorts, protocolName } from './packet.js';
@@ -24,7 +25,7 @@ import { assessPorts, compareSeverity } from './risk.js';
 import { detectOutOfScope } from './scope.js';
 import { attachedIgw, displayName, eniByPrivateIp, isElbNode, naclForSubnet, routeTableForSubnet } from './topology.js';
 import { PROTO_ICMP, PROTO_TCP, PROTO_UDP } from './types.js';
-import type { Eni, IpRange, LoadBalancer, NetworkModel, PortRange, ProtocolNumber, SgRule, TargetGroup, Warning } from './types.js';
+import type { Eni, IpRange, Listener, LoadBalancer, NetworkModel, PortRange, ProtocolNumber, SgRule, TargetGroup, Warning } from './types.js';
 import type { Hop, Stage } from './walk.js';
 
 export interface LbTargetResult {
@@ -393,12 +394,18 @@ function analyseLoadBalancer(model: NetworkModel, lb: LoadBalancer, counter: { c
     warnings.push({ code: 'lb-nodes-missing', message: `No node interfaces found for ${lb.name}; its listeners were not analysed.`, resourceIds: [lb.arn] });
     return findings;
   }
+  const docUrl = lb.type === 'application' ? DOCS.albSecurityGroups : DOCS.nlbSecurityGroups;
+  const listeners = model.listeners.filter((x) => x.loadBalancerArn === lb.arn);
+  const dual = lb.ipAddressType === 'dualstack' || lb.ipAddressType === 'dualstack-without-public-ipv4';
+  if (dual) findings.push(...analyseLoadBalancer6(model, lb, nodes, listeners, docUrl));
   if (!nodes.some((n) => n.publicAddresses.length > 0)) {
-    warnings.push({ code: 'lb-nodes-without-public-ip', message: `${lb.name} is internet-facing but none of its node interfaces has a public IP in the snapshot; its listeners were not reported.`, resourceIds: [lb.arn] });
+    // A dual-stack load balancer without public IPv4 is reachable over IPv6 only, which is analysed above.
+    if (lb.ipAddressType !== 'dualstack-without-public-ipv4') {
+      warnings.push({ code: 'lb-nodes-without-public-ip', message: `${lb.name} is internet-facing but none of its node interfaces has a public IP in the snapshot; its IPv4 listeners were not reported.`, resourceIds: [lb.arn] });
+    }
     return findings;
   }
-  const docUrl = lb.type === 'application' ? DOCS.albSecurityGroups : DOCS.nlbSecurityGroups;
-  for (const l of model.listeners.filter((x) => x.loadBalancerArn === lb.arn)) {
+  for (const l of listeners) {
     for (const protocol of listenerProtocols(lb, l.protocol)) {
       // Front leg: analyse each node interface restricted to the listener port.
       const merged = new Map<string, { group: CellGroup; nodes: string[] }>();
@@ -432,6 +439,61 @@ function analyseLoadBalancer(model: NetworkModel, lb: LoadBalancer, counter: { c
     }
   }
   return findings;
+}
+
+/**
+ * IPv6 clients on a dual-stack load balancer's listeners
+ * (https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-ip-address-type.html).
+ * The front leg is the exact IPv6 analysis of each node interface on the
+ * listener port. Behind the load balancer, targets are reached from the
+ * nodes' own addresses: an IPv6 client's address cannot be carried to an
+ * IPv4 target, so client IP preservation does not apply.
+ */
+function analyseLoadBalancer6(model: NetworkModel, lb: LoadBalancer, nodes: Eni[], listeners: Listener[], docUrl: string): ExposureFinding[] {
+  const out: ExposureFinding[] = [];
+  const openSg = lb.type === 'network' && lb.securityGroupIds.length === 0;
+  for (const l of listeners) {
+    for (const protocol of listenerProtocols(lb, l.protocol)) {
+      const merged = new Map<string, { piece: ListenerPiece6; nodes: string[]; addresses: string[] }>();
+      for (const node of nodes) {
+        for (const piece of listenerPieces6(model, node, l.port, protocol, openSg)) {
+          const key = `${piece.returnPath}|${JSON.stringify(piece.profiles.map((x) => x.allowed))}`;
+          const prev = merged.get(key);
+          if (prev) {
+            prev.piece = { ...prev.piece, sources: prev.piece.sources.union(piece.sources) };
+            prev.nodes.push(node.id);
+            prev.addresses.push(...piece.addresses);
+          } else merged.set(key, { piece, nodes: [node.id], addresses: [...piece.addresses] });
+        }
+      }
+      for (const { piece, nodes: reached, addresses } of merged.values()) {
+        const proto = protocolName(protocol);
+        const risk = assessPorts(proto, { from: l.port, to: l.port });
+        const { ranges, labels } = labels6(model, lb.vpcId, piece.sources);
+        const f: ExposureFinding = {
+          kind: 'load-balancer',
+          family: 'ipv6',
+          resourceId: lb.arn,
+          resourceName: `${lb.type === 'application' ? 'ALB' : 'NLB'} ${lb.name}`,
+          vpcId: lb.vpcId,
+          publicIps: [...new Set(addresses)],
+          protocol: proto,
+          ports: { from: l.port, to: l.port },
+          sources: labels,
+          sourceRanges: ranges,
+          returnPath: piece.returnPath,
+          returnProfiles: piece.profiles,
+          severity: risk.severity,
+          reasons: [...risk.reasons, ...(reached.length < nodes.length ? [`reachable through ${reached.length} of ${nodes.length} load balancer nodes`] : [])],
+          trace: [{ stage: 'scope', decision: 'info', resourceId: lb.arn, detail: `${lb.scheme} dual-stack ${lb.type} load balancer ${lb.name}, listener ${l.protocol}:${l.port}, IPv6 clients`, docUrl }, ...piece.trace],
+          listener: { arn: l.arn, port: l.port, protocol: l.protocol },
+          targets: evaluateTargets(model, lb, l.port, protocol, undefined, l.targetGroupArns),
+        };
+        out.push(f);
+      }
+    }
+  }
+  return out;
 }
 
 // ------------------------------------------------------------------ interface classes

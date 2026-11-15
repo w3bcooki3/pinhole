@@ -225,7 +225,7 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
     <li>The subnet's route for the client's address pointing at that internet gateway.</li>
     <li>The network ACL allowing the response out, on the client's ephemeral port.</li>
   </ol>
-  <p>Over IPv6 no public IP is needed: any interface with an IPv6 address in a subnet routed to an internet gateway is checked. Load balancers are checked from the internet to the listener, then from each load balancer node to each target.</p>
+  <p>Over IPv6 no public IP is needed: any interface with an IPv6 address in a subnet routed to an internet gateway is checked, and so is every listener of a dual-stack load balancer. Load balancers are checked from the internet to the listener, then from each load balancer node to each target.</p>
 
   <h3 id="return-traffic">Return traffic</h3>
   <p>Security groups are stateful: if the request is allowed, so is the response. Network ACLs are not. The response leaves on the client's ephemeral port, and that range depends on the client: Linux uses 32768 to 61000, Windows 49152 to 65535, and Elastic Load Balancing 1024 to 65535. An ACL that only allows one of these ranges out works for some clients and not others. Pinhole reports that as partial, per client.</p>
@@ -303,7 +303,7 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
   <ul class="plain">
     <li><b>Scope.</b> VPC network paths to interfaces and Application and Network Load Balancers. Not S3, API Gateway, Lambda function URLs, CloudFront, or other services that are public outside a VPC. Use a configuration scanner such as Prowler or AWS Security Hub for those.</li>
     <li><b>Detected, not modelled.</b> AWS Network Firewall, Gateway Load Balancer, routes to appliances, gateway route tables, Global Accelerator, Classic Load Balancers, VPN and Direct Connect. Paths through them are reported as unknown.</li>
-    <li><b>IPv6</b> is analysed for TCP and UDP to interfaces. Not yet for ICMPv6, load balancer listeners, IPv6 lateral movement, or IPv6 rules in Terraform plans.</li>
+    <li><b>IPv6</b> is analysed for TCP and UDP to interfaces and dual-stack load balancers. Not yet for ICMPv6, IPv6 lateral movement, or IPv6 rules in Terraform plans.</li>
     <li><b>Configuration, not traffic.</b> Host firewalls, the operating system and whether anything listens on the port are outside the model. Existing connections can outlive a rule change.</li>
     <li><b>Snapshots are a point in time.</b> Collect again after changes, or compare two snapshots.</li>
     <li><b>Size.</b> The console handles files up to 200 MB. Very large accounts are faster with the CLI.</li>

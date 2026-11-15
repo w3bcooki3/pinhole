@@ -184,7 +184,7 @@ table.t td.r, table.t th.r { text-align: right; }
 .closes { display: flex; align-items: center; gap: 0.5rem; font-variant-numeric: tabular-nums; }
 .closes .track { display: block; width: 3.5rem; height: 0.25rem; border-radius: 2px; background: var(--line2); overflow: hidden; }
 .closes .fill { display: block; height: 100%; background: var(--accent); }
-.matrix { display: grid; gap: 3px; font-size: 0.7812rem; padding: 0.75rem 0.875rem 0.875rem; }
+.matrix { display: grid; gap: 3px; font-size: 0.7812rem; padding: 0.75rem 0.875rem 0.875rem; overflow-x: auto; }
 .matrix .lab { display: flex; flex-direction: column; justify-content: center; white-space: nowrap; overflow: hidden; color: var(--ink3); font-size: 0.75rem; }
 .matrix .lab b { color: var(--ink); font-weight: 500; font-size: 0.7812rem; font-family: var(--mono); }
 .matrix .hd { color: var(--ink3); font-size: 0.6875rem; line-height: 1.25; text-align: center; font-family: var(--mono); align-self: end; }
@@ -464,7 +464,7 @@ ul.links { list-style: none; margin: -0.25rem -0.5rem; padding: 0; }
 .gsel-h { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; font-size: 1rem; }
 .gsel-s { margin: 0; color: var(--ink2); }
 .gsel-a { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.25rem; }
-.ghint { position: absolute; left: 3.5rem; bottom: 0.75rem; max-width: calc(100% - 26rem); margin: 0; color: var(--ink2); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 0.5rem 0.75rem; z-index: 2; }
+.ghint { position: absolute; left: 3.5rem; bottom: 0.75rem; max-width: max(14rem, calc(100% - 26rem)); margin: 0; color: var(--ink2); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 0.5rem 0.75rem; z-index: 2; }
 .sim-page { display: grid; grid-template-columns: minmax(0, 1fr) minmax(26rem, 42%); height: 100%; min-height: 0; }
 .sim-page > .list, .sim-page > .panel { overflow: auto; min-height: 0; }
 
@@ -618,3 +618,4 @@ table.xt tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offs
   .paper { background: #fff; color: #161A26; --r-ink: #161A26; --r-ink2: #545B6E; --r-line: #E2E5EB; --r-line2: #C9CDD6; --r-code: #F3F4F7; --r-warn: #876600; --r-crit: #D7263D; --r-high: #C25E00; --r-low: #23946A; }
 }
 .xs { font-size: 0.75rem; }
+@media (max-width: 760px) { .ghint, .glegend { display: none; } }

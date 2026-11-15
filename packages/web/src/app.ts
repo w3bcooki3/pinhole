@@ -500,7 +500,8 @@ function dashboard(): HTMLElement {
 
   const accs = [...accounts].sort();
   const regs = [...regions].sort();
-  const matrix = h('div', { class: 'matrix', style: `grid-template-columns:minmax(6.5rem,1.2fr) repeat(${regs.length},minmax(0,1fr))` }, h('span'), ...regs.map((x) => { const m = /^(.*)-(\d+)$/.exec(x); return h('span', { class: 'hd', title: x }, ...(m ? [m[1]!, h('br'), m[2]!] : [x])); }));
+  // Region columns keep a readable minimum width; with many Regions the grid scrolls sideways instead of overlapping.
+  const matrix = h('div', { class: 'matrix', style: `grid-template-columns:minmax(6.5rem,1.2fr) repeat(${regs.length},minmax(4rem,1fr))` }, h('span'), ...regs.map((x) => { const m = /^(.*)-(\d+)$/.exec(x); return h('span', { class: 'hd', title: x }, ...(m ? [...m[1]!.split('-').flatMap((part, i, all) => [part + (i < all.length - 1 ? '-' : ''), h('wbr')]), h('br'), m[2]!] : [x])); }));
   for (const a of accs) {
     const inAcc = rows.filter((r) => r.snap.account === a);
     matrix.append(h('span', { class: 'lab' }, h('b', {}, a), D.plural(inAcc.length, 'exposure')));

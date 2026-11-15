@@ -41,7 +41,7 @@ function richProd() {
     const eni = `eni-0${(4096 + i * 977).toString(16)}${name.length}`;
     s.ec2.NetworkInterfaces.push({
       NetworkInterfaceId: eni, SubnetId: 'subnet-public', VpcId: 'vpc-0a1b2c3d', InterfaceType: 'interface',
-      PrivateIpAddresses: [{ PrivateIpAddress: `10.0.1.${40 + i}`, Primary: true, Association: { PublicIp: `54.210.${12 + i}.${100 + i * 7}`, IpOwnerId: i % 2 ? '111122223333' : 'amazon' } }],
+      PrivateIpAddresses: [{ PrivateIpAddress: `10.0.1.${40 + i}`, Primary: true, Association: { PublicIp: `192.0.2.${100 + i * 7}`, IpOwnerId: i % 2 ? '111122223333' : 'amazon' } }],
       Groups: [{ GroupId: sg }], Attachment: { InstanceId: `i-0${(52000 + i * 311).toString(16)}`, DeviceIndex: 0 },
     });
     s.ec2.Instances.push({ InstanceId: `i-0${(52000 + i * 311).toString(16)}`, State: { Name: 'running' }, Tags: [{ Key: 'Name', Value: name }], NetworkInterfaces: [{ NetworkInterfaceId: eni, Attachment: { DeviceIndex: 0 } }] });
@@ -65,6 +65,21 @@ function richProdEarlier() {
 // Two accounts linked by VPC peering (fixture 11), moved to eu-central-1 so
 // they do not collide with the other demo scopes.
 const linked = (file) => JSON.parse(readFileSync(join(root, 'fixtures', '11-cross-account-peering', file), 'utf8').replaceAll('us-east-1', 'eu-central-1'));
+// Fixture 10 plus a dual-stack ALB with no public IPv4: reachable over IPv6 only.
+function edge() {
+  const s = fx('10-ipv6-exposure');
+  const arn = 'arn:aws:elasticloadbalancing:us-east-2:444455556666:loadbalancer/app/storefront/5e6f7a8b';
+  s.ec2.NetworkInterfaces.push({ NetworkInterfaceId: 'eni-0storefront', SubnetId: 'subnet-dual', VpcId: 'vpc-1', InterfaceType: 'interface', Description: 'ELB app/storefront/5e6f7a8b', PrivateIpAddresses: [{ PrivateIpAddress: '10.0.1.50', Primary: true }], Ipv6Addresses: [{ Ipv6Address: '2600:1f18:aaaa:ff01::50' }], Groups: [{ GroupId: 'sg-storefront' }] });
+  s.ec2.SecurityGroups.push({ GroupId: 'sg-storefront', GroupName: 'storefront', VpcId: 'vpc-1' });
+  s.ec2.SecurityGroupRules.push({ SecurityGroupRuleId: 'sgr-0storefront443', GroupId: 'sg-storefront', IsEgress: false, IpProtocol: 'tcp', FromPort: 443, ToPort: 443, CidrIpv6: '::/0' });
+  s.elbv2 = {
+    LoadBalancers: [{ LoadBalancerArn: arn, LoadBalancerName: 'storefront', Type: 'application', Scheme: 'internet-facing', VpcId: 'vpc-1', IpAddressType: 'dualstack-without-public-ipv4', AvailabilityZones: [{ SubnetId: 'subnet-dual', ZoneName: 'us-east-1a' }], SecurityGroups: ['sg-storefront'] }],
+    Listeners: [{ ListenerArn: `${arn}/l443`, LoadBalancerArn: arn, Port: 443, Protocol: 'HTTPS', DefaultActions: [{ Type: 'forward', TargetGroupArn: `${arn}/tg` }] }],
+    TargetGroups: [{ TargetGroupArn: `${arn}/tg`, TargetGroupName: 'storefront', Protocol: 'HTTP', Port: 8080, TargetType: 'instance', VpcId: 'vpc-1' }],
+    TargetHealth: { [`${arn}/tg`]: [{ Target: { Id: 'i-dual', Port: 8080 } }] },
+  };
+  return s;
+}
 const withScope = (s, account, region) => ({ ...s, accountId: account, region, collectedAt: '2026-11-12T09:44:00Z' });
 export const DEMO = [
   { name: 'prod us-east-1', snapshot: richProd() },
@@ -72,7 +87,7 @@ export const DEMO = [
   { name: 'platform us-east-1', snapshot: withScope(fx('08-nlb-client-ip-preservation'), '444455556666', 'us-east-1') },
   { name: 'platform ap-southeast-2', snapshot: withScope(fx('01-nacl-ephemeral-return'), '444455556666', 'ap-southeast-2') },
   { name: 'orders us-west-2', snapshot: withScope(fx('09-lateral-movement'), '111122223333', 'us-west-2') },
-  { name: 'edge us-east-2', snapshot: withScope(fx('10-ipv6-exposure'), '444455556666', 'us-east-2') },
+  { name: 'edge us-east-2', snapshot: withScope(edge(), '444455556666', 'us-east-2') },
   { name: 'shared-services eu-central-1', snapshot: linked('account-a/snapshot.json') },
   { name: 'payments eu-central-1', snapshot: linked('account-b/snapshot.json') },
   { name: 'prod us-east-1, a week earlier', snapshot: richProdEarlier() },

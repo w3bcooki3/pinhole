@@ -279,6 +279,8 @@ export interface LoadBalancer {
   /** Private IPs of the load balancer nodes, from its ENIs. */
   nodeIps: string[];
   nodeEniIds: string[];
+  /** ipv4, dualstack, or dualstack-without-public-ipv4; undefined when the snapshot does not say. Dual-stack listeners also take IPv6 clients. */
+  ipAddressType?: 'ipv4' | 'dualstack' | 'dualstack-without-public-ipv4';
 }
 
 export interface Listener {

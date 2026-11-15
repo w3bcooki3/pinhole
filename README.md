@@ -8,7 +8,7 @@
 
 **[Open the console](https://w3bcooki3.github.io/pinhole/)** · **[Documentation](https://w3bcooki3.github.io/pinhole/docs/)** · [Quick start](#quick-start) · [How it decides](#how-it-decides) · [Limitations](#limitations) · [Report a wrong result](https://github.com/w3bcooki3/pinhole/issues/new/choose)
 
-![Pinhole dashboard: 19 internet exposures, 7 attack chains, and a verified 11-step fix plan](docs/images/dashboard.png)
+![Pinhole dashboard: 21 internet exposures, 9 attack chains, and a verified 13-step fix plan](docs/images/dashboard.png)
 
 Pinhole reads your network configuration with read-only AWS calls, saves it as a JSON snapshot, and analyses the snapshot offline: in your browser or on the command line. Nothing is uploaded, and nothing in your account is changed.
 
@@ -38,11 +38,17 @@ node packages/cli/dist/main.js exposure pinhole-snapshot-*.json
 <table>
 <tr>
 <td width="50%"><img src="docs/images/exposure.png" alt="An exposure: a one-sentence verdict, the path hop by hop with the rule at each step, and verified fixes"></td>
-<td width="50%"><img src="docs/images/chain.png" alt="An attack chain from an internet-facing bastion to a Redis cache, with the rule that cuts it"></td>
+<td width="50%"><img src="docs/images/chain.png" alt="An attack chain from a bastion in one account to a database in another, through a peering connection, with the one rule that cuts it"></td>
 </tr>
 <tr>
 <td>Each exposure: a plain verdict, the exact path, and verified fixes.</td>
-<td>Each attack chain: the route, why it works, and what cuts it.</td>
+<td>Each attack chain, even across accounts: the route, why it works, and what cuts it.</td>
+</tr>
+<tr>
+<td colspan="2"><img src="docs/images/graph.png" alt="The attack graph: internet, entry points and exposed resources for nine snapshots, laid out in two columns"></td>
+</tr>
+<tr>
+<td colspan="2">The attack graph: every entry point and exposed resource, grouped by account, Region and VPC.</td>
 </tr>
 </table>
 
@@ -289,7 +295,7 @@ To add a fixture, create `fixtures/NN-name/` with `snapshot.json`, `expected.jso
 Read these before relying on a clean report.
 
 - **Scope is VPC network paths to interfaces and Application/Network Load Balancers.** Services that are public by design and not reached through a VPC interface are not covered: S3 buckets, API Gateway, Lambda function URLs, CloudFront distributions, public RDS snapshots, and so on. Use a configuration scanner such as Prowler or AWS Security Hub alongside Pinhole for those.
-- **IPv6** exposure of network interfaces is analysed for TCP and UDP, exactly, the same way as IPv4: an IPv6 address needs no public IP, so any interface with one in a subnet routed to an internet gateway is checked. Not analysed for IPv6: ICMPv6, load balancer listeners (dual-stack load balancers are flagged in Coverage), prefix lists with IPv6 entries, IPv6 lateral movement, and IPv6 rules in Terraform plans. The IPv6 internet is taken to be global unicast space (`2000::/3`) outside the VPC's own IPv6 blocks.
+- **IPv6** exposure of network interfaces and of dual-stack load balancer listeners is analysed for TCP and UDP, exactly, the same way as IPv4: an IPv6 address needs no public IP, so any interface with one in a subnet routed to an internet gateway is checked. Not analysed for IPv6: ICMPv6, prefix lists with IPv6 entries, IPv6 lateral movement, and IPv6 rules in Terraform plans. The IPv6 internet is taken to be global unicast space (`2000::/3`) outside the VPC's own IPv6 blocks.
 - **Not modelled, detected and warned about:** AWS Network Firewall, Gateway Load Balancer, routes to appliances (ENI or instance targets), gateway route tables (ingress routing on the internet gateway), Global Accelerator, CloudFront, Classic Load Balancers, VPN and Direct Connect paths. Results that pass through these are `unknown`, or incomplete where only a warning is possible.
 - **One account and one region per snapshot.** Load the snapshots on both sides of a peering connection or transit gateway together (in the console, or `pinhole blast A.json B.json`) and they are joined, so attack chains are followed across. Analysed alone, a path into a snapshot that is not loaded ends as `unknown`. Transit gateway route tables shared from another account can only be searched when the owner account's snapshot is loaded too. Only attack chains are followed across snapshots; internet exposure never needs to be, because it is decided inside one VPC.
 - **Configuration, not traffic.** The snapshot is a point in time. Existing connections can outlive a rule change, because security groups track connections. Host firewalls, the OS, and whether anything is listening on the port are outside the model.
@@ -324,7 +330,7 @@ The engine has no dependencies so that it can later share a core with IAM Lens (
 - **M2 (0.2, done):** `pinhole can`, rule hygiene, blast radius and attack chains, verified fixes, what-if simulation, in the CLI and the console.
 - **M3 (0.2, done):** Terraform plan check, snapshot diff, SARIF and Markdown output, and a GitHub Action that fails pull requests that open new internet exposure.
 - **M4 (unreleased, done):** attack chains that cross accounts and Regions through peering and transit gateways, with a verified plan to cut them; a fix planner that considers several open risks at once, re-measures lazily and drops redundant steps.
-- **Next:** IPv6 for load balancers and lateral movement, IPv6 in Terraform plans, and more AWS services in plans (load balancers, subnets).
+- **Next:** IPv6 lateral movement, IPv6 in Terraform plans, and more AWS services in plans (load balancers, subnets).
 
 ## Security
 
