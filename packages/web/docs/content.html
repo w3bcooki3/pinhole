@@ -172,6 +172,10 @@ pinhole collect --profile audit --region us-east-1,eu-west-1 --out-dir snapshots
   <h3 id="cli-can">Can one thing reach another?</h3>
   <!--run can fixtures/09-lateral-movement/snapshot.json --from bastion --to orders-db-->
 
+  <h3 id="cli-repair">Why is it blocked, and how to make it work</h3>
+  <!--run lines=22 can fixtures/09-lateral-movement/snapshot.json --from web --to orders-db --port 5432 --fix-->
+  <p>Each change is the narrowest that lets this connection through, and is checked by evaluating the path again. If the changes would open anything to the internet, the output says so.</p>
+
   <h3 id="cli-blast">What an attacker reaches next</h3>
   <!--run lines=16 blast fixtures/09-lateral-movement/snapshot.json --min-severity critical-->
 
@@ -332,6 +336,7 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
     <li><b>Asymmetric routing.</b> If only one direction of a connection passes a firewall, its stateful engine drops it, and the path says so.</li>
   </ul>
   <p>A rule that also matches on content, a host name or an application protocol (for example <code>pass http ... 8080</code>) cannot be decided from configuration. Pinhole follows both outcomes; when they differ, the exposure is still reported, marked with a caveat that names the firewall and the reason. AWS managed rule groups are assumed to drop only known-malicious traffic.</p>
+  <p>Rule hygiene also covers the firewall: rules that never decide anything because rules the engine applies first, alone or together, already decide all of their traffic. A drop rule hidden behind a pass rule is the usual mistake, and is reported as medium.</p>
   <h3 id="third-party">Third-party appliances</h3>
   <p>A Gateway Load Balancer endpoint for a third-party appliance is followed like a firewall endpoint, but the appliance's rules are not visible to AWS APIs. Paths through it are assumed to pass, and every exposure through it says so, so it can be checked on the appliance itself.</p>
 </section>

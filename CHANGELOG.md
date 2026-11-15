@@ -35,6 +35,21 @@ All notable changes to this project are recorded here. The format follows
   way to copy data to any account), endpoints to other accounts' services,
   and who can use them. `pinhole privatelink` and the console's PrivateLink
   page. Three new read-only permissions. Fixture 16.
+- Repair: `pinhole can --port N --fix` and the console's query page say,
+  for a blocked connection, the fewest changes that make it work (security
+  group rules from the source's own group, network ACL entries numbered
+  before the entry that denies, routes over the peering connection, transit
+  gateway, VPN gateway, NAT gateway or internet gateway that already
+  connects the two ends), each verified by evaluating the path again, with
+  AWS CLI commands, notes on shared groups and tables, and any internet
+  exposure the changes would open.
+- Network Firewall rule hygiene: rules that never decide anything because
+  earlier rules, alone or together, decide all of their traffic first, in
+  the order the stateless and stateful engines apply them (strict or
+  default action order). Redundant rules (same action), shadowed rules
+  (a different action; a drop hidden behind a pass is medium), rules that
+  match nothing, empty groups and unreadable rules, in `pinhole hygiene`
+  and the Rule hygiene page. Checked against brute force.
 - AWS Network Firewall and Gateway Load Balancer appliances in the path.
   Routes to firewall and appliance endpoints are followed: ingress routing on
   the internet gateway, replies through the firewall, east-west inspection,

@@ -23,11 +23,12 @@ import {
   planFixes,
   parseIpv4,
   reachServices,
+  repairPath,
   serviceLabel,
   SEVERITY_ORDER,
   summarizeBreaks,
 } from '@pinhole/engine';
-import type { Breakage, BlastReport, MinCut, Change, CrossChain, ExposureDiff, JoinLink, JoinResult, FixCandidate, FixPlan, HygieneFinding, NetworkModel, PathResult, ServiceReach, Severity } from '@pinhole/engine';
+import type { PathQuery, RepairResult, Breakage, BlastReport, MinCut, Change, CrossChain, ExposureDiff, JoinLink, JoinResult, FixCandidate, FixPlan, HygieneFinding, NetworkModel, PathResult, ServiceReach, Severity } from '@pinhole/engine';
 
 export class LookupError extends Error {}
 
@@ -83,14 +84,38 @@ function outsideRef(model: NetworkModel, ref: string): string | undefined {
   return isInternetRef(ref) ? undefined : ref;
 }
 
-export function canText(model: NetworkModel, fromRef: string, toRef: string, protocol: string, port: number | undefined): { text: string; json: unknown; reachable: boolean } {
+export function repairText(r: RepairResult): string {
+  if (r.verdict === 'already') return '';
+  const lines = ['', r.verdict === 'repaired' ? `To make it work (${r.steps.length} change${r.steps.length === 1 ? '' : 's'}, verified by evaluating the path again):` : r.steps.length ? 'Partly repairable:' : 'No change Pinhole can write makes it work.'];
+  r.steps.forEach((st, i) => {
+    lines.push(`  ${i + 1}. ${st.text}`, `     because: ${st.blockedAt.stage}: ${st.blockedAt.detail}`);
+    for (const n of st.notes) lines.push(`     note: ${n}`);
+    for (const c of st.cli) lines.push(`     $ ${c}`);
+  });
+  if (r.stuck) lines.push(`  Stops at ${r.stuck.stage} (${r.stuck.resourceId}): ${r.stuck.advice}`);
+  if (r.opens.length) {
+    lines.push('  This also changes internet exposure:');
+    for (const o of r.opens) lines.push(`    ${o.status}: ${o.resourceName} ${o.protocol}${o.ports ? `/${o.ports.from === o.ports.to ? o.ports.from : `${o.ports.from}-${o.ports.to}`}` : ''} from ${o.after.slice(0, 3).join(', ')}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/** One connection, and with `fix`, the changes that would make it work. */
+function oneText(model: NetworkModel, q: PathQuery, fix: boolean): { text: string; json: unknown; reachable: boolean } {
+  const r = evaluatePath(model, q);
+  const base = `${r.summary}\n${hopsText(r).join('\n')}\n`;
+  if (!fix) return { text: base, json: r, reachable: r.verdict === 'reachable' };
+  const rep = repairPath(model, q);
+  return { text: base + repairText(rep), json: { ...r, repair: rep }, reachable: r.verdict === 'reachable' };
+}
+
+export function canText(model: NetworkModel, fromRef: string, toRef: string, protocol: string, port: number | undefined, fix = false): { text: string; json: unknown; reachable: boolean } {
   const outTo = outsideRef(model, toRef);
   if (outTo) {
     // An interface to an address outside the snapshot: on-premises, or a network routed elsewhere.
     const from = resolveEni(model, fromRef);
     if (port === undefined && protocol !== 'icmp') throw new LookupError(`${toRef} is not in the snapshot, so its services are not known; give --port.`);
-    const r = evaluatePath(model, { from: { eni: from }, to: { ip: outTo }, protocol, ...(port !== undefined ? { port } : {}) });
-    return { text: `${r.summary}\n${hopsText(r).join('\n')}\n`, json: r, reachable: r.verdict === 'reachable' };
+    return oneText(model, { from: { eni: from }, to: { ip: outTo }, protocol, ...(port !== undefined ? { port } : {}) }, fix);
   }
   const to = resolveEni(model, toRef);
   const onprem = outsideRef(model, fromRef);
@@ -108,8 +133,7 @@ export function canText(model: NetworkModel, fromRef: string, toRef: string, pro
       for (const f of hits) lines.push(`  ${sevTag(f.severity)} ${f.protocol === 'icmp' ? 'icmp echo' : f.ports.from === f.ports.to ? `${f.protocol}/${f.ports.from}` : `${f.protocol}/${f.ports.from}-${f.ports.to}`} over ${f.via}`);
       return { text: `${lines.join('\n')}\n`, json: hits, reachable: hits.length > 0 };
     }
-    const r = evaluatePath(model, { from: { ip: onprem }, to: { eni: to }, protocol, port });
-    return { text: `${r.summary}\n${hopsText(r).join('\n')}\n`, json: r, reachable: r.verdict === 'reachable' };
+    return oneText(model, { from: { ip: onprem }, to: { eni: to }, protocol, port }, fix);
   }
   const internet = isInternetRef(fromRef);
   if (internet) {
@@ -120,13 +144,11 @@ export function canText(model: NetworkModel, fromRef: string, toRef: string, pro
       for (const f of report.findings) lines.push(`  ${sevTag(f.severity)} ${serviceLabel(f)} from ${f.sources.join(', ')}`);
       return { text: `${lines.join('\n')}\n`, json: report.findings, reachable: report.findings.length > 0 };
     }
-    const r = evaluatePath(model, { from: { internet }, to: { eni: to }, protocol, port });
-    return { text: `${r.summary}\n${hopsText(r).join('\n')}\n`, json: r, reachable: r.verdict === 'reachable' };
+    return oneText(model, { from: { internet }, to: { eni: to }, protocol, port }, fix);
   }
   const from = resolveEni(model, fromRef);
   if (port !== undefined) {
-    const r = evaluatePath(model, { from: { eni: from }, to: { eni: to }, protocol, port });
-    return { text: `${r.summary}\n${hopsText(r).join('\n')}\n`, json: r, reachable: r.verdict === 'reachable' };
+    return oneText(model, { from: { eni: from }, to: { eni: to }, protocol, port }, fix);
   }
   const reach = reachServices(model, from, to);
   const lines = [`From ${name(model, from)} to ${name(model, to)}:`];

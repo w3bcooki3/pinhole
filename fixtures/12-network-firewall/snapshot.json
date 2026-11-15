@@ -500,7 +500,7 @@
       }
      },
      "RulesSource": {
-      "RulesString": "# Inbound web traffic, SSH from the office only\npass tcp any any -> $HOME_NET 443 (msg:\"HTTPS in\"; flow:to_server; sid:100;)\npass tcp $OFFICE any -> $HOME_NET 22 (msg:\"SSH from the office\"; sid:101;)\npass http any any -> $HOME_NET 8080 (msg:\"Only HTTP on 8080\"; sid:102;)\ndrop tcp any any -> $HOME_NET 22 (msg:\"Other SSH\"; sid:103;)"
+      "RulesString": "# Inbound web traffic, SSH from the office only\npass tcp any any -> $HOME_NET 443 (msg:\"HTTPS in\"; flow:to_server; sid:100;)\npass tcp $OFFICE any -> $HOME_NET 22 (msg:\"SSH from the office\"; sid:101;)\npass http any any -> $HOME_NET 8080 (msg:\"Only HTTP on 8080\"; sid:102;)\ndrop tcp any any -> $HOME_NET 22 (msg:\"Other SSH\"; sid:103;)\ndrop tcp $OFFICE any -> $HOME_NET 22 (msg:\"Block the office from SSH (never applies: sid 101 passes it first)\"; sid:104;)"
      },
      "StatefulRuleOptions": {
       "RuleOrder": "STRICT_ORDER"

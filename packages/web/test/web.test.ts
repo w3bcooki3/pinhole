@@ -343,6 +343,17 @@ describe('web console', () => {
       expect(text(doc, '.pl-endpoints')).toMatch(/vpce-s3.*Allows everything/);
     });
 
+    it('the query page shows how to make a blocked connection work', () => {
+      const { doc, api } = load9();
+      api.go('ask', { askMode: 'pair', askFrom: 'web', askTo: 'orders-db', askProto: 'tcp', askPort: '5432' });
+      expect(text(doc, '#ask-repair')).toMatch(/2 changes, verified/);
+      expect(text(doc, '#ask-repair')).toMatch(/acl-data/);
+      expect(text(doc, '#ask-repair')).toMatch(/from sg-web/);
+      expect(text(doc, '#ask-repair')).toMatch(/Nothing else becomes reachable from the internet/);
+      api.go('ask', { askMode: 'pair', askFrom: 'internet', askTo: 'bastion', askProto: 'tcp', askPort: '22' });
+      expect(doc.querySelector('#ask-repair')).toBeNull();
+    });
+
     it('on-premises says so when there are no links', () => {
       const { doc, api } = page();
       api.loadText(fixture('06-public-ip-without-igw-route'), 'x.json');
@@ -473,7 +484,7 @@ describe('web console', () => {
 describe('documentation', () => {
   it('builds, with every example produced by the real CLI', () => {
     const out = execFileSync(process.execPath, [join(root, 'scripts/build-docs.mjs')], { cwd: root, encoding: 'utf8' });
-    expect(out).toMatch(/21 sections, 15 live examples/);
+    expect(out).toMatch(/21 sections, 16 live examples/);
     const html = readFileSync(join(root, 'site/docs/index.html'), 'utf8');
     expect(html).not.toMatch(/<!--(run|trace|policy)/);
     expect(html).toContain('pinhole blast account-a/snapshot.json account-b/snapshot.json');

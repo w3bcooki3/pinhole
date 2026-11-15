@@ -277,6 +277,37 @@ Every path over a link carries a caveat: on-premises routers and firewalls are n
 
 **This account's endpoints.** For interface and gateway endpoints: the security group's inbound rules, whether the service belongs to another account (a `vpce-svc-` service not in this snapshot), and whether the endpoint policy has an unconditional statement allowing every principal every action (`*` or `service:*`) on every resource. On S3 and DynamoDB endpoints that is low: data can be copied to buckets and tables in any account ([control access with endpoint policies](https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-access.html)).
 
+## Repairing a blocked connection
+
+`packages/engine/src/repair.ts` (`pinhole can --port N --fix`, and the console's query page).
+
+The connection is evaluated; at the hop that stops it, or the network ACL that turns some replies away, one narrow change is proposed, applied to a copy of the model, and the connection evaluated again, until it works, a hop is reached that configuration Pinhole writes cannot change, or a change makes no progress (at most eight steps).
+
+| Stops at | Change |
+|---|---|
+| Security group, inbound or outbound | A rule for this protocol and port on the interface's group attached to the fewest interfaces, naming the other end's group when both are in one VPC, otherwise its address (/32) |
+| Network ACL, either direction | An allow entry for the peer's address (/32) and the port (the client ephemeral range, 32768-65535, for replies), numbered at the highest free number below the entry that decides it now |
+| Route or return route | A route to what already connects the two ends: an active peering connection or a shared transit gateway (the peer VPC's CIDR), the VPN gateway or transit gateway of an on-premises link (the on-premises network), a NAT gateway that reaches the internet for a server without a public address, or the internet gateway (0.0.0.0/0, or only the client's address when the table already sends 0.0.0.0/0 elsewhere) |
+| Public IP, internet gateway | Attach an Elastic IP, attach an internet gateway |
+| Firewall, appliance, NAT gateway, transit gateway route table | No change; the advice names what to change |
+
+Notes say when a group, route table or network ACL is shared by other interfaces or subnets. Afterwards the internet exposure of the whole model is compared before and after, and anything new or wider is listed.
+
+## Network Firewall rule hygiene
+
+`packages/engine/src/fwhygiene.ts`, reported with the rest of rule hygiene.
+
+A rule never decides anything when every packet it matches is matched first by a rule that ends the evaluation. The order is the engine's: stateless groups by priority and rules by priority, where pass, drop and forward all end it ([rule engines](https://docs.aws.amazon.com/network-firewall/latest/developerguide/firewall-rules-engines.html)); stateful rules in strict order (groups by priority, rules as written) or in default action order (every pass, then drop, reject and alert, [evaluation order](https://docs.aws.amazon.com/network-firewall/latest/developerguide/suricata-rule-evaluation-order.html)), where pass, drop and reject end it and alert does not. A group with the `DROP_TO_ALERT` override counts as alerts.
+
+Each rule is a union of boxes over protocol, source and destination addresses, source and destination ports, and, for stateful rules, direction (`flow:to_server`, `to_client`, or both; `<>` adds the reversed box). Variables and negations are resolved as for path evaluation. The earlier rules' boxes are cut into cells inside each of the rule's boxes, so cover by several rules together is found exactly. Rules that also match on the traffic itself (TCP flags, content, host names, application protocols) can be covered but never cover others. IPv6 rules are skipped.
+
+- *Redundant* (info): the covering rules all take the same action. Removing the rule changes nothing.
+- *Shadowed* (low; medium for a drop or reject hidden behind a pass): the covering rules decide differently, so the rule's action never happens.
+- *Matches nothing* (info): a field is empty once resolved, for example `[10.0.0.0/8,!10.0.0.0/8]`.
+- *Empty group*, and rules that could not be read (info).
+
+`packages/engine/test/fwhygiene.test.ts` checks the stateless result against brute force over every packet class on random rule lists.
+
 ## Out of scope, detected and warned about
 
 | Detected | How |

@@ -674,3 +674,11 @@ table.xt tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offs
 .pl-v { font-weight: 600; }
 .pl-v.reachable, .pl-v.partial { color: var(--critical); }
 .pl-v.blocked { color: var(--low-ink); }
+
+/* Repair */
+.repair { margin-top: 1rem; }
+.repair-step { display: grid; grid-template-columns: 1.75rem 1fr; gap: 0.5rem; margin-bottom: 1rem; }
+.repair-n { width: 1.5rem; height: 1.5rem; border-radius: 50%; background: var(--accent-soft); color: var(--accent-ink); display: grid; place-items: center; font-weight: 650; font-size: 0.8125rem; }
+.repair-note { margin-top: 0.25rem; }
+.repair-stuck { font-weight: 600; }
+.warn-bar { padding: 0.5rem 0.75rem; margin-top: 0.5rem; border-radius: var(--r); border: 1px solid var(--medium); background: var(--medium-soft); color: var(--medium-ink); font-weight: 500; }

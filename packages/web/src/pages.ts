@@ -3,8 +3,8 @@
  * rule hygiene, plus the command palette. They get the app's state and
  * navigation through a small context object, so they do not depend on app.ts.
  */
-import { analyzeBlastRadius, analyzeExposure, analyzeOnPrem, applyChanges, onPremNetworks, parseIpv4, ChangeError, cliFor, describeBreak, describeChange, diffExposure, evaluatePath, isLateralTarget, reachServices, ruleText, serviceLabel, summarizeBreaks } from '@pinhole/engine';
-import type { AttackChain, Breakage, Change, ExposureDiff, NetworkModel, PathResult, ServiceReach } from '@pinhole/engine';
+import { analyzeBlastRadius, analyzeExposure, analyzeOnPrem, applyChanges, repairPath, onPremNetworks, parseIpv4, ChangeError, cliFor, describeBreak, describeChange, diffExposure, evaluatePath, isLateralTarget, reachServices, ruleText, serviceLabel, summarizeBreaks } from '@pinhole/engine';
+import type { AttackChain, Breakage, Change, ExposureDiff, NetworkModel, PathQuery, PathResult, ServiceReach } from '@pinhole/engine';
 import { h, on, toast } from './dom.js';
 import type { Child } from './dom.js';
 import * as D from './data.js';
@@ -584,13 +584,17 @@ export function askPage(ctx: Ctx): HTMLElement {
     if (!fromId) results.append(h('div', { class: 'error-bar' }, `"${st.askFrom}" is not a name, interface ID, instance ID or private IP in ${snap.account} / ${snap.region}.`));
     else if (!st.askPort && st.askProto !== 'icmp') results.append(h('div', { class: 'error-bar' }, `${outTo} is not in the snapshot, so its services are not known. Give a port.`));
     else {
-      const r = evaluatePath(m, { from: { eni: fromId }, to: { ip: outTo }, protocol: st.askProto, ...(st.askPort ? { port: Number(st.askPort) } : {}) });
+      const q: PathQuery = { from: { eni: fromId }, to: { ip: outTo }, protocol: st.askProto, ...(st.askPort ? { port: Number(st.askPort) } : {}) };
+      const r = evaluatePath(m, q);
       results.append(verdictBox(r, `${eniLabel(m, fromId)} → ${outTo}`));
+      if (r.verdict !== 'reachable' || r.returnPath === 'partial') results.append(repairBox(m, q));
     }
   } else if (outFrom && toId) {
     if (st.askPort) {
-      const r = evaluatePath(m, { from: { ip: outFrom }, to: { eni: toId }, protocol: st.askProto, port: Number(st.askPort) });
+      const q: PathQuery = { from: { ip: outFrom }, to: { eni: toId }, protocol: st.askProto, port: Number(st.askPort) };
+      const r = evaluatePath(m, q);
       results.append(verdictBox(r, `${outFrom} → ${eniLabel(m, toId)}`));
+      if (r.verdict !== 'reachable' || r.returnPath === 'partial') results.append(repairBox(m, q));
     } else {
       const ip = parseIpv4(outFrom);
       const rep = analyzeOnPrem(m, { only: new Set([toId]) });
@@ -603,8 +607,10 @@ export function askPage(ctx: Ctx): HTMLElement {
     if (isInternet(st.askFrom)) {
       const ip = /^internet$/i.test(st.askFrom.trim()) ? '198.51.100.1' : st.askFrom.trim();
       if (st.askPort) {
-        const r = evaluatePath(m, { from: { internet: ip }, to: { eni: toId }, protocol: st.askProto, port: Number(st.askPort) });
+        const q: PathQuery = { from: { internet: ip }, to: { eni: toId }, protocol: st.askProto, port: Number(st.askPort) };
+        const r = evaluatePath(m, q);
         results.append(verdictBox(r, `${ip === '198.51.100.1' ? 'An internet address' : ip} → ${eniLabel(m, toId)}`));
+        if (r.verdict !== 'reachable' || r.returnPath === 'partial') results.append(repairBox(m, q));
       } else {
         const rep = analyzeExposure(m, { only: new Set([toId]) });
         results.append(servicesBox(`The internet → ${eniLabel(m, toId)}`, rep.findings.map((f) => ({ label: serviceLabel(f), sev: f.severity, note: `from ${f.sources.join(', ')}`, hops: f.trace }))));
@@ -613,8 +619,10 @@ export function askPage(ctx: Ctx): HTMLElement {
       const fromId = resolveRef(m, st.askFrom);
       if (!fromId) results.append(h('div', { class: 'error-bar' }, `"${st.askFrom}" is not a name, interface ID, instance ID or private IP in ${snap.account} / ${snap.region}.`));
       else if (st.askPort) {
-        const r = evaluatePath(m, { from: { eni: fromId }, to: { eni: toId }, protocol: st.askProto, port: Number(st.askPort) });
+        const q: PathQuery = { from: { eni: fromId }, to: { eni: toId }, protocol: st.askProto, port: Number(st.askPort) };
+        const r = evaluatePath(m, q);
         results.append(verdictBox(r, `${eniLabel(m, fromId)} → ${eniLabel(m, toId)}`));
+        if (r.verdict !== 'reachable' || r.returnPath === 'partial') results.append(repairBox(m, q));
       } else {
         const reach = reachServices(m, fromId, toId);
         results.append(servicesBox(`${eniLabel(m, fromId)} → ${eniLabel(m, toId)}`, reach.services.map((x) => ({ label: serviceLabel(x), sev: x.severity, note: svcNote(x), hops: x.trace }))));
@@ -638,6 +646,28 @@ export function askPage(ctx: Ctx): HTMLElement {
 }
 
 const svcNote = (x: ServiceReach) => [x.name, x.pivot ? 'remote access' : '', x.verdict === 'unknown' ? `unknown: ${x.unknownAt ?? ''}` : '', x.returnPath === 'partial' ? 'responses only for some client ports' : ''].filter(Boolean).join(', ');
+
+/** The fewest changes that make a blocked connection work, each verified, with what else they open. */
+function repairBox(m: NetworkModel, q: PathQuery): HTMLElement {
+  const r = repairPath(m, q);
+  const box = h('section', { class: 'box repair', id: 'ask-repair' }, boxHead('How to make it work', r.verdict === 'repaired' ? `${D.plural(r.steps.length, 'change')}, verified by evaluating the path again` : 'Not fully repairable by configuration'));
+  const pad = h('div', { class: 'pad' });
+  r.steps.forEach((st, i) =>
+    pad.append(
+      h(
+        'div',
+        { class: 'repair-step' },
+        h('div', { class: 'repair-n' }, String(i + 1)),
+        h('div', {}, h('strong', {}, st.text), h('div', { class: 'faint' }, `Because ${D.STAGE[st.blockedAt.stage] ?? st.blockedAt.stage}: ${st.blockedAt.detail}`), ...st.notes.map((n) => h('div', { class: 'repair-note' }, n)), cmdBlock(st.cli)),
+      ),
+    ),
+  );
+  if (r.stuck) pad.append(h('p', { class: 'repair-stuck' }, `Stops at ${D.STAGE[r.stuck.stage] ?? r.stuck.stage} (${r.stuck.resourceId}): ${r.stuck.advice}`));
+  if (r.opens.length) pad.append(h('div', { class: 'warn-bar' }, `These changes also open to the internet: ${r.opens.map((o) => `${o.resourceName} ${o.protocol}${o.ports ? `/${o.ports.from === o.ports.to ? o.ports.from : `${o.ports.from}-${o.ports.to}`}` : ''}`).join('; ')}.`));
+  else if (r.steps.length) pad.append(h('p', { class: 'faint' }, 'Nothing else becomes reachable from the internet.'));
+  box.append(pad);
+  return box;
+}
 
 function verdictBox(r: PathResult, title: string): HTMLElement {
   const tone = r.verdict === 'reachable' ? 'good' : r.verdict === 'blocked' ? 'bad' : 'warn';
@@ -720,6 +750,11 @@ const HYG_LABEL: Record<string, string> = {
   'shadowed-together': 'Never matches',
   'compactable-group': 'Can be smaller',
   'near-quota': 'Near quota',
+  'firewall-shadowed-rule': 'Firewall rule never decides',
+  'firewall-redundant-rule': 'Redundant firewall rule',
+  'firewall-rule-matches-nothing': 'Firewall rule matches nothing',
+  'firewall-empty-group': 'Empty rule group',
+  'firewall-unreadable-rule': 'Unreadable firewall rule',
 };
 
 export function hygienePage(ctx: Ctx): HTMLElement {

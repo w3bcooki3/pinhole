@@ -76,6 +76,15 @@ describe('pinhole CLI', () => {
     expect((await cli('privatelink', fx('06-public-ip-without-igw-route'))).stdout).toMatch(/Endpoint services this account provides: 0/);
   });
 
+  it('can --fix lists verified changes that make a blocked connection work', async () => {
+    const r = await cli('can', fx('09-lateral-movement'), '--from', 'web', '--to', 'orders-db', '--port', '5432', '--fix');
+    expect(r.stdout).toMatch(/To make it work \(2 changes, verified/);
+    expect(r.stdout).toMatch(/\$ aws ec2 authorize-security-group-ingress .* --group-id sg-db/);
+    expect((await cli('can', fx('09-lateral-movement'), '--from', 'web', '--to', 'orders-db', '--fix')).stderr).toMatch(/--fix needs --port/);
+    const j = JSON.parse((await cli('can', fx('15-hybrid'), '--from', '192.168.10.5', '--to', 'db', '--port', '5432', '--fix', '--format', 'json')).stdout);
+    expect(j.repair.steps[0].change).toEqual({ kind: 'add-route', routeTableId: 'rtb-db', destination: '192.168.0.0/16', targetId: 'vgw-1' });
+  });
+
   it('can answers for addresses on-premises, both ways', async () => {
     const f = fx('15-hybrid');
     expect((await cli('can', f, '--from', '192.168.10.5', '--to', 'app')).stdout).toMatch(/tcp\/22 over vgw-1/);

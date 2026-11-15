@@ -141,8 +141,8 @@ function readGroup(arn: string, raw: RawRuleGroupDescription | undefined): Firew
 
 /** Suricata keywords that only label or count a rule, or state the flow direction; anything else matches on content. */
 const NEUTRAL = new Set(['msg', 'sid', 'rev', 'gid', 'classtype', 'priority', 'metadata', 'reference', 'target', 'noalert', 'flow']);
-const APP_TCP = new Set(['http', 'http2', 'tls', 'ssh', 'smtp', 'ftp', 'ftp-data', 'imap', 'smb', 'dcerpc', 'krb5', 'dns', 'nfs', 'msn', 'rdp', 'pop3', 'mqtt', 'quic']);
-const APP_UDP = new Set(['dns', 'dhcp', 'ntp', 'tftp', 'ikev2', 'snmp', 'sip', 'krb5', 'nfs', 'quic', 'dcerpc']);
+export const APP_TCP = new Set(['http', 'http2', 'tls', 'ssh', 'smtp', 'ftp', 'ftp-data', 'imap', 'smb', 'dcerpc', 'krb5', 'dns', 'nfs', 'msn', 'rdp', 'pop3', 'mqtt', 'quic']);
+export const APP_UDP = new Set(['dns', 'dhcp', 'ntp', 'tftp', 'ikev2', 'snmp', 'sip', 'krb5', 'nfs', 'quic', 'dcerpc']);
 const KNOWN_PROTO = new Set(['ip', 'tcp', 'udp', 'icmp', 'tcp-pkt', 'tcp-stream', ...APP_TCP, ...APP_UDP]);
 
 /** Why a rule depends on more than addresses and ports, or undefined. */
@@ -302,12 +302,12 @@ interface FwPacket {
 }
 
 /** Variables for one rule group under one firewall: HOME_NET and friends, as address sets; port sets. */
-interface Vars {
+export interface Vars {
   ip: Map<string, RangeSet>;
   port: Map<string, PortRange[]>;
 }
 
-function addrSet(spec: string, vars: Vars, depth = 0): RangeSet {
+export function addrSet(spec: string, vars: Vars, depth = 0): RangeSet {
   const s = spec.trim();
   if (depth > 10) throw new Error('variables refer to each other in a loop');
   if (s === 'any' || s === '') return ALL;
@@ -350,7 +350,7 @@ function splitList(body: string): string[] {
   return out;
 }
 
-function portSet(spec: string, vars: Vars, depth = 0): PortRange[] {
+export function portSet(spec: string, vars: Vars, depth = 0): PortRange[] {
   const s = spec.trim();
   if (depth > 10) throw new Error('port variables refer to each other in a loop');
   if (s === 'any' || s === '') return [{ from: 0, to: 65535 }];
@@ -403,7 +403,7 @@ function minus(list: PortRange[], cut: PortRange[]): PortRange[] {
 const inPorts = (p: number | undefined, list: PortRange[]) => p === undefined || list.some((r) => p >= r.from && p <= r.to);
 
 /** Variables for a rule group running under a firewall. */
-function varsFor(model: NetworkModel, fw: Firewall, policy: FirewallPolicy, g: FirewallRuleGroup): Vars {
+export function varsFor(model: NetworkModel, fw: Firewall, policy: FirewallPolicy, g: FirewallRuleGroup): Vars {
   const ip = new Map<string, RangeSet>();
   const port = new Map<string, PortRange[]>();
   const vpc = model.vpcs.get(fw.vpcId);
@@ -468,10 +468,10 @@ function stateless(model: NetworkModel, policy: FirewallPolicy, pkt: FwPacket): 
   return { action: d, why: `no stateless rule matches; the default action ${d === 'forward' ? 'forwards it to the stateful engine' : d === 'pass' ? 'passes it' : 'drops it'}` };
 }
 
-type Stateful = { rule: StatefulRule; group: FirewallRuleGroup; vars: Vars; demote: boolean };
+export type Stateful = { rule: StatefulRule; group: FirewallRuleGroup; vars: Vars; demote: boolean };
 
 /** The stateful rules in the order the engine applies them. */
-function statefulOrder(model: NetworkModel, fw: Firewall, policy: FirewallPolicy): { list: Stateful[]; missing?: string } {
+export function statefulOrder(model: NetworkModel, fw: Firewall, policy: FirewallPolicy): { list: Stateful[]; missing?: string } {
   const refs = [...policy.statefulGroups];
   if (policy.ruleOrder === 'STRICT_ORDER') refs.sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
   const list: Stateful[] = [];

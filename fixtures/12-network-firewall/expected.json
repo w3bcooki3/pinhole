@@ -54,5 +54,8 @@
         { "resource": "eni-db", "protocol": "tcp", "port": 5432, "status": "opened" }
       ]
     }
-  ]
+  ],
+  "hygiene": {
+    "exact": ["open-to-world sgr-db-5432", "open-to-world sgr-web-22", "open-to-world sgr-web-23", "open-to-world sgr-web-3389", "open-to-world sgr-web-8080", "firewall-shadowed-rule web-in sid 104"]
+  }
 }

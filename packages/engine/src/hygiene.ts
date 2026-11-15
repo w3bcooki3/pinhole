@@ -12,6 +12,7 @@ import { ruleText, shellQuote } from './whatif.js';
 import type { Change } from './whatif.js';
 import type { ExposureReport } from './exposure.js';
 import { PROTO_ALL } from './types.js';
+import { firewallHygiene } from './fwhygiene.js';
 import type { Cidr, NaclEntry, NetworkModel, SgRule } from './types.js';
 
 export type HygieneCode =
@@ -27,7 +28,13 @@ export type HygieneCode =
   | 'redundant-attached'
   | 'shadowed-together'
   | 'compactable-group'
-  | 'near-quota';
+  | 'near-quota'
+  // From fwhygiene.ts:
+  | 'firewall-shadowed-rule'
+  | 'firewall-redundant-rule'
+  | 'firewall-rule-matches-nothing'
+  | 'firewall-empty-group'
+  | 'firewall-unreadable-rule';
 
 export interface HygieneFinding {
   code: HygieneCode;
@@ -200,5 +207,6 @@ export function analyzeHygiene(model: NetworkModel, exposure?: ExposureReport): 
   }
 
   for (const f of out) if (f.ruleId && exposing.has(f.ruleId) && (f.code === 'open-to-world' || f.code === 'all-ports')) f.inExposure = true;
+  out.push(...firewallHygiene(model));
   return out.sort((a, b) => compareSeverity(a.severity, b.severity) || a.resourceId.localeCompare(b.resourceId) || (a.ruleId ?? '').localeCompare(b.ruleId ?? ''));
 }

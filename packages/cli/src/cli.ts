@@ -37,7 +37,7 @@ Usage:
   pinhole collect  [--profile NAME] [--region REGION[,REGION...]] [--out FILE | --out-dir DIR]
   pinhole exposure SNAPSHOT [--format text|json|sarif|markdown] [--min-severity LEVEL]
                               [--fail-on LEVEL] [--verbose]
-  pinhole can      SNAPSHOT --from WHO --to WHO [--port N] [--protocol tcp|udp|icmp]
+  pinhole can      SNAPSHOT --from WHO --to WHO [--port N [--fix]] [--protocol tcp|udp|icmp]
   pinhole blast    SNAPSHOT [SNAPSHOT...] [--depth N] [--min-severity LEVEL] [--fail-on LEVEL]
   pinhole fix      SNAPSHOT [--plan [--policy POLICY.json]] [--min-severity LEVEL] [--all]
   pinhole hygiene  SNAPSHOT [--fail-on LEVEL]
@@ -70,7 +70,10 @@ can       Whether one resource can reach another, and on which services.
           WHO is an interface ID, instance ID, private IP, instance Name tag,
           a public IP, "internet", or an address on-premises (reached over
           Site-to-Site VPN or Direct Connect). Without --port, lists every
-          service.
+          service. With --port and --fix, a blocked connection comes with
+          the fewest changes that make it work (security group rules,
+          network ACL entries, routes), each verified by evaluating the
+          path again, and any internet exposure they would open.
 blast     What an attacker reaches after taking over each internet-exposed
           resource, moving on through remote administration services, and
           the smallest set of rules that cuts every path to the crown jewels
@@ -252,12 +255,13 @@ function checkFormat(f: string | undefined): 'text' | 'json' {
 const json = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
 
 function cmdCan(args: string[], io: Io): number {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, from: { type: 'string' }, to: { type: 'string' }, port: { type: 'string' }, protocol: { type: 'string', default: 'tcp' } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, from: { type: 'string' }, to: { type: 'string' }, port: { type: 'string' }, protocol: { type: 'string', default: 'tcp' }, fix: { type: 'boolean', default: false } } });
   const format = checkFormat(values.format);
   if (!values.from || !values.to) throw new UsageError('can needs --from and --to.');
+  if (values.fix && values.port === undefined) throw new UsageError('--fix needs --port: it repairs one connection.');
   const port = values.port === undefined ? undefined : Number(values.port);
   if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) throw new UsageError('--port must be 0-65535.');
-  const r = canText(snapshotModel(positionals, 'can'), values.from, values.to, values.protocol ?? 'tcp', port);
+  const r = canText(snapshotModel(positionals, 'can'), values.from, values.to, values.protocol ?? 'tcp', port, values.fix ?? false);
   io.stdout(format === 'json' ? json(r.json) : safeForTerminal(r.text));
   return 0;
 }
