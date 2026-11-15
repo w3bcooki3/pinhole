@@ -1,0 +1,351 @@
+<!--
+  Pinhole documentation. Built into site/docs/index.html by scripts/build-docs.mjs.
+  Each <section> with an id and an <h2> becomes a page in the sidebar; its <h3>s
+  become "On this page" links. Placeholders filled at build time:
+    <!-run [lines=N] [from=Word] ARGS->   runs the Pinhole CLI on the repository's fixtures and shows the real
+                              output, optionally only from the first line starting with Word
+    <!-trace->                a real hop-by-hop trace from fixture 09
+    <!-policy->               docs/iam-policy.json
+  (written here with one dash so this comment does not match).
+-->
+
+<section id="overview" data-group="Start here" data-title="Overview">
+  <div class="hero">
+    <h1>See what the internet can reach in your AWS network.</h1>
+    <p class="lede">Pinhole reads how your VPCs are configured, works out every path from the internet to your servers and load balancers, follows what an attacker could reach next, and gives you the fewest rule changes that close it. Every answer is exact, explained hop by hop, and checked by running the analysis again.</p>
+    <div class="hero-actions">
+      <a class="btn primary" href="../">Open the console</a>
+      <a class="btn" href="#quick-start">Quick start</a>
+      <a class="btn" href="https://github.com/w3bcooki3/pinhole">Source on GitHub</a>
+    </div>
+    <p class="hero-note">Free and open source (MIT). Runs in your browser or on the command line. Nothing is uploaded, and nothing in AWS is changed.</p>
+  </div>
+
+  <figure class="trace-figure">
+    <figcaption><b>Example.</b> Can the internet open SSH on <code>bastion</code>? Each step names the AWS resource and the exact rule that decided it.</figcaption>
+    <!--trace-->
+  </figure>
+
+  <h3 id="three-questions">Three questions, answered exactly</h3>
+  <div class="cards three">
+    <div class="card">
+      <h4>What can the internet reach?</h4>
+      <p>Every network interface and load balancer listener that accepts connections from the internet, with the exact ports, the exact source addresses that work, and the rule behind each hop.</p>
+    </div>
+    <div class="card">
+      <h4>What can an attacker reach next?</h4>
+      <p>If one of those servers is compromised, the databases, caches, control planes and admin ports it can open, inside your VPCs and across peered accounts.</p>
+    </div>
+    <div class="card">
+      <h4>What is the smallest fix?</h4>
+      <p>The fewest changes that close every critical and high risk. Each one is applied to a copy of your network and re-analysed, so it is proved, with the AWS CLI command to run.</p>
+    </div>
+  </div>
+
+  <h3 id="why">Why it exists</h3>
+  <p>Whether a server is reachable from the internet depends on five things at once: a public address, an internet gateway, the subnet's routes, the network ACL in <em>both</em> directions, and every security group on the interface. A load balancer adds its own groups, ACLs and targets. The AWS console shows each of these on its own page; none of them answers "is this open, and why?"</p>
+  <p>Getting it wrong goes both ways. A rule that looks open can be harmless because the response has no route back. A rule that looks narrow can be wide open because another group on the same interface allows everything. Pinhole puts all of it together and gives one answer, with the evidence.</p>
+
+  <h3 id="who">Who it is for</h3>
+  <ul class="ticks">
+    <li><b>Cloud and platform engineers</b> who want to know what a change really opens before and after they make it.</li>
+    <li><b>Security teams</b> who need a complete, defensible list of internet exposure and attack paths, not a sample.</li>
+    <li><b>Auditors and managers</b> who need a clear report they can read without opening the AWS console.</li>
+  </ul>
+
+  <h3 id="not">What it is not</h3>
+  <p>Pinhole analyses configuration, not traffic. It does not scan your servers, read logs, or know what software listens on a port. It covers VPC network paths to interfaces and Application and Network Load Balancers; services that are public by design outside a VPC, such as S3 buckets or API Gateway, are out of scope. See <a href="#limitations">Limitations</a>.</p>
+</section>
+
+<section id="how-it-works" data-group="Start here" data-title="How it works">
+  <h2>How it works</h2>
+  <p class="lede">Three steps. Only the first one touches AWS, and it only reads.</p>
+  <ol class="flow">
+    <li>
+      <h4>Collect</h4>
+      <p>A short script in AWS CloudShell, or <code>pinhole collect</code>, calls read-only <code>Describe</code> APIs and saves one JSON file per account and Region: the snapshot.</p>
+    </li>
+    <li>
+      <h4>Analyse</h4>
+      <p>Open the snapshot in the console or the CLI. The analysis runs on your machine, offline. It cuts the address and port space at every rule boundary, so every client and every port is covered, not sampled.</p>
+    </li>
+    <li>
+      <h4>Act</h4>
+      <p>Read the exposures, attack chains and the fix plan. Try changes in the simulator. Copy the AWS CLI commands you agree with and run them yourself.</p>
+    </li>
+  </ol>
+
+  <h3 id="exact">Exact, not sampled</h3>
+  <p>For each interface, Pinhole collects every boundary that any relevant rule draws: CIDR edges, port range edges, ACL rule edges. Between two boundaries every packet is treated the same way by every rule, so evaluating one packet per piece gives the answer for all of them. That is how a report can say "tcp/22 from 0.0.0.0/0 except 10.0.0.0/8" and be right about every address.</p>
+
+  <h3 id="verdicts">Reachable, blocked or unknown</h3>
+  <dl class="terms">
+    <dt><span class="pill ok">Reachable</span></dt><dd>Every step allows the request and the response.</dd>
+    <dt><span class="pill bad">Blocked</span></dt><dd>A named step stops it, with the rule or the missing route.</dd>
+    <dt><span class="pill unk">Unknown</span></dt><dd>The snapshot lacks what the answer depends on, for example a route table in another account or a firewall appliance in the path. Pinhole never guesses.</dd>
+  </dl>
+</section>
+
+<section id="quick-start" data-group="Start here" data-title="Quick start">
+  <h2>Quick start</h2>
+  <p class="lede">Five minutes in the browser, with nothing to install. The command line is below.</p>
+
+  <h3 id="qs-console">In the browser</h3>
+  <ol class="steps">
+    <li><b>Open <a href="../">the console</a>.</b> It starts on a demo environment, clearly labelled, so you can look around first.</li>
+    <li><b>Choose Connect an account.</b> It shows one command to paste into AWS CloudShell, which writes <code>pinhole-snapshot-&lt;account&gt;-&lt;region&gt;.json</code>.</li>
+    <li><b>Download the file from CloudShell</b> (Actions, then Download file) and drop it on the console.</li>
+  </ol>
+  <p>The console is one HTML file. It makes no network requests, and its Content Security Policy makes the browser enforce that, so your snapshot never leaves the tab. You can also download <code>pinhole-&lt;version&gt;.html</code> from a <a href="https://github.com/w3bcooki3/pinhole/releases">release</a> and open it from disk.</p>
+
+  <h3 id="qs-cli">On the command line</h3>
+  <p>Requires Node.js 22 or later.</p>
+<pre class="code"><code>git clone https://github.com/w3bcooki3/pinhole.git
+cd pinhole
+npm ci &amp;&amp; npm run build
+alias pinhole="node $PWD/packages/cli/dist/main.js"
+
+pinhole collect --profile audit --region eu-west-1
+pinhole exposure pinhole-snapshot-*.json</code></pre>
+</section>
+
+<section id="collect" data-group="Use it" data-title="Collect a snapshot">
+  <h2>Collect a snapshot</h2>
+  <p class="lede">A snapshot is a JSON file with the network configuration of one account in one Region. Collection uses read-only calls and takes seconds.</p>
+
+  <h3 id="cloudshell">In AWS CloudShell</h3>
+  <p>No install and no credentials on your machine. Open CloudShell in the account to check, upload <a href="https://github.com/w3bcooki3/pinhole/blob/main/scripts/cloudshell-collect.sh"><code>cloudshell-collect.sh</code></a> (the console's Connect page gives a copy-ready command that writes it for you) and run:</p>
+<pre class="code"><code>bash cloudshell-collect.sh eu-west-1
+
+# several Regions
+for r in us-east-1 eu-west-1 ap-southeast-2; do bash cloudshell-collect.sh "$r"; done</code></pre>
+  <p>Download each file with Actions, then Download file, using the path the script prints.</p>
+
+  <h3 id="from-machine">From your machine</h3>
+<pre class="code"><code>pinhole collect --profile audit --region eu-west-1
+# writes pinhole-snapshot-&lt;account&gt;-eu-west-1.json, readable only by you
+
+pinhole collect --profile audit --region us-east-1,eu-west-1 --out-dir snapshots
+# one file per Region; a Region that fails does not stop the others</code></pre>
+
+  <h3 id="permissions">Permissions</h3>
+  <p>The collector needs only the read-only actions in this policy. A test checks that the policy and the collector's API calls match exactly, and the collector refuses at runtime to send any call whose name does not start with <code>Describe</code>, <code>Get</code> or <code>Search</code>. If a call is denied, collection continues and the report says which results may be incomplete.</p>
+  <details class="fold">
+    <summary>The IAM policy</summary>
+    <!--policy-->
+  </details>
+
+  <h3 id="what-is-in">What a snapshot contains</h3>
+  <p>VPCs, subnets, route tables, internet, NAT and egress-only gateways, peering connections, transit gateways and their route tables, network ACLs, security groups and rules, prefix lists, network interfaces, instance names, VPC endpoints, and load balancers with their listeners, rules, target groups and target health. No data from inside your servers, no credentials, no logs. It does contain your account ID, private and public IP addresses and resource names, so treat it as internal.</p>
+</section>
+
+<section id="console" data-group="Use it" data-title="The console">
+  <h2>The console</h2>
+  <p class="lede">Load one or many snapshots, across accounts and Regions. Everything is analysed in the browser tab.</p>
+  <div class="cards two">
+    <div class="card"><h4>Dashboard</h4><p>Exposures by severity, the verified fix plan, exposures by kind of service, the top exposures and attack chains, and a map of accounts and Regions.</p></div>
+    <div class="card"><h4>Attack graph</h4><p>Internet, entry points, exposed resources and load balancer targets, grouped by account, Region and VPC. Pan, zoom, filter and highlight.</p></div>
+    <div class="card"><h4>Blast radius</h4><p>If an internet-facing server is compromised, what the attacker reaches next. Each chain shows its route, why it works and the rules that cut it, including chains that cross into another account.</p></div>
+    <div class="card"><h4>Exposures</h4><p>Every service the internet can open a connection to. Each opens as a page with a plain verdict, the path hop by hop, and verified fixes with commands.</p></div>
+    <div class="card"><h4>Rule hygiene</h4><p>Rules that are redundant, shadowed, stale, unused or broader than they need to be.</p></div>
+    <div class="card"><h4>Simulator</h4><p>Switch rules off, edit them, or drop public IPs, and see which paths and chains close or open. Exports the changes for the CLI.</p></div>
+    <div class="card"><h4>Compare</h4><p>Load an older snapshot of the same account and Region to see what opened or closed, and the configuration changes behind it.</p></div>
+    <div class="card"><h4>Reachability query</h4><p>"Can A reach B, and on what?" and "Who can reach B?", by name, ID or IP.</p></div>
+    <div class="card"><h4>Coverage</h4><p>What each snapshot contained, and anything detected that Pinhole does not analyse, so a clean report is never silently incomplete.</p></div>
+    <div class="card"><h4>Report</h4><p>Everything on one page for people who will not open the console. Print it, save it as PDF, or download it as one HTML file.</p></div>
+  </div>
+  <p>Press <kbd>Ctrl</kbd> <kbd>K</kbd> (<kbd>Cmd</kbd> <kbd>K</kbd> on a Mac) or <kbd>/</kbd> to jump to any page, exposure, chain or resource. The moon button switches to the dark theme.</p>
+</section>
+
+<section id="cli" data-group="Use it" data-title="Command line">
+  <h2>Command line</h2>
+  <p class="lede">The same engine as the console, for scripts, pipelines and large accounts. The outputs below are real: they were produced by running Pinhole on the repository's test scenarios when this page was built.</p>
+
+  <h3 id="cli-exposure">What the internet can reach</h3>
+  <!--run lines=26 exposure fixtures/07-alb-private-targets/snapshot.json-->
+  <p>Add <code>--min-severity high</code> to hide the rest, <code>--fail-on critical</code> to exit with code 2 when anything critical is found, or <code>--format json|sarif|markdown</code>.</p>
+
+  <h3 id="cli-can">Can one thing reach another?</h3>
+  <!--run can fixtures/09-lateral-movement/snapshot.json --from bastion --to orders-db-->
+
+  <h3 id="cli-blast">What an attacker reaches next</h3>
+  <!--run lines=16 blast fixtures/09-lateral-movement/snapshot.json --min-severity critical-->
+
+  <h3 id="cli-fix">The fix plan</h3>
+  <!--run fix fixtures/09-lateral-movement/snapshot.json --plan-->
+  <p><code>pinhole fix</code> without <code>--plan</code> lists the best verified fix for each finding; <code>--all</code> lists every candidate. Nothing is ever run for you.</p>
+
+  <h3 id="cli-whatif">Try a change first</h3>
+  <!--run whatif fixtures/09-lateral-movement/snapshot.json --revoke sgr-bastion-ssh-world-->
+
+  <h3 id="cli-hygiene">Rule hygiene</h3>
+  <!--run lines=14 hygiene fixtures/09-lateral-movement/snapshot.json-->
+</section>
+
+<section id="ci" data-group="Use it" data-title="In CI and pull requests">
+  <h2>In CI and pull requests</h2>
+  <p class="lede">Catch new internet exposure before it ships: check a Terraform plan, compare snapshots, or publish findings to GitHub code scanning.</p>
+
+  <h3 id="terraform">Check a Terraform plan</h3>
+  <p>Pinhole places each security group, rule, network ACL, route, attachment and Elastic IP change from the plan onto the snapshot, including groups the plan creates, and runs the full analysis. Anything it cannot place exactly is listed as not analysed, never guessed.</p>
+<pre class="code"><code>terraform plan -out tfplan &amp;&amp; terraform show -json tfplan &gt; plan.json
+pinhole plan snapshot.json plan.json --fail-on high</code></pre>
+  <!--run lines=18 plan fixtures/09-lateral-movement/snapshot.json fixtures/plans/09-plan.json-->
+
+  <h3 id="action">GitHub Action</h3>
+  <p>The action reads files in the workspace and never calls AWS. It writes the result to the job summary and fails the job at the level you choose.</p>
+<pre class="code"><code>- uses: actions/checkout@v4
+- run: terraform plan -out tfplan &amp;&amp; terraform show -json tfplan &gt; plan.json
+- uses: w3bcooki3/pinhole@v0.2.0
+  with:
+    command: plan          # exposure, diff or plan
+    snapshot: snapshots/prod-us-east-1.json
+    plan: plan.json
+    fail-on: high</code></pre>
+
+  <h3 id="diff">Compare two snapshots</h3>
+<pre class="code"><code>pinhole diff last-week.json today.json                   # what opened and closed, and why
+pinhole diff last-week.json today.json --fail-on high    # exit code 2 on anything new at high or above
+pinhole diff last-week.json today.json --format markdown # for a ticket or pull request</code></pre>
+
+  <h3 id="sarif">Code scanning</h3>
+<pre class="code"><code>pinhole exposure snapshot.json --format sarif &gt; pinhole.sarif</code></pre>
+  <p>Upload with GitHub's <code>upload-sarif</code> action. Each exposed service has a stable fingerprint, so an alert stays one alert across runs and closes when the exposure goes away.</p>
+</section>
+
+<section id="exposure" data-group="Concepts" data-title="Internet exposure">
+  <h2>Internet exposure</h2>
+  <p class="lede">An interface is exposed on a port when a client on the internet can open a connection to it and get the answer back.</p>
+  <p>Over IPv4, that needs all of these:</p>
+  <ol class="checklist">
+    <li>A public IP or Elastic IP on the interface.</li>
+    <li>An internet gateway attached to the VPC.</li>
+    <li>The network ACL allowing the request in.</li>
+    <li>A security group on the interface allowing it.</li>
+    <li>The subnet's route for the client's address pointing at that internet gateway.</li>
+    <li>The network ACL allowing the response out, on the client's ephemeral port.</li>
+  </ol>
+  <p>Over IPv6 no public IP is needed: any interface with an IPv6 address in a subnet routed to an internet gateway is checked. Load balancers are checked from the internet to the listener, then from each load balancer node to each target.</p>
+
+  <h3 id="return-traffic">Return traffic</h3>
+  <p>Security groups are stateful: if the request is allowed, so is the response. Network ACLs are not. The response leaves on the client's ephemeral port, and that range depends on the client: Linux uses 32768 to 61000, Windows 49152 to 65535, and Elastic Load Balancing 1024 to 65535. An ACL that only allows one of these ranges out works for some clients and not others. Pinhole reports that as partial, per client.</p>
+
+  <h3 id="severity">Severity</h3>
+  <p>Exposures are ranked by what is on the port, whoever it is open to. Remote administration (SSH, RDP, WinRM and similar), databases and caches, and container and cluster control planes are <b>critical</b>. Admin panels, file sharing, directory services and message brokers are <b>high</b>, and so is any range of many ports. A port Pinhole does not recognise is <b>medium</b>. Plain web traffic on 80 and 443 is <b>low</b>, because it is usually meant to be public. The list is in <code>packages/engine/src/risk.ts</code>; it does not know what actually runs on a port.</p>
+</section>
+
+<section id="chains" data-group="Concepts" data-title="Attack chains">
+  <h2>Attack chains</h2>
+  <p class="lede">If an internet-facing server is compromised, what can the attacker open from there?</p>
+  <p>Each server the internet can reach is treated as a starting point. From it, Pinhole works out every service it can open on every other interface, with the same exact analysis. The attacker moves on only through services that normally give command execution: remote administration, container and cluster control planes, and wide port ranges. A database reached on 5432 is a target, not a new foothold.</p>
+  <p>A chain is reported when it ends at a data store, a control plane or remote administration that the internet cannot reach directly. Chains to the same target are merged, with every route listed. Severity comes from what is reached, lowered when the starting point is only open on web ports, or when the chain is three hops or longer.</p>
+  <p>This is a model of what the network allows, not of what is exploitable: it assumes credentials or a vulnerability at each step.</p>
+
+  <h3 id="across">Across accounts and Regions</h3>
+  <p>Load snapshots from both sides of a VPC peering connection or a transit gateway together and Pinhole joins them, so chains are followed from one account or Region into another. Routes, network ACLs and security groups are checked on both sides, and so are security group references across the link where AWS supports them: same-Region peering, and transit gateways with referencing turned on.</p>
+  <!--run lines=14 from=Across blast fixtures/11-cross-account-peering/account-a/snapshot.json fixtures/11-cross-account-peering/account-b/snapshot.json --min-severity critical-->
+</section>
+
+<section id="fixes" data-group="Concepts" data-title="Fixes and the fix plan">
+  <h2>Fixes and the fix plan</h2>
+  <p class="lede">Pinhole only suggests changes it has proved.</p>
+  <p>For each exposure, it tries the narrowest changes first: cut the port out of a wider rule, allow it only from inside the VPC, remove the rule, add a network ACL deny, or remove the public IP. Each candidate is applied to a copy of the snapshot and the whole analysis runs again. A fix is <b>verified</b> only if the path is gone afterwards. Every other path the change closes is shown, so you can see if it breaks something you want.</p>
+
+  <h3 id="plan-algorithm">How the plan is chosen</h3>
+  <ol class="steps">
+    <li><b>Candidates.</b> The verified fixes for the worst open exposures, the rules on every route of the worst open attack chains, and the fixes at each chain's starting point, where one change can cut every chain from that server at once.</li>
+    <li><b>Selection.</b> Each round picks the change that removes the most weighted risk, with a penalty for closing paths that are probably wanted, and never a change that opens anything. Candidates that cannot win a round are not re-measured, which keeps it fast on large accounts.</li>
+    <li><b>Pruning.</b> When the plan is built, each step is taken out in turn and the rest re-applied. A step a later one made unnecessary is dropped. The tests check that every remaining step is needed.</li>
+  </ol>
+  <p>The plan lists, for every step, what it closes, what chains it cuts, what else it affects, and the AWS CLI command. Anything no single change closes is listed for a person to decide.</p>
+</section>
+
+<section id="privacy" data-group="Trust" data-title="Privacy and security">
+  <h2>Privacy and security</h2>
+  <ul class="ticks">
+    <li><b>Read-only collection.</b> Only <code>Describe</code>, <code>Get</code> and <code>Search</code> calls, enforced in code and tested against the IAM policy.</li>
+    <li><b>Nothing is uploaded.</b> The console has no server. Its Content Security Policy blocks every network request, and only its own script, identified by hash, may run.</li>
+    <li><b>Nothing is changed.</b> Fixes are printed as commands for you to review and run.</li>
+    <li><b>Input is validated.</b> Snapshots, change lists and Terraform plans are checked field by field before use, and text from them is escaped everywhere it is shown.</li>
+    <li><b>No secrets in the repository,</b> and real snapshots are kept out of it by <code>.gitignore</code>.</li>
+  </ul>
+  <p>To report a vulnerability, use GitHub's private reporting on the repository, as described in <a href="https://github.com/w3bcooki3/pinhole/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+</section>
+
+<section id="accuracy" data-group="Trust" data-title="Accuracy">
+  <h2>Accuracy</h2>
+  <p class="lede">Every rule Pinhole models comes from AWS documentation, and the documentation is cited in the code, the tests and the findings.</p>
+  <p>Each evaluation rule has unit tests. On top of those, hand-written scenarios with known answers cover the cases that are easy to get wrong:</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Scenario</th><th>What it proves</th></tr></thead>
+    <tbody>
+      <tr><td>01</td><td>Network ACL return traffic on ephemeral ports: full, partial, none</td></tr>
+      <tr><td>02</td><td>Security group references match group members only, never internet clients</td></tr>
+      <tr><td>03</td><td>Longest-prefix routing combined with peering, which is not transitive</td></tr>
+      <tr><td>04</td><td>Blackhole routes in VPC and transit gateway route tables</td></tr>
+      <tr><td>05</td><td>Peering where the far side has no route back</td></tr>
+      <tr><td>06</td><td>A public IP without an internet gateway route</td></tr>
+      <tr><td>07</td><td>An internet-facing ALB in front of private instances</td></tr>
+      <tr><td>08</td><td>NLB without security groups, client IP preservation on and off</td></tr>
+      <tr><td>09</td><td>Attack chains, the best fix, and what a change closes and leaves open</td></tr>
+      <tr><td>10</td><td>IPv6 without a public IP, egress-only gateways, IPv6 ACL rules</td></tr>
+      <tr><td>11</td><td>Attack chains across two peered accounts</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Continuous integration runs every test on Node 22 and 24, and runs both collectors against a fake AWS built from the scenarios. The full model, with every simplification, is in <a href="https://github.com/w3bcooki3/pinhole/blob/main/docs/model.md">docs/model.md</a>. If you find a wrong result, <a href="https://github.com/w3bcooki3/pinhole/issues/new/choose">report it</a>; it becomes a new scenario.</p>
+</section>
+
+<section id="limitations" data-group="Trust" data-title="Limitations">
+  <h2>Limitations</h2>
+  <p class="lede">Read these before relying on a clean report. Anything detected but not analysed is listed on the Coverage page.</p>
+  <ul class="plain">
+    <li><b>Scope.</b> VPC network paths to interfaces and Application and Network Load Balancers. Not S3, API Gateway, Lambda function URLs, CloudFront, or other services that are public outside a VPC. Use a configuration scanner such as Prowler or AWS Security Hub for those.</li>
+    <li><b>Detected, not modelled.</b> AWS Network Firewall, Gateway Load Balancer, routes to appliances, gateway route tables, Global Accelerator, Classic Load Balancers, VPN and Direct Connect. Paths through them are reported as unknown.</li>
+    <li><b>IPv6</b> is analysed for TCP and UDP to interfaces. Not yet for ICMPv6, load balancer listeners, IPv6 lateral movement, or IPv6 rules in Terraform plans.</li>
+    <li><b>Configuration, not traffic.</b> Host firewalls, the operating system and whether anything listens on the port are outside the model. Existing connections can outlive a rule change.</li>
+    <li><b>Snapshots are a point in time.</b> Collect again after changes, or compare two snapshots.</li>
+    <li><b>Size.</b> The console handles files up to 200 MB. Very large accounts are faster with the CLI.</li>
+  </ul>
+</section>
+
+<section id="compare-tools" data-group="Trust" data-title="Compared with other tools">
+  <h2>Compared with other tools</h2>
+  <p class="lede">Pinhole is meant to sit next to AWS's own tools, not to replace them.</p>
+  <div class="table-wrap">
+  <table class="compare">
+    <thead><tr><th></th><th>Pinhole</th><th>VPC Reachability Analyzer</th><th>VPC Network Access Analyzer</th></tr></thead>
+    <tbody>
+      <tr><th>Question</th><td>Everything the internet can reach, what comes next, and the fix</td><td>Can this source reach this destination?</td><td>Which paths break the access rules I define?</td></tr>
+      <tr><th>Cost</th><td>Free</td><td>Charged per analysis</td><td>Charged per network interface analysed</td></tr>
+      <tr><th>Where it runs</th><td>Your browser or machine, offline</td><td>In your AWS account</td><td>In your AWS account</td></tr>
+      <tr><th>Attack chains and fix plans</th><td>Yes, each fix verified</td><td>No</td><td>No</td></tr>
+      <tr><th>Before you apply</th><td>Terraform plans and simulated changes</td><td>Deployed resources</td><td>Deployed resources</td></tr>
+      <tr><th>Network Firewall and appliances</th><td>Detected, reported as unknown</td><td>Analysed</td><td>Analysed</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Use Reachability Analyzer to confirm a specific path through components Pinhole does not model. Use Pinhole for the full picture, attack paths, and checks before deployment. Pricing: <a href="https://aws.amazon.com/vpc/pricing/">Amazon VPC pricing, Network Analysis tab</a>.</p>
+</section>
+
+<section id="faq" data-group="Trust" data-title="Questions">
+  <h2>Questions</h2>
+  <details class="qa"><summary>Does Pinhole need access to my AWS account?</summary><p>Only to collect a snapshot, with read-only calls. The analysis never touches AWS. You can collect in CloudShell and never give Pinhole credentials at all.</p></details>
+  <details class="qa"><summary>Is my data sent anywhere?</summary><p>No. The console has no server and is not allowed to make network requests. The CLI makes no requests except the AWS calls of <code>pinhole collect</code>.</p></details>
+  <details class="qa"><summary>How is this different from looking at security groups?</summary><p>A security group is one of six things that decide reachability. Pinhole combines all of them, including network ACLs in both directions, routes, load balancers and peering, and tells you which one decided the answer.</p></details>
+  <details class="qa"><summary>Will applying the fix plan break my application?</summary><p>Every step lists the other paths it closes. Closing medium- or low-risk paths, such as web traffic, counts against a change when the plan is chosen, and any step that still does so is shown with a warning. Review each command before running it.</p></details>
+  <details class="qa"><summary>How many accounts can I analyse?</summary><p>As many snapshots as you load. Each covers one account in one Region. Linked accounts are joined automatically to follow attack chains between them.</p></details>
+  <details class="qa"><summary>What does it cost?</summary><p>Nothing. Pinhole is MIT-licensed. The read-only describe calls it makes are free, and CloudShell is free to use.</p></details>
+</section>
+
+<section id="reference" data-group="Reference" data-title="CLI reference">
+  <h2>CLI reference</h2>
+  <!--run --help-->
+  <h3 id="exit-codes">Exit codes</h3>
+  <dl class="terms">
+    <dt><code>0</code></dt><dd>Success.</dd>
+    <dt><code>1</code></dt><dd>Usage or input error, with a message on standard error.</dd>
+    <dt><code>2</code></dt><dd>The <code>--fail-on</code> threshold was reached.</dd>
+  </dl>
+</section>

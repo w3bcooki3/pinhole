@@ -367,3 +367,14 @@ describe('web console', () => {
     });
   });
 });
+
+describe('documentation', () => {
+  it('builds, with every example produced by the real CLI', () => {
+    const out = execFileSync(process.execPath, [join(root, 'scripts/build-docs.mjs')], { cwd: root, encoding: 'utf8' });
+    expect(out).toMatch(/16 sections, 9 live examples/);
+    const html = readFileSync(join(root, 'site/docs/index.html'), 'utf8');
+    expect(html).not.toMatch(/<!--(run|trace|policy)/);
+    expect(html).toContain('pinhole blast account-a/snapshot.json account-b/snapshot.json');
+    expect(html).toMatch(/script-src 'sha256-[A-Za-z0-9+/=]+'; .*connect-src 'none'/);
+  }, 60_000);
+});

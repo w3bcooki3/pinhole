@@ -36,7 +36,7 @@
     "test": "vitest run",
     "test:fixtures": "vitest run packages/engine/test/fixtures.test.ts",
     "fixture-count": "node scripts/fixture-count.mjs",
-    "build:web": "node scripts/build-web.mjs",
+    "build:web": "node scripts/build-web.mjs && node scripts/build-docs.mjs",
     "typecheck:web": "tsc -p packages/web/tsconfig.json",
     "bench": "node scripts/bench-engine.mjs",
     "check": "npm run build && npm run typecheck:web && npm test && node scripts/fixture-count.mjs --check"

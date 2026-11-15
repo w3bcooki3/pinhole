@@ -15,6 +15,13 @@ All notable changes to this project are recorded here. The format follows
   accounts" view to Blast radius, and the dashboard plan and report include
   it. Snapshots that are linked but share other resource IDs are not merged,
   and the reason is shown.
+- Documentation site, published with the console at `/docs/`: what Pinhole
+  is, how it works, quick start, collection and permissions, the console, the
+  command line, CI and Terraform, concepts, accuracy, limitations, a
+  comparison with AWS's own tools, and questions. Searchable, light and dark,
+  and usable on any screen size. Every example output is produced by running
+  the CLI on the fixtures when the site is built, and a test checks it.
+  The console links to it from the sidebar.
 - Fixture 11: two accounts peered, with a chain into each of a database and an
   SSH host, and a cache that has no route back.
 

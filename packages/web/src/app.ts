@@ -1098,6 +1098,8 @@ function renderNow() {
           link('ask', 'route', 'Reachability query'),
           link('report', 'file', 'Report'),
           link('connect', 'plug', 'Connect an account'),
+          // The documentation is a separate page published next to the console (site/docs/).
+          h('a', { href: 'docs/', id: 'docs-link' }, iconSvg('file', 18), 'Documentation'),
         ),
         h('div', { class: 'side-foot' }, iconSvg('shield', 14), h('span', {}, 'Runs in this browser tab. Snapshots are never uploaded.')),
       ),

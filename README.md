@@ -6,7 +6,7 @@
 [![Pages](https://github.com/w3bcooki3/pinhole/actions/workflows/pages.yml/badge.svg)](https://w3bcooki3.github.io/pinhole/)
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 
-**[Open the console](https://w3bcooki3.github.io/pinhole/)** · [Quick start](#quick-start) · [How it decides](#how-it-decides) · [Limitations](#limitations) · [Report a wrong result](https://github.com/w3bcooki3/pinhole/issues/new/choose)
+**[Open the console](https://w3bcooki3.github.io/pinhole/)** · **[Documentation](https://w3bcooki3.github.io/pinhole/docs/)** · [Quick start](#quick-start) · [How it decides](#how-it-decides) · [Limitations](#limitations) · [Report a wrong result](https://github.com/w3bcooki3/pinhole/issues/new/choose)
 
 ![Pinhole dashboard: 19 internet exposures, 7 attack chains, and a verified 11-step fix plan](docs/images/dashboard.png)
 
@@ -313,6 +313,7 @@ packages/web/        Static web page (one HTML file, engine bundled in, no netwo
 scripts/             CloudShell collector script; web page build; fixture count updater.
 fixtures/            Hand-written scenarios with expected answers and AWS doc links.
 docs/                Model description, minimal IAM policy.
+packages/web/docs/   The documentation site (site/docs/), with examples run live at build time.
 ```
 
 The engine has no dependencies so that it can later share a core with IAM Lens (an IAM policy analyser) as one AWS toolkit.
