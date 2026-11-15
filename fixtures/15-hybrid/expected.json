@@ -1,0 +1,37 @@
+{
+  "description": "Hybrid connectivity. VPC A has a virtual private gateway with a Site-to-Site VPN whose static route is 192.168.0.0/16; VPC B reaches on-premises through a transit gateway with a VPN attachment (10.50.0.0/16, learned by BGP) and a Direct Connect gateway attachment (172.16.0.0/12). A connection from on-premises works only when it arrives over a link, passes the network ACLs and security group as the client's own address, and the server's subnet routes the replies back over the same link: the database's subnet has no route on-premises, so nothing there can reach it. A network ACL denies RDP from the Direct Connect range. Outbound, servers reach on-premises over the same links, and the replies must come back to their subnet.",
+  "docs": [
+    "https://docs.aws.amazon.com/vpn/latest/s2svpn/how_it_works.html",
+    "https://docs.aws.amazon.com/vpn/latest/s2svpn/VPNRoutingTypes.html",
+    "https://docs.aws.amazon.com/vpc/latest/tgw/tgw-vpn-attachments.html",
+    "https://docs.aws.amazon.com/vpc/latest/tgw/tgw-dcg-attachments.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/custom-network-acl.html"
+  ],
+  "paths": [
+    { "name": "On-premises admin reaches SSH over the VPN gateway", "from": { "ip": "192.168.10.5" }, "to": { "eni": "eni-app" }, "protocol": "tcp", "port": 22, "expect": { "verdict": "reachable", "returnPath": "all", "via": ["vgw-1", "vpn-1"], "sgRules": ["sgr-app-ssh"] } },
+    { "name": "Other on-premises addresses are not in the SSH rule", "from": { "ip": "192.168.20.5" }, "to": { "eni": "eni-app" }, "protocol": "tcp", "port": 22, "expect": { "verdict": "blocked", "blockedAt": "dest-sg-ingress" } },
+    { "name": "The security group allows the database, but its subnet has no route back on-premises", "from": { "ip": "192.168.10.5" }, "to": { "eni": "eni-db" }, "protocol": "tcp", "port": 5432, "expect": { "verdict": "blocked", "blockedAt": "return-route" } },
+    { "name": "VPN through the transit gateway reaches the web server", "from": { "ip": "10.50.1.1" }, "to": { "eni": "eni-web" }, "protocol": "tcp", "port": 80, "expect": { "verdict": "reachable", "returnPath": "all", "via": ["tgw-attach-vpn", "tgw-rtb-onprem", "tgw-attach-b"] } },
+    { "name": "Network ACL denies RDP from the Direct Connect range", "from": { "ip": "172.16.5.5" }, "to": { "eni": "eni-web" }, "protocol": "tcp", "port": 3389, "expect": { "verdict": "blocked", "blockedAt": "dest-nacl-ingress", "via": ["tgw-attach-dx"] } },
+    { "name": "Web server reaches on-premises over the transit gateway VPN", "from": { "eni": "eni-web" }, "to": { "ip": "10.50.1.1" }, "protocol": "tcp", "port": 443, "expect": { "verdict": "reachable", "returnPath": "all", "via": ["tgw-attach-vpn", "tgw-rtb-onprem"] } },
+    { "name": "App server reaches on-premises over the VPN gateway", "from": { "eni": "eni-app" }, "to": { "ip": "192.168.1.1" }, "protocol": "tcp", "port": 443, "expect": { "verdict": "reachable", "returnPath": "all", "via": ["vgw-1"] } },
+    { "name": "Web server's security group does not allow out to the Direct Connect range", "from": { "eni": "eni-web" }, "to": { "ip": "172.16.1.1" }, "protocol": "tcp", "port": 443, "expect": { "verdict": "blocked", "blockedAt": "source-sg-egress" } }
+  ],
+  "onprem": {
+    "links": [
+      { "id": "vgw-1", "kind": "vpn", "networks": ["192.168.0.0/16"] },
+      { "id": "tgw-attach-vpn", "kind": "vpn", "networks": ["10.50.0.0/16"] },
+      { "id": "tgw-attach-dx", "kind": "direct-connect", "networks": ["172.16.0.0/12"] }
+    ],
+    "reachable": [
+      { "resource": "eni-app", "protocol": "tcp", "port": 22, "via": "vgw-1", "sources": ["192.168.10.0/24"] },
+      { "resource": "eni-app", "protocol": "tcp", "port": 443, "via": "vgw-1", "sources": ["192.168.0.0/16"] },
+      { "resource": "eni-web", "protocol": "tcp", "port": 80, "via": "tgw-attach-vpn", "sources": ["10.50.0.0/16"] }
+    ],
+    "unreachable": [
+      { "resource": "eni-db", "protocol": "tcp", "port": 5432 },
+      { "resource": "eni-web", "protocol": "tcp", "port": 3389 }
+    ],
+    "counts": { "interfaces": 3, "reachable": 2 }
+  }
+}

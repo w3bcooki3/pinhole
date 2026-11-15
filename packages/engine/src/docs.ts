@@ -32,4 +32,8 @@ export const DOCS = {
   globalAccelerator: 'https://docs.aws.amazon.com/global-accelerator/latest/dg/introduction-how-it-works.html',
   cloudfrontPrefixList: 'https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/LocationsOfEdgeServers.html',
   vpn: 'https://docs.aws.amazon.com/vpn/latest/s2svpn/VPC_VPN.html',
+  nat: 'https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html',
+  vpnRouting: 'https://docs.aws.amazon.com/vpn/latest/s2svpn/VPNRoutingTypes.html',
+  vgwRouting: 'https://docs.aws.amazon.com/vpc/latest/userguide/WorkWithRouteTables.html',
+  tgwVpn: 'https://docs.aws.amazon.com/vpc/latest/tgw/tgw-vpn-attachments.html',
 } as const;

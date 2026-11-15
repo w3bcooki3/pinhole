@@ -3,7 +3,7 @@
  * rule hygiene, plus the command palette. They get the app's state and
  * navigation through a small context object, so they do not depend on app.ts.
  */
-import { analyzeBlastRadius, analyzeExposure, applyChanges, ChangeError, cliFor, describeBreak, describeChange, diffExposure, evaluatePath, isLateralTarget, reachServices, ruleText, serviceLabel, summarizeBreaks } from '@pinhole/engine';
+import { analyzeBlastRadius, analyzeExposure, analyzeOnPrem, applyChanges, onPremNetworks, parseIpv4, ChangeError, cliFor, describeBreak, describeChange, diffExposure, evaluatePath, isLateralTarget, reachServices, ruleText, serviceLabel, summarizeBreaks } from '@pinhole/engine';
 import type { AttackChain, Breakage, Change, ExposureDiff, NetworkModel, PathResult, ServiceReach } from '@pinhole/engine';
 import { h, on, toast } from './dom.js';
 import type { Child } from './dom.js';
@@ -56,7 +56,7 @@ function stepper(items: { k: string; v: Child[]; state: 'pass' | 'block' | 'unkn
   );
 }
 
-function traceStepper(r: PathResult | { hops: PathResult['hops'] }, end?: string): HTMLElement {
+export function traceStepper(r: PathResult | { hops: PathResult['hops'] }, end?: string): HTMLElement {
   const hops = r.hops.filter((x) => x.stage !== 'scope' || x.decision !== 'info');
   return stepper([
     ...hops.map((x) => ({ k: D.STAGE[x.stage] ?? x.stage, v: [h('code', {}, D.hopId(x)), ' ', D.hopDetail(x), ...(x.caveat ? [h('div', { class: 'hop-caveat' }, x.caveat)] : [])], state: (x.decision === 'pass' ? 'pass' : x.decision === 'block' ? 'block' : x.decision === 'info' ? 'info' : 'unknown') as 'pass' | 'block' | 'unknown' | 'info' })),
@@ -521,6 +521,19 @@ function resolveRef(m: NetworkModel, ref: string): string | undefined {
   return ip?.id;
 }
 const isInternet = (ref: string) => /^internet$/i.test(ref.trim()) || (/^\d+\.\d+\.\d+\.\d+$/.test(ref.trim()) && !/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ref.trim()));
+/** An address with no interface in the snapshot that is on-premises (in a range AWS routes to VPN or Direct Connect) or private. */
+function outsideIp(m: NetworkModel, ref: string): string | undefined {
+  const t = ref.trim();
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(t) || [...m.enis.values()].some((e) => e.privateIps.includes(t))) return undefined;
+  const ip = parseIpv4(t);
+  if (onPremNetworks(m).some((n) => ip >= n.range.start && ip <= n.range.end)) return t;
+  return isInternet(t) ? undefined : t;
+}
+const inCidr = (ip: number, c: string) => {
+  const [a, l] = c.split('/') as [string, string];
+  const start = parseIpv4(a);
+  return ip >= start && ip <= start + 2 ** (32 - Number(l)) - 1;
+};
 const eniLabel = (m: NetworkModel, id: string) => {
   const e = m.enis.get(id);
   const inst = e?.instanceId ? m.instances.get(e.instanceId) : undefined;
@@ -537,7 +550,7 @@ export function askPage(ctx: Ctx): HTMLElement {
     return { id: e.id, label: inst?.name ?? e.id, ip: e.privateIps[0] ?? '' };
   });
   const dl = h('datalist', { id: 'ask-names' }, h('option', { value: 'internet' }, 'Any internet address'), ...names.map((n) => h('option', { value: n.label }, `${n.id} ${n.ip}`)));
-  const input = (v: string, label: string, id: string) => h('input', { value: v, list: 'ask-names', 'aria-label': label, id, spellcheck: 'false', autocomplete: 'off', placeholder: 'Name, ID, private IP or internet' }) as HTMLInputElement;
+  const input = (v: string, label: string, id: string) => h('input', { value: v, list: 'ask-names', 'aria-label': label, id, spellcheck: 'false', autocomplete: 'off', placeholder: 'Name, ID, IP, on-premises IP or internet' }) as HTMLInputElement;
   const from = input(st.askFrom, 'From', 'ask-from');
   const to = input(st.askTo, 'To', 'ask-to');
   const proto = h('select', { 'aria-label': 'Protocol', id: 'ask-proto' }, ...['tcp', 'udp', 'icmp'].map((p) => h('option', { value: p }, p))) as HTMLSelectElement;
@@ -564,7 +577,27 @@ export function askPage(ctx: Ctx): HTMLElement {
 
   const results = h('div', { class: 'ask-results' });
   const toId = st.askTo ? resolveRef(m, st.askTo) : undefined;
-  if (st.askTo && !toId) results.append(h('div', { class: 'error-bar' }, `"${st.askTo}" is not a name, interface ID, instance ID or private IP in ${snap.account} / ${snap.region}.`));
+  const outTo = st.askTo && !toId && st.askMode === 'pair' ? outsideIp(m, st.askTo) : undefined;
+  const outFrom = toId && st.askFrom && st.askMode === 'pair' ? outsideIp(m, st.askFrom) : undefined;
+  if (outTo) {
+    const fromId = resolveRef(m, st.askFrom);
+    if (!fromId) results.append(h('div', { class: 'error-bar' }, `"${st.askFrom}" is not a name, interface ID, instance ID or private IP in ${snap.account} / ${snap.region}.`));
+    else if (!st.askPort && st.askProto !== 'icmp') results.append(h('div', { class: 'error-bar' }, `${outTo} is not in the snapshot, so its services are not known. Give a port.`));
+    else {
+      const r = evaluatePath(m, { from: { eni: fromId }, to: { ip: outTo }, protocol: st.askProto, ...(st.askPort ? { port: Number(st.askPort) } : {}) });
+      results.append(verdictBox(r, `${eniLabel(m, fromId)} → ${outTo}`));
+    }
+  } else if (outFrom && toId) {
+    if (st.askPort) {
+      const r = evaluatePath(m, { from: { ip: outFrom }, to: { eni: toId }, protocol: st.askProto, port: Number(st.askPort) });
+      results.append(verdictBox(r, `${outFrom} → ${eniLabel(m, toId)}`));
+    } else {
+      const ip = parseIpv4(outFrom);
+      const rep = analyzeOnPrem(m, { only: new Set([toId]) });
+      const hits = rep.findings.filter((f) => f.sources.some((c) => inCidr(ip, c)));
+      results.append(servicesBox(`${outFrom} (on-premises) → ${eniLabel(m, toId)}`, hits.map((f) => ({ label: f.protocol === 'icmp' ? 'ICMP echo' : `${f.protocol.toUpperCase()} ${f.ports.from === f.ports.to ? f.ports.from : `${f.ports.from}-${f.ports.to}`}`, sev: f.severity, note: `over ${f.via}`, hops: f.trace }))));
+    }
+  } else if (st.askTo && !toId) results.append(h('div', { class: 'error-bar' }, `"${st.askTo}" is not a name, interface ID, instance ID or private IP in ${snap.account} / ${snap.region}.`));
   else if (toId && st.askMode === 'who') results.append(whoCanReach(m, snap, toId));
   else if (toId && st.askFrom) {
     if (isInternet(st.askFrom)) {

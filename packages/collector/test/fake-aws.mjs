@@ -34,6 +34,9 @@ export function respond(snap, service, op, input, pageSize = 1) {
     case 'ec2:DescribeInternetGateways': return page('InternetGateways', ec2.InternetGateways);
     case 'ec2:DescribeEgressOnlyInternetGateways': return page('EgressOnlyInternetGateways', ec2.EgressOnlyInternetGateways);
     case 'ec2:DescribeNatGateways': return page('NatGateways', ec2.NatGateways);
+    // Not paginated in the real API. Real responses carry the customer gateway configuration and the tunnel keys.
+    case 'ec2:DescribeVpnGateways': return { VpnGateways: ec2.VpnGateways ?? [] };
+    case 'ec2:DescribeVpnConnections': return { VpnConnections: (ec2.VpnConnections ?? []).map((v) => ({ ...v, CustomerGatewayConfiguration: '<vpn_connection><pre_shared_key>secret-psk</pre_shared_key></vpn_connection>', Options: { ...(v.Options ?? {}), TunnelOptions: [{ PreSharedKey: 'secret-psk' }] } })) };
     case 'ec2:DescribeVpcPeeringConnections': return page('VpcPeeringConnections', ec2.VpcPeeringConnections);
     case 'ec2:DescribeTransitGateways': return page('TransitGateways', ec2.TransitGateways);
     case 'ec2:DescribeTransitGatewayAttachments': return page('TransitGatewayAttachments', ec2.TransitGatewayAttachments);
@@ -99,6 +102,13 @@ function main(argv) {
   const svc = service === 'elbv2' ? 'elbv2' : service;
   // The real CLI follows pagination itself; emulate by using one big page.
   const res = respond(snap, svc, op, input, Number.MAX_SAFE_INTEGER);
+  if (op === 'DescribeVpnConnections' && query) {
+    // The projection the script asks for (checked against JMESPath separately): missing fields become null.
+    const n = (v) => (v === undefined ? null : v);
+    const map = (xs, f) => (Array.isArray(xs) ? xs.map(f) : null);
+    process.stdout.write(JSON.stringify({ VpnConnections: res.VpnConnections.map((v) => ({ VpnConnectionId: n(v.VpnConnectionId), State: n(v.State), VpnGatewayId: n(v.VpnGatewayId), TransitGatewayId: n(v.TransitGatewayId), Options: { StaticRoutesOnly: n(v.Options?.StaticRoutesOnly) }, Routes: map(v.Routes, (r) => ({ DestinationCidrBlock: n(r.DestinationCidrBlock), State: n(r.State) })), VgwTelemetry: map(v.VgwTelemetry, (t) => ({ Status: n(t.Status) })) })) }));
+    return;
+  }
   if (query === 'Account' && output === 'text') {
     process.stdout.write(`${res.Account}\n`);
     return;

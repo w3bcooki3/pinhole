@@ -87,6 +87,18 @@ function clean<T>(value: T): T {
   return JSON.parse(JSON.stringify(value, (k, v) => (k === '$metadata' ? undefined : v))) as T;
 }
 
+function vpnConnection(v: Json): Json {
+  return {
+    VpnConnectionId: v.VpnConnectionId,
+    ...(v.State ? { State: v.State } : {}),
+    ...(v.VpnGatewayId ? { VpnGatewayId: v.VpnGatewayId } : {}),
+    ...(v.TransitGatewayId ? { TransitGatewayId: v.TransitGatewayId } : {}),
+    ...(typeof v.Options?.StaticRoutesOnly === 'boolean' ? { Options: { StaticRoutesOnly: v.Options.StaticRoutesOnly } } : {}),
+    Routes: ((v.Routes as Json[] | undefined) ?? []).map((r) => ({ DestinationCidrBlock: r.DestinationCidrBlock, State: r.State })),
+    VgwTelemetry: ((v.VgwTelemetry as Json[] | undefined) ?? []).map((t) => ({ Status: t.Status })),
+  };
+}
+
 function set<T extends object, K extends keyof T>(obj: T, key: K, value: T[K] | undefined) {
   if (value !== undefined) obj[key] = value;
 }
@@ -106,6 +118,10 @@ export async function collectSnapshot(send: Send, opts: CollectOptions): Promise
   set(ec2, 'InternetGateways', await c.all('ec2', 'DescribeInternetGateways', 'InternetGateways'));
   set(ec2, 'EgressOnlyInternetGateways', await c.all('ec2', 'DescribeEgressOnlyInternetGateways', 'EgressOnlyInternetGateways'));
   set(ec2, 'NatGateways', await c.all('ec2', 'DescribeNatGateways', 'NatGateways'));
+  set(ec2, 'VpnGateways', await c.all('ec2', 'DescribeVpnGateways', 'VpnGateways'));
+  // Only the fields the analysis uses: the response also holds the customer
+  // gateway configuration and tunnel options, which contain the pre-shared keys.
+  set(ec2, 'VpnConnections', (await c.all('ec2', 'DescribeVpnConnections', 'VpnConnections'))?.map(vpnConnection));
   set(ec2, 'VpcPeeringConnections', await c.all('ec2', 'DescribeVpcPeeringConnections', 'VpcPeeringConnections'));
   set(ec2, 'TransitGateways', await c.all('ec2', 'DescribeTransitGateways', 'TransitGateways'));
   set(ec2, 'TransitGatewayAttachments', await c.all('ec2', 'DescribeTransitGatewayAttachments', 'TransitGatewayAttachments'));

@@ -24,10 +24,18 @@
  * that blocks it. Every check uses the same exact analysis as the rest of
  * Pinhole: exposure for the internet, service reachability between
  * interfaces, and attack chains.
+ *
+ * "onprem" is everything AWS routes to Site-to-Site VPN and Direct Connect
+ * (onprem.ts). It can be the "from" of a rule:
+ *   { "id": "no-onprem-db", "deny": { "from": "onprem", "to": "prod-db", "ports": "tcp/5432" } }
  */
 import type { ExposureFinding, ExposureReport } from './exposure.js';
 import type { BlastReport } from './blast.js';
+import { formatIpv4 } from './ipv4.js';
 import { evaluatePath } from './path.js';
+import { analyzeOnPrem } from './hybrid.js';
+import { onPremNetworks } from './onprem.js';
+import { analyzeEgress } from './egress.js';
 import { pairReach } from './internal.js';
 import { serviceLabel } from './reach.js';
 import { compareSeverity } from './risk.js';
@@ -136,7 +144,7 @@ const strList = (v: unknown, where: string): string[] => {
 
 function checkTarget(t: unknown, where: string, groups: Set<string>): void {
   if (typeof t === 'string') {
-    if (t !== 'internet' && t !== '*' && !groups.has(t)) throw new PolicyError(`${where}: "${t}" is not "internet", "*" or a group defined under "groups".`);
+    if (t !== 'internet' && t !== 'onprem' && t !== '*' && !groups.has(t)) throw new PolicyError(`${where}: "${t}" is not "internet", "onprem", "*" or a group defined under "groups".`);
     return;
   }
   if (!isObj(t)) throw new PolicyError(`${where} must be "internet", a group name or a selector.`);
@@ -161,7 +169,7 @@ export function parsePolicy(input: unknown): PolicyFile {
   const groups = input.groups ?? {};
   if (!isObj(groups)) throw new PolicyError('"groups" must be an object of named selectors.');
   const names = new Set(Object.keys(groups));
-  for (const n of names) if (n === 'internet' || n === '*') throw new PolicyError(`"${n}" is reserved and cannot be a group name.`);
+  for (const n of names) if (n === 'internet' || n === 'onprem' || n === '*') throw new PolicyError(`"${n}" is reserved and cannot be a group name.`);
   for (const [n, sel] of Object.entries(groups)) {
     if (!isObj(sel)) throw new PolicyError(`groups.${n} must be a selector object.`);
     checkTarget(sel, `groups.${n}`, names);
@@ -184,7 +192,10 @@ export function parsePolicy(input: unknown): PolicyFile {
     for (const k of Object.keys(body)) if (!['from', 'to', 'ports', ...(kind === 'deny' ? ['indirect'] : [])].includes(k)) throw new PolicyError(`${w}.${kind}: unknown key "${k}".`);
     checkTarget(body.from, `${w}.${kind}.from`, names);
     checkTarget(body.to, `${w}.${kind}.to`, names);
-    if (body.to === 'internet') throw new PolicyError(`${w}.${kind}.to: outbound traffic to the internet is not checked; "to" must name resources.`);
+    if (body.to === 'internet' && body.from === 'internet') throw new PolicyError(`${w}.${kind}: "from" and "to" cannot both be "internet".`);
+    if (body.to === 'onprem') throw new PolicyError(`${w}.${kind}.to: "onprem" can only be the "from" of a rule.`);
+    if (body.from === 'onprem' && (body.to === 'internet' || body.indirect)) throw new PolicyError(`${w}.${kind}: with "from": "onprem", "to" must be resources and "indirect" is not used.`);
+    if (body.to === 'internet' && body.indirect) throw new PolicyError(`${w}.deny.indirect applies to "from": "internet" only.`);
     if (kind === 'require' && body.ports === undefined) throw new PolicyError(`${w}.require.ports is required: say which service must get through.`);
     parsePorts(body.ports as string | string[] | undefined, `${w}.${kind}.ports`);
     if (body.indirect !== undefined && typeof body.indirect !== 'boolean') throw new PolicyError(`${w}.deny.indirect must be true or false.`);
@@ -210,7 +221,7 @@ function tagsOf(model: NetworkModel, r: Res): Record<string, string> {
 function matches(model: NetworkModel, policy: PolicyFile, t: Target, r: Res, depth = 0): boolean {
   if (depth > 20) throw new PolicyError('Groups refer to each other in a loop.');
   if (t === '*') return true;
-  if (t === 'internet') return false;
+  if (t === 'internet' || t === 'onprem') return false;
   if (typeof t === 'string') return matches(model, policy, policy.groups![t]!, r, depth + 1);
   const lb = r.kind === 'lb' ? model.loadBalancers.get(r.arn) : undefined;
   const eni = r.kind === 'eni' ? r.eni : undefined;
@@ -263,11 +274,61 @@ export function checkPolicy(model: NetworkModel, exposure: ExposureReport, blast
     const kind = rule.deny ? 'deny' : 'require';
     const body = (rule.deny ?? rule.require)!;
     const want = parsePorts(body.ports, rule.id);
-    const matched = members(model, policy, body.to).length + [...model.loadBalancers.values()].filter((lb) => matches(model, policy, body.to, { kind: 'lb', arn: lb.arn })).length;
+    const matched = body.to === 'internet' ? members(model, policy, body.from).length : members(model, policy, body.to).length + [...model.loadBalancers.values()].filter((lb) => matches(model, policy, body.to, { kind: 'lb', arn: lb.arn })).length;
     const out: PolicyResult = { id: rule.id, ...(rule.description ? { description: rule.description } : {}), severity: rule.severity ?? (kind === 'deny' ? 'high' : 'medium'), kind, status: 'pass', checked: 0, matched, violations: [] };
     const toEni = (e: Eni) => ({ id: e.id, name: displayName(model, e) });
 
-    if (kind === 'deny' && body.from === 'internet') {
+    if (body.to === 'internet') {
+      // Outbound: what the interfaces in "from" can open to the internet (egress.ts).
+      const froms = members(model, policy, body.from);
+      const report = analyzeEgress(model, { only: new Set(froms.map((e) => e.id)) });
+      out.checked = froms.length;
+      if (kind === 'deny') {
+        for (const f of report.findings) {
+          const ports = overlap(want, f.protocol, f.ports);
+          if (ports === false) continue;
+          const label = serviceLabel({ protocol: f.protocol, ...(ports ? { ports } : {}) });
+          out.violations.push({ from: f.resourceId, fromName: f.resourceName, to: 'internet', toName: 'the internet', protocol: f.protocol, ...(ports ? { ports } : {}), detail: `${f.resourceName} can open ${label} to ${f.destinations.slice(0, 2).join(', ')}${f.destinations.length > 2 ? ', ...' : ''} through ${f.via.gateway}`, path: f.trace.map(hopLine), ruleIds: [...new Set(f.trace.filter((h) => h.decision === 'pass' && h.stage === 'source-sg-egress').flatMap((h) => h.ruleIds ?? []))] });
+        }
+      } else {
+        for (const e of froms) {
+          for (const w2 of want!) {
+            const range = w2.ports ?? { from: 0, to: 65535 };
+            const ok = report.findings.some((f) => f.resourceId === e.id && (w2.protocol === 'all' || f.protocol === w2.protocol) && f.ports.from <= range.from && f.ports.to >= range.to && f.destinations[0]?.startsWith('0.0.0.0/0 '));
+            if (ok) continue;
+            const probe = evaluatePath(model, { from: { eni: e.id }, to: { internet: '198.51.100.7' }, protocol: w2.protocol === 'all' ? 'tcp' : w2.protocol, ...(w2.ports ? { port: w2.ports.from } : { port: 443 }) });
+            const label = serviceLabel(w2);
+            out.violations.push({ from: e.id, fromName: toEni(e).name, to: 'internet', toName: 'the internet', protocol: w2.protocol, ...(w2.ports ? { ports: w2.ports } : {}), detail: probe.blockedAt ? `${toEni(e).name} cannot open ${label} to the internet: blocked at ${probe.blockedAt.resourceId} (${probe.blockedAt.detail})` : `${toEni(e).name} cannot open all of ${label} to every internet address`, path: probe.hops.map(hopLine), ruleIds: [] });
+          }
+        }
+      }
+    } else if (body.from === 'onprem') {
+      // From on-premises, over VPN and Direct Connect (hybrid.ts).
+      const tos = members(model, policy, body.to);
+      const report = analyzeOnPrem(model, { only: new Set(tos.map((e) => e.id)) });
+      out.checked = tos.length;
+      if (kind === 'deny') {
+        for (const f of report.findings) {
+          const ports = overlap(want, f.protocol, f.ports);
+          if (ports === false) continue;
+          const label = serviceLabel({ protocol: f.protocol, ...(ports ? { ports } : {}) });
+          out.violations.push({ from: 'onprem', fromName: 'on-premises', to: f.resourceId, toName: f.resourceName, protocol: f.protocol, ...(ports ? { ports } : {}), detail: `${f.sources.slice(0, 3).join(', ')}${f.sources.length > 3 ? ', ...' : ''} on-premises can open ${label} on ${f.resourceName} over ${f.via}`, path: f.trace.map(hopLine), ruleIds: allowedBy(f.trace) });
+        }
+      } else {
+        const space = onPremNetworks(model);
+        for (const e of tos) {
+          for (const w2 of want!) {
+            const range = w2.ports ?? { from: 0, to: 65535 };
+            if (report.findings.some((f) => f.resourceId === e.id && (w2.protocol === 'all' || f.protocol === w2.protocol) && f.ports.from <= range.from && f.ports.to >= range.to)) continue;
+            const label = serviceLabel(w2);
+            // The network that gets furthest explains best why none gets through.
+            const probes = space.map((n) => evaluatePath(model, { from: { ip: formatIpv4(n.range.start) }, to: { eni: e.id }, protocol: w2.protocol === 'all' ? 'tcp' : w2.protocol, ...(w2.ports ? { port: w2.ports.from } : { port: 443 }) }));
+            const probe = probes.sort((x, y) => y.hops.length - x.hops.length)[0];
+            out.violations.push({ from: 'onprem', fromName: 'on-premises', to: e.id, toName: toEni(e).name, protocol: w2.protocol, ...(w2.ports ? { ports: w2.ports } : {}), detail: !probe ? `nothing on-premises can reach ${toEni(e).name}: the snapshot has no VPN or Direct Connect link` : probe?.blockedAt ? `on-premises cannot open ${label} on ${toEni(e).name}: blocked at ${probe.blockedAt.resourceId} (${probe.blockedAt.detail})` : `no on-premises address can open ${label} on ${toEni(e).name}`, path: probe ? probe.hops.map(hopLine) : [], ruleIds: [] });
+          }
+        }
+      }
+    } else if (kind === 'deny' && body.from === 'internet') {
       const matchF = (f: ExposureFinding) => (f.kind === 'interface' ? (() => {
         const e = model.enis.get(f.resourceId);
         return !!e && matches(model, policy, body.to, { kind: 'eni', eni: e });

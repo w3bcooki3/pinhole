@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { analyzeExposure, normalize } from '@pinhole/engine';
+import { analyzeExposure, analyzeOnPrem, normalize } from '@pinhole/engine';
 import type { Snapshot } from '@pinhole/engine';
 import { collectSnapshot, READ_ONLY_OPERATION } from '../src/collect.js';
 import type { Send } from '../src/collect.js';
@@ -32,7 +32,7 @@ const findingKeys = (s: unknown) =>
     .sort();
 
 describe('collectSnapshot', () => {
-  for (const name of ['04-blackhole-routes', '07-alb-private-targets', '08-nlb-client-ip-preservation', '12-network-firewall', '13-inspection-vpc']) {
+  for (const name of ['04-blackhole-routes', '07-alb-private-targets', '08-nlb-client-ip-preservation', '12-network-firewall', '13-inspection-vpc', '15-hybrid']) {
     it(`reproduces fixture ${name} through paginated API calls`, async () => {
       const original = fixture(name);
       const { send, calls } = fakeSend(original);
@@ -49,6 +49,14 @@ describe('collectSnapshot', () => {
       expect([...a.tgwRouteTables.values()].map((t) => t.routes.length)).toEqual([...b.tgwRouteTables.values()].map((t) => t.routes.length));
     });
   }
+
+  it('keeps VPN tunnel keys out of the snapshot', async () => {
+    const { send } = fakeSend(fixture('15-hybrid'));
+    const snap = await collectSnapshot(send, { region: 'us-east-1' });
+    expect(JSON.stringify(snap)).not.toMatch(/secret-psk|PreSharedKey|CustomerGatewayConfiguration/);
+    const onprem = (s: unknown) => analyzeOnPrem(normalize(s)).findings.map((f) => `${f.resourceId} ${f.protocol}/${f.ports.from} ${f.sources.join(',')} ${f.via}`).sort();
+    expect(onprem(snap)).toEqual(onprem(fixture('15-hybrid')));
+  });
 
   it('leaves out a transit gateway route table with more routes than one call returns', async () => {
     const snap = fixture('04-blackhole-routes');
@@ -137,6 +145,14 @@ describe('scripts/cloudshell-collect.sh', () => {
       for (const c of calls) expect(c.split(':')[1]).toMatch(READ_ONLY_OPERATION);
     });
   }
+
+  it.skipIf(!hasJq)('keeps VPN tunnel keys out of the snapshot and still sees the on-premises links', () => {
+    const { snap, calls } = runScript('15-hybrid');
+    expect(calls).toContain('ec2:DescribeVpnConnections');
+    expect(JSON.stringify(snap)).not.toMatch(/secret-psk|PreSharedKey|CustomerGatewayConfiguration|null/);
+    const onprem = (s: unknown) => analyzeOnPrem(normalize(s)).findings.map((f) => `${f.resourceId} ${f.protocol}/${f.ports.from} ${f.sources.join(',')} ${f.via}`).sort();
+    expect(onprem(snap)).toEqual(onprem(fixture('15-hybrid')));
+  });
 
   it.skipIf(!hasJq)('writes the snapshot readable only by its owner', () => {
     const bin = mkdtempSync(join(tmpdir(), 'pinhole-mode-'));

@@ -11,6 +11,8 @@
         "ec2:DescribeInternetGateways",
         "ec2:DescribeEgressOnlyInternetGateways",
         "ec2:DescribeNatGateways",
+        "ec2:DescribeVpnGateways",
+        "ec2:DescribeVpnConnections",
         "ec2:DescribeVpcPeeringConnections",
         "ec2:DescribeTransitGateways",
         "ec2:DescribeTransitGatewayAttachments",

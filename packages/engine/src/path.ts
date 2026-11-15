@@ -26,7 +26,9 @@ import { attachedIgw, eniByPrivateIp, isElbNode, naclForSubnet, primaryIp } from
 import { PROTO_ICMP } from './types.js';
 import type { Eni, NetworkModel, Packet, PortRange, SecurityGroup, Subnet } from './types.js';
 import type { ApplianceCheckpoint, Hop, NaclCheckpoint, Stage, Walk, WalkStep } from './walk.js';
-import { applianceOf, walkRoute } from './walk.js';
+import { applianceOf, walkFromTgwAttachment, walkRoute } from './walk.js';
+import { ONPREM_CAVEAT, describeLink, linkOf } from './onprem.js';
+import type { OnPremLink } from './onprem.js';
 import { evaluateFirewall } from './firewall.js';
 import { lookupRoute } from './routes.js';
 
@@ -80,6 +82,8 @@ export interface PathResult {
   /** For reachable paths: how much of the clients' ephemeral range can get back. */
   returnPath?: ReturnCoverage;
   returnProfiles?: ReturnProfileResult[];
+  /** For outbound paths: the gateway the traffic leaves through, and the public address it leaves as. */
+  via?: { gateway: string; publicIp?: string };
   warnings: string[];
 }
 
@@ -154,7 +158,7 @@ function naclHop(model: NetworkModel, check: NaclCheckpoint, pkt: Packet): Hop {
     stage: check.stage,
     decision: d.action === 'allow' ? 'pass' : 'block',
     resourceId: acl.id,
-    detail: `${acl.id} ${dir} rule ${rule} ${d.action}s ${describePacket(pkt)} ${check.egress ? 'to' : 'from'} ${formatIpv4(check.peerIp)}`,
+    detail: `${acl.id} ${dir} rule ${rule} ${d.action === 'deny' ? 'denies' : 'allows'} ${describePacket(pkt)} ${check.egress ? 'to' : 'from'} ${formatIpv4(check.peerIp)}`,
     ruleIds: [`${acl.id}#${check.egress ? 'egress' : 'ingress'}#${rule}`],
     docUrl: DOCS.naclCustom,
   };
@@ -342,6 +346,59 @@ function walkHops(model: NetworkModel, walk: Walk | WalkStep[], pkt: Packet, spa
   return { hops, ...(limit ? { limit } : {}), appliances };
 }
 
+/**
+ * A packet arriving from outside through a gateway (an internet gateway, or a
+ * virtual private gateway), to `privateIp` in `dstSubnet`. A gateway route table
+ * (ingress routing) may send it through a firewall or appliance first
+ * (https://docs.aws.amazon.com/vpc/latest/userguide/gateway-route-tables.html).
+ * Returns the hops decided so far, the steps still to evaluate (ending with the
+ * destination subnet's network ACL), or the hop that stops it.
+ */
+function ingressFromGateway(model: NetworkModel, gatewayId: string, clientIp: number, dstPrivate: number, privateText: string, dstSubnet: Subnet, pkt: Packet, span: PortRange): { hops: Hop[]; steps: WalkStep[]; fail?: Hop } {
+  const hops: Hop[] = [];
+  let steps: WalkStep[] = [{ kind: 'nacl', check: { subnetId: dstSubnet.id, egress: false, peerIp: clientIp, stage: 'dest-nacl-ingress' } }];
+  const edge = [...model.routeTables.values()].find((rt) => rt.gatewayIds.includes(gatewayId));
+  if (!edge) return { hops, steps };
+  const m = lookupRoute(edge, dstPrivate, model.prefixLists);
+  const target = m?.route.target;
+  const fail = (h: Hop) => {
+    hops.push(h);
+    return { hops, steps, fail: h };
+  };
+  // A gateway route table always holds the VPC's local route, even when a snapshot leaves it out.
+  if (m && m.route.state !== 'active') {
+    return fail({ stage: 'ingress-route', decision: 'block', resourceId: edge.id, detail: `${edge.id} (the route table of ${gatewayId}) sends ${privateText} to a blackhole route.`, docUrl: DOCS.gatewayRouteTables });
+  }
+  if (m && target?.type === 'vpce' && applianceOf(model, target.id)) {
+    hops.push({ stage: 'ingress-route', decision: 'pass', resourceId: edge.id, relatedIds: [target.id], detail: `${edge.id} (the route table of ${gatewayId}): ${m.matchedCidr.text} -> ${target.id}`, docUrl: DOCS.gatewayRouteTables });
+    const app = applianceOf(model, target.id)!;
+    const epSubnet = app.subnetId ? model.subnets.get(app.subnetId) : undefined;
+    if (!epSubnet) return fail({ stage: 'appliance', decision: 'unknown', resourceId: target.id, detail: `The subnet of endpoint ${target.id} is not in the snapshot.`, docUrl: DOCS.gwlbRouting });
+    const on = walkRoute(model, epSubnet, clientIp, dstPrivate, 1);
+    steps = [
+      { kind: 'nacl', check: { subnetId: epSubnet.id, egress: false, peerIp: clientIp, stage: 'appliance-nacl' } },
+      { kind: 'appliance', check: { endpointId: target.id, ...(app.firewallArn ? { firewallArn: app.firewallArn } : {}), ...(app.serviceName ? { serviceName: app.serviceName } : {}), subnetId: epSubnet.id, srcIp: clientIp, dstIp: dstPrivate } },
+      ...on.steps,
+    ];
+    if (on.end.kind !== 'delivered' || on.end.subnet.id !== dstSubnet.id) {
+      const r = walkHops(model, steps, pkt, span);
+      hops.push(...r.hops);
+      if (r.blocking) return { hops, steps, fail: r.blocking };
+      return fail(
+        on.end.kind === 'blocked' || on.end.kind === 'unknown'
+          ? { stage: on.end.stage, decision: on.end.kind === 'blocked' ? 'block' : 'unknown', resourceId: on.end.resourceId, detail: on.end.detail }
+          : { stage: 'route', decision: 'block', resourceId: epSubnet.id, detail: `After ${target.id}, ${privateText} is routed ${on.end.kind === 'egress' ? `to ${on.end.target.id}` : `to ${on.end.subnet.id}`}, not to ${dstSubnet.id}.`, docUrl: DOCS.gwlbRouting },
+      );
+    }
+    return { hops, steps };
+  }
+  if (m && target?.type !== 'local') {
+    return fail({ stage: 'ingress-route', decision: 'unknown', resourceId: edge.id, relatedIds: target ? [target.id] : [], detail: `${edge.id} (the route table of ${gatewayId}) sends ${privateText} to ${target?.id}, which is not an inspection endpoint Pinhole follows.`, docUrl: DOCS.gatewayRouteTables });
+  }
+  hops.push({ stage: 'ingress-route', decision: 'pass', resourceId: edge.id, detail: `${edge.id} (the route table of ${gatewayId}): ${m ? m.matchedCidr.text : 'the VPC CIDR'} -> local`, docUrl: DOCS.gatewayRouteTables });
+  return { hops, steps };
+}
+
 /** Firewalls (by ARN) and appliances (by endpoint) a walk passes. */
 const appliancesOn = (walk: Walk): string[] => walk.steps.filter((s): s is { kind: 'appliance'; check: ApplianceCheckpoint } => s.kind === 'appliance').map((s) => s.check.firewallArn ?? s.check.endpointId);
 
@@ -420,6 +477,270 @@ export interface EvaluateOptions {
   sourceGroupIdsOverride?: string[];
 }
 
+/** Ports a NAT gateway uses for its side of a translated connection (https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-basics.html). */
+export const NAT_PROFILES: EphemeralProfile[] = [{ name: 'NAT gateway', range: { from: 1024, to: 65535 } }];
+
+type Outcome = { verdict: PathResult['verdict']; hops: Hop[]; warnings: string[]; at?: Hop | { stage: Stage; resourceId: string; detail: string; docUrl?: string }; extra?: Partial<PathResult> };
+
+/**
+ * An interface opening a connection to an internet address
+ * (https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html,
+ * https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html):
+ *  - its security group must allow it out;
+ *  - its subnet's route for the address leads, possibly through firewalls, to
+ *    the VPC's internet gateway, and then the interface needs a public IPv4
+ *    address or Elastic IP; or to a public NAT gateway that is available,
+ *    whose own subnet's route leads, possibly through firewalls, to the
+ *    internet gateway;
+ *  - network ACLs allow it out and the reply back in, at every subnet boundary,
+ *    the NAT gateway's subnet included (replies reach the NAT on its own ports,
+ *    1024-65535, and the interface on its ephemeral ports);
+ *  - the reply comes back through the internet gateway, whose route table may
+ *    send it through the same firewalls; a firewall on one direction only drops it.
+ */
+function outboundToInternet(model: NetworkModel, eni: Eni, srcIp: number, subnet: Subnet, dstIp: number, pkt: Packet, profiles: EphemeralProfile[]): Outcome {
+  const hops: Hop[] = [];
+  const warnings: string[] = [];
+  const stop = (h: Hop | { stage: Stage; resourceId: string; detail: string; docUrl?: string }, unknown = false): Outcome => ({ verdict: unknown ? 'unknown' : 'blocked', hops, warnings, at: h });
+  const span: PortRange = { from: Math.min(...profiles.map((p) => p.range.from)), to: Math.max(...profiles.map((p) => p.range.to)) };
+
+  const sgr = sgHop(model, 'source-sg-egress', eni, 'egress', { ip: dstIp, relation: { kind: 'external' } }, pkt);
+  hops.push(sgr.hop);
+  warnings.push(...sgr.warnings);
+  if (sgr.hop.decision !== 'pass') return stop(sgr.hop, sgr.hop.decision !== 'block');
+
+  const out = walkRoute(model, subnet, srcIp, dstIp);
+  const w = walkHops(model, out, pkt, span);
+  hops.push(...w.hops);
+  if (w.blocking) return stop(w.blocking, w.blocking.decision !== 'block');
+  if (out.end.kind === 'blocked') return stop(out.end);
+  if (out.end.kind === 'unknown') return stop(out.end, true);
+  if (out.end.kind === 'delivered') return stop({ stage: 'route', resourceId: out.end.subnet.id, detail: `${formatIpv4(dstIp)} is routed inside the network, to ${out.end.subnet.id}.` });
+  const igwId = attachedIgw(model, subnet.vpcId);
+  const target = out.end.target;
+  const appliances = [...w.appliances];
+  const limit = w.limit;
+  let natLimit: PortRange[] | undefined;
+  // Return checks: on the interface's side (its ephemeral ports) and on the NAT gateway's.
+  const mine: NaclCheckpoint[] = out.steps.filter((x): x is { kind: 'nacl'; check: NaclCheckpoint } => x.kind === 'nacl').map((x) => ({ subnetId: x.check.subnetId, egress: !x.check.egress, peerIp: x.check.egress ? x.check.peerIp : dstIp, stage: 'return-nacl' as Stage }));
+  const natSide: NaclCheckpoint[] = [];
+  let publicIp: string | undefined;
+  let back: { privateIp: number; privateText: string; subnet: Subnet };
+
+  if (target.type === 'igw') {
+    if (target.id !== igwId) return stop({ stage: 'route', resourceId: target.id, detail: `${target.id} is not attached to ${subnet.vpcId}.`, docUrl: DOCS.igw });
+    const mapping = eni.publicAddresses.find((p) => p.privateIp === formatIpv4(srcIp)) ?? eni.publicAddresses[0];
+    if (!mapping) {
+      const h: Hop = { stage: 'public-ip', decision: 'block', resourceId: eni.id, detail: `${eni.id} has no public IPv4 address, and its subnet routes the internet straight to ${target.id}; an internet gateway does not translate private addresses.`, docUrl: DOCS.igw };
+      hops.push(h);
+      return stop(h);
+    }
+    publicIp = mapping.publicIp;
+    hops.push({ stage: 'public-ip', decision: 'pass', resourceId: eni.id, detail: `leaves as ${mapping.elastic ? 'Elastic IP' : 'public IP'} ${mapping.publicIp} through ${target.id}`, docUrl: DOCS.igw });
+    back = { privateIp: srcIp, privateText: formatIpv4(srcIp), subnet };
+  } else if (target.type === 'nat') {
+    const nat = model.natGateways.get(target.id);
+    if (!nat) return stop({ stage: 'nat', resourceId: target.id, detail: `NAT gateway ${target.id} is not in the snapshot.` }, true);
+    if (nat.state !== 'available') {
+      const h: Hop = { stage: 'nat', decision: 'block', resourceId: nat.id, detail: `${nat.id} is ${nat.state}, not available.`, docUrl: DOCS.nat };
+      hops.push(h);
+      return stop(h);
+    }
+    if (nat.connectivity === 'private') {
+      const h: Hop = { stage: 'nat', decision: 'block', resourceId: nat.id, detail: `${nat.id} is a private NAT gateway; it does not reach the internet.`, docUrl: DOCS.nat };
+      hops.push(h);
+      return stop(h);
+    }
+    const natSubnet = model.subnets.get(nat.subnetId);
+    const natIp = nat.privateIps[0] ? parseIpv4(nat.privateIps[0]) : [...model.enis.values()].find((e) => e.interfaceType === 'nat_gateway' && e.subnetId === nat.subnetId && e.description.includes(nat.id))?.privateIps[0];
+    const natPrivate = typeof natIp === 'string' ? parseIpv4(natIp) : natIp;
+    if (!natSubnet || natPrivate === undefined) return stop({ stage: 'nat', resourceId: nat.id, detail: `The subnet or address of ${nat.id} is not in the snapshot.` }, true);
+    publicIp = nat.publicIps[0];
+    hops.push({ stage: 'nat', decision: 'pass', resourceId: nat.id, detail: `${nat.id} translates ${formatIpv4(srcIp)} to ${publicIp ?? 'its Elastic IP'}`, docUrl: DOCS.nat });
+    // Into the NAT gateway's subnet, unless it is the interface's own.
+    const pre: WalkStep[] = [];
+    if (natSubnet.id !== subnet.id) pre.push({ kind: 'nacl', check: { subnetId: natSubnet.id, egress: false, peerIp: srcIp, stage: 'nat-nacl' } });
+    else {
+      // Same subnet: the interface's outbound check does not apply after all.
+      const i = mine.findIndex((c) => c.subnetId === subnet.id && !c.egress);
+      if (i >= 0) mine.splice(i, 1);
+    }
+    const on = walkRoute(model, natSubnet, natPrivate, dstIp);
+    const w2 = walkHops(model, [...pre, ...on.steps], pkt, { from: 1024, to: 65535 });
+    // Name the NAT gateway's leg as such.
+    hops.push(...w2.hops.map((h) => (h.stage === 'source-nacl-egress' ? { ...h, stage: 'nat-nacl' as Stage } : h.stage === 'route' ? { ...h, stage: 'nat-route' as Stage } : h)));
+    if (w2.blocking) return stop(w2.blocking, w2.blocking.decision !== 'block');
+    if (on.end.kind === 'blocked') return stop(on.end);
+    if (on.end.kind === 'unknown') return stop(on.end, true);
+    if (on.end.kind !== 'egress' || on.end.target.type !== 'igw' || on.end.target.id !== igwId) {
+      const h: Hop = { stage: 'nat', decision: 'block', resourceId: nat.id, detail: `${nat.id}'s subnet ${natSubnet.id} routes ${formatIpv4(dstIp)} ${on.end.kind === 'egress' ? `to ${on.end.target.id}` : 'inside the network'}, not to an internet gateway.`, docUrl: DOCS.nat };
+      hops.push(h);
+      return stop(h);
+    }
+    appliances.push(...w2.appliances);
+    if (w2.limit) natLimit = w2.limit;
+    // The reply: into the NAT subnet from the internet (NAT ports), out to the interface (its ports), into the interface's subnet.
+    for (const st of [...pre, ...on.steps]) if (st.kind === 'nacl') natSide.push({ subnetId: st.check.subnetId, egress: !st.check.egress, peerIp: st.check.egress ? st.check.peerIp : dstIp, stage: 'return-nacl' });
+    if (natSubnet.id !== subnet.id) {
+      // NAT subnet outbound to the interface, on the interface's ephemeral ports.
+      const i = natSide.findIndex((c) => c.subnetId === natSubnet.id && c.egress && c.peerIp === dstIp);
+      if (i >= 0) natSide.splice(i, 1);
+      mine.push({ subnetId: natSubnet.id, egress: true, peerIp: srcIp, stage: 'return-nacl' });
+    }
+    back = { privateIp: natPrivate, privateText: formatIpv4(natPrivate), subnet: natSubnet };
+  } else {
+    const h: Hop = { stage: 'route', decision: target.type === 'eigw' ? 'block' : 'unknown', resourceId: target.id, detail: target.type === 'eigw' ? `${formatIpv4(dstIp)} is routed to an egress-only internet gateway, which carries IPv6 only.` : `${formatIpv4(dstIp)} leaves through ${target.id} (${target.type}); paths beyond it are not followed.`, docUrl: DOCS.routePriority };
+    hops.push(h);
+    return stop(h, h.decision === 'unknown');
+  }
+
+  // The reply comes back through the internet gateway, maybe through its route table's firewall.
+  const ing = ingressFromGateway(model, igwId!, dstIp, back.privateIp, back.privateText, back.subnet, { ...pkt }, span);
+  for (const h of ing.hops) hops.push({ ...h, stage: h.stage === 'ingress-route' ? 'ingress-route' : h.stage });
+  if (ing.fail) return stop(ing.fail, ing.fail.decision !== 'block');
+  const backAppliances = ing.steps.filter((x): x is { kind: 'appliance'; check: ApplianceCheckpoint } => x.kind === 'appliance').map((x) => x.check.firewallArn ?? x.check.endpointId);
+  const sym = symmetryHop(model, appliances, backAppliances);
+  if (sym) {
+    hops.push(sym);
+    if (sym.decision === 'block') return stop(sym);
+  }
+  for (const st of ing.steps) if (st.kind === 'nacl' && st.check.stage === 'appliance-nacl') (target.type === 'nat' ? natSide : mine).push({ subnetId: st.check.subnetId, egress: st.check.egress, peerIp: st.check.peerIp, stage: 'return-nacl' });
+  if (target.type === 'nat') {
+    const r = evaluateReturnNacls(model, natSide, pkt, NAT_PROFILES, natLimit);
+    hops.push(...r.hops);
+    if (r.coverage === 'none') return stop(r.blockingHop ?? hops[hops.length - 1]!, r.blockingHop?.decision === 'unknown');
+    if (r.coverage === 'partial') warnings.push(`Replies reach ${target.id} only on some of its ports; some connections through it fail.`);
+  }
+  const ret = evaluateReturnNacls(model, mine, pkt, profiles, limit);
+  hops.push(...ret.hops);
+  if (ret.coverage === 'none') return stop(ret.blockingHop ?? hops[hops.length - 1]!, ret.blockingHop?.decision === 'unknown');
+  return { verdict: 'reachable', hops, warnings, extra: { returnPath: ret.coverage, ...(ret.profiles ? { returnProfiles: ret.profiles } : {}), ...(publicIp ? { via: { gateway: target.id, publicIp } } : { via: { gateway: target.id } }) } };
+}
+
+const onPremHop = (link: OnPremLink, text: string): Hop => ({
+  stage: 'onprem',
+  decision: 'pass',
+  resourceId: link.id,
+  relatedIds: [link.gateway, ...link.connections.map((c) => c.id)],
+  detail: `${text}, over ${describeLink(link)}`,
+  caveat: link.down ? `${ONPREM_CAVEAT} Every VPN tunnel on it was down when the snapshot was taken.` : ONPREM_CAVEAT,
+  docUrl: link.attachment ? DOCS.tgwVpn : DOCS.vpn,
+});
+
+/**
+ * A packet arriving over an on-premises link, to `dstIp` in `subnet`: through
+ * the virtual private gateway's own route table (ingress routing) for a VPN
+ * gateway, or by the attachment's route table for a transit gateway.
+ * Returns the steps to evaluate, or why it does not arrive.
+ */
+function arriveFromOnPrem(model: NetworkModel, link: OnPremLink, srcIp: number, dstIp: number, subnet: Subnet, pkt: Packet, span: PortRange): { hops: Hop[]; steps: WalkStep[]; fail?: Hop } {
+  if (!link.attachment) {
+    if (!link.vpcIds.includes(subnet.vpcId)) {
+      const h: Hop = { stage: 'onprem', decision: 'block', resourceId: link.id, detail: `${link.id} is not attached to ${subnet.vpcId}.`, docUrl: DOCS.vpn };
+      return { hops: [h], steps: [], fail: h };
+    }
+    return ingressFromGateway(model, link.id, srcIp, dstIp, formatIpv4(dstIp), subnet, pkt, span);
+  }
+  const w = walkFromTgwAttachment(model, link.attachment, srcIp, dstIp);
+  if (w.end.kind === 'delivered' && w.end.subnet.id === subnet.id) return { hops: [], steps: w.steps };
+  const r = walkHops(model, w, pkt, span);
+  if (r.blocking) return { hops: r.hops, steps: [], fail: r.blocking };
+  const e = w.end;
+  const fail: Hop =
+    e.kind === 'blocked' || e.kind === 'unknown'
+      ? { stage: e.stage, decision: e.kind === 'blocked' ? 'block' : 'unknown', resourceId: e.resourceId, detail: e.detail, ...(e.docUrl ? { docUrl: e.docUrl } : {}) }
+      : { stage: 'tgw-route', decision: 'block', resourceId: link.attachment.associatedRouteTableId ?? link.id, detail: `Traffic from ${link.id} to ${formatIpv4(dstIp)} is routed ${e.kind === 'egress' ? `to ${e.attachment?.id ?? e.target.id}` : `to ${e.subnet.id}`}, not to ${subnet.id}.`, docUrl: DOCS.tgwRouteTables };
+  return { hops: [...r.hops, fail], steps: [], fail };
+}
+
+/**
+ * A client on-premises (VPN or Direct Connect) opening a connection to an
+ * interface. The interface's subnet route for the client decides which link
+ * the replies take, and so, for the connection to work, which link it must
+ * arrive over (on-premises routing must be symmetric with it). Then the
+ * arrival path, the network ACLs, the security group (the client's own
+ * address: security groups cannot reference on-premises groups), and the
+ * replies back over the same link.
+ */
+function fromOnPrem(model: NetworkModel, srcIp: number, eni: Eni, dstIp: number, subnet: Subnet, pkt: Packet, profiles: EphemeralProfile[], groupIds?: string[]): Outcome {
+  const hops: Hop[] = [];
+  const warnings: string[] = [];
+  const stop = (h: Hop | { stage: Stage; resourceId: string; detail: string; docUrl?: string }, unknown = false): Outcome => ({ verdict: unknown ? 'unknown' : 'blocked', hops, warnings, at: h });
+  const span: PortRange = { from: Math.min(...profiles.map((p) => p.range.from)), to: Math.max(...profiles.map((p) => p.range.to)) };
+  const ip = formatIpv4(srcIp);
+
+  const back = walkRoute(model, subnet, dstIp, srcIp);
+  const link = back.end.kind === 'egress' ? linkOf(model, back.end.target, back.end.attachment) : undefined;
+  if (!link) {
+    if (back.end.kind === 'delivered') return stop({ stage: 'resolve', resourceId: back.end.subnet.id, detail: `${ip} is inside ${back.end.subnet.id}, but no interface in the snapshot has it.` }, true);
+    const routeHop = back.steps.find((s) => s.kind === 'hop' && s.hop.stage === 'route');
+    const e = back.end;
+    const definite = e.kind === 'blocked' || (e.kind === 'egress' && ['igw', 'nat', 'eigw', 'pcx'].includes(e.target.type));
+    const why = e.kind === 'egress' ? `${subnet.id} routes it to ${e.target.id}` : e.detail.replace(/\.$/, '');
+    const h: Hop = {
+      stage: 'return-route',
+      decision: definite ? 'block' : 'unknown',
+      resourceId: e.kind === 'blocked' || e.kind === 'unknown' ? e.resourceId : routeHop?.kind === 'hop' ? routeHop.hop.resourceId : subnet.id,
+      detail: `Replies to ${ip} have no way back on-premises (${why}). It needs a route to a virtual private gateway, or to a transit gateway with a VPN or Direct Connect attachment.`,
+      docUrl: DOCS.vpnRouting,
+    };
+    hops.push(h);
+    return stop(h, !definite);
+  }
+  hops.push(onPremHop(link, `from ${ip} on-premises`));
+  const arr = arriveFromOnPrem(model, link, srcIp, dstIp, subnet, pkt, span);
+  hops.push(...arr.hops);
+  if (arr.fail) return stop(arr.fail, arr.fail.decision !== 'block');
+  const inPath = walkHops(model, arr.steps, pkt, span);
+  hops.push(...inPath.hops);
+  if (inPath.blocking) return stop(inPath.blocking, inPath.blocking.decision !== 'block');
+
+  const sgr = sgHop(model, 'dest-sg-ingress', eni, 'ingress', { ip: srcIp, relation: { kind: 'external' }, ...(groupIds ? { groupIds } : {}) }, pkt);
+  hops.push(sgr.hop);
+  warnings.push(...sgr.warnings);
+  if (sgr.hop.decision !== 'pass') return stop(sgr.hop, sgr.hop.decision !== 'block');
+
+  for (const st of back.steps) if (st.kind === 'hop') hops.push({ ...st.hop, stage: st.hop.stage === 'route' ? 'return-route' : st.hop.stage });
+  const sym = symmetryHop(model, inPath.appliances, appliancesOn(back));
+  if (sym) {
+    hops.push(sym);
+    if (sym.decision === 'block') return stop(sym);
+  }
+  const checks = back.steps.filter((x): x is { kind: 'nacl'; check: NaclCheckpoint } => x.kind === 'nacl').map((x) => ({ ...x.check, stage: 'return-nacl' as Stage }));
+  const ret = evaluateReturnNacls(model, checks, pkt, profiles, inPath.limit);
+  hops.push(...ret.hops);
+  if (ret.coverage === 'none') return stop(ret.blockingHop ?? hops[hops.length - 1]!, ret.blockingHop?.decision === 'unknown');
+  return { verdict: 'reachable', hops, warnings, extra: { returnPath: ret.coverage, ...(ret.profiles ? { returnProfiles: ret.profiles } : {}), via: { gateway: link.id } } };
+}
+
+/**
+ * An interface opening a connection to an address on-premises, after its
+ * security group and route have sent it to a VPN or Direct Connect link: the
+ * replies must come back over the same link to its subnet, through the same
+ * firewalls, and its network ACLs must let them in on its ephemeral ports.
+ */
+function toOnPrem(model: NetworkModel, link: OnPremLink, srcIp: number, subnet: Subnet, dstIp: number, pkt: Packet, profiles: EphemeralProfile[], forwardAppliances: string[], limit: PortRange[] | undefined): Outcome {
+  const hops: Hop[] = [onPremHop(link, `to ${formatIpv4(dstIp)} on-premises`)];
+  const warnings: string[] = [];
+  const stop = (h: Hop, unknown = false): Outcome => ({ verdict: unknown ? 'unknown' : 'blocked', hops, warnings, at: h });
+  const span: PortRange = { from: Math.min(...profiles.map((p) => p.range.from)), to: Math.max(...profiles.map((p) => p.range.to)) };
+  const reply = arriveFromOnPrem(model, link, dstIp, srcIp, subnet, pkt, span);
+  hops.push(...reply.hops.map((h) => (h.stage === 'tgw-route' || h.stage === 'ingress-route' ? { ...h, stage: 'return-route' as Stage } : h)));
+  if (reply.fail) return stop(hops[hops.length - 1]!, reply.fail.decision !== 'block');
+  const back = reply.steps.filter((x): x is { kind: 'appliance'; check: ApplianceCheckpoint } => x.kind === 'appliance').map((x) => x.check.firewallArn ?? x.check.endpointId);
+  const sym = symmetryHop(model, forwardAppliances, back);
+  if (sym) {
+    hops.push(sym);
+    if (sym.decision === 'block') return stop(sym);
+  }
+  for (const st of reply.steps) if (st.kind === 'hop') hops.push({ ...st.hop, stage: st.hop.stage === 'tgw-route' || st.hop.stage === 'dest-vpc-route' ? 'return-route' : st.hop.stage });
+  const checks = reply.steps.filter((x): x is { kind: 'nacl'; check: NaclCheckpoint } => x.kind === 'nacl').map((x) => ({ ...x.check, stage: 'return-nacl' as Stage }));
+  const ret = evaluateReturnNacls(model, checks, pkt, profiles, limit);
+  hops.push(...ret.hops);
+  if (ret.coverage === 'none') return stop(ret.blockingHop ?? hops[hops.length - 1]!, ret.blockingHop?.decision === 'unknown');
+  return { verdict: 'reachable', hops, warnings, extra: { returnPath: ret.coverage, ...(ret.profiles ? { returnProfiles: ret.profiles } : {}), via: { gateway: link.id } } };
+}
+
 export function evaluatePath(model: NetworkModel, query: PathQuery, options: EvaluateOptions = {}): PathResult {
   const warnings: string[] = [];
   const hops: Hop[] = [];
@@ -448,6 +769,12 @@ export function evaluatePath(model: NetworkModel, query: PathQuery, options: Eva
     return { verdict, summary, hops, ...(blockedAt ? { blockedAt } : {}), warnings, ...extra };
   };
 
+  if (dst.kind === 'internet' && src.kind === 'eni') {
+    const r = outboundToInternet(model, src.eni, src.ip, src.subnet, dst.ip, pkt, options.returnProfiles ?? CLIENT_PROFILES);
+    hops.push(...r.hops);
+    warnings.push(...r.warnings);
+    return finish(r.verdict, r.at, r.extra);
+  }
   if (dst.kind !== 'eni') {
     if (src.kind !== 'eni') return finish('unknown', { stage: 'resolve', resourceId: '', detail: 'At least one end of a query must be an interface in the snapshot.' });
     // Outbound to an address outside the snapshot: we can follow it until it
@@ -462,6 +789,13 @@ export function evaluatePath(model: NetworkModel, query: PathQuery, options: Eva
     if (w.blocking) return finish(w.blocking.decision === 'block' ? 'blocked' : 'unknown', w.blocking);
     if (walk.end.kind === 'blocked') return finish('blocked', walk.end);
     if (walk.end.kind === 'unknown') return finish('unknown', walk.end);
+    const link = walk.end.kind === 'egress' ? linkOf(model, walk.end.target, walk.end.attachment) : undefined;
+    if (link) {
+      const r = toOnPrem(model, link, src.ip, src.subnet, dst.ip, pkt, options.returnProfiles ?? CLIENT_PROFILES, w.appliances, w.limit);
+      hops.push(...r.hops);
+      warnings.push(...r.warnings);
+      return finish(r.verdict, r.at, r.extra);
+    }
     const leaves = walk.end.kind === 'egress' ? `leaves through ${walk.end.target.id}` : 'arrives at an address with no interface in the snapshot';
     return finish('unknown', { stage: 'scope', resourceId: walk.end.kind === 'egress' ? walk.end.target.id : '', detail: `Traffic ${leaves}; the far end is outside the snapshot.` });
   }
@@ -472,7 +806,10 @@ export function evaluatePath(model: NetworkModel, query: PathQuery, options: Eva
   // ---------------------------------------------------------------- internet source
   if (src.kind === 'internet' || src.kind === 'outside') {
     if (src.kind === 'outside') {
-      return finish('unknown', { stage: 'resolve', resourceId: '', detail: `${formatIpv4(src.ip)} is a private address outside the snapshot; use an interface or an internet address as the source.` });
+      const r = fromOnPrem(model, src.ip, dstEni, dst.ip, dst.subnet, pkt, profiles, options.sourceGroupIdsOverride);
+      hops.push(...r.hops);
+      warnings.push(...r.warnings);
+      return finish(r.verdict, r.at, r.extra);
     }
     const mapping = dstEni.publicAddresses.find((p) => p.privateIp === formatIpv4(dst.ip)) ?? dstEni.publicAddresses[0];
     if (!mapping) {
@@ -493,50 +830,10 @@ export function evaluatePath(model: NetworkModel, query: PathQuery, options: Eva
 
     // Inbound: the gateway's own route table (ingress routing) may send the
     // packet through a firewall or appliance before it reaches the subnet.
-    let inbound: WalkStep[] = [{ kind: 'nacl', check: { subnetId: dst.subnet.id, egress: false, peerIp: src.ip, stage: 'dest-nacl-ingress' } }];
-    const edge = [...model.routeTables.values()].find((rt) => rt.gatewayIds.includes(igwId));
-    if (edge) {
-      const m = lookupRoute(edge, dstPrivate, model.prefixLists);
-      const target = m?.route.target;
-      // A gateway route table always holds the VPC's local route, even when a snapshot leaves it out.
-      if (m && m.route.state !== 'active') {
-        const h: Hop = { stage: 'ingress-route', decision: 'block', resourceId: edge.id, detail: `${edge.id} (the route table of ${igwId}) sends ${mapping.privateIp} to a blackhole route.`, docUrl: DOCS.gatewayRouteTables };
-        hops.push(h);
-        return finish('blocked', h);
-      }
-      if (m && target?.type === 'vpce' && applianceOf(model, target.id)) {
-        hops.push({ stage: 'ingress-route', decision: 'pass', resourceId: edge.id, relatedIds: [target.id], detail: `${edge.id} (the route table of ${igwId}): ${m.matchedCidr.text} -> ${target.id}`, docUrl: DOCS.gatewayRouteTables });
-        const app = applianceOf(model, target.id)!;
-        const epSubnet = app.subnetId ? model.subnets.get(app.subnetId) : undefined;
-        if (!epSubnet) {
-          const h: Hop = { stage: 'appliance', decision: 'unknown', resourceId: target.id, detail: `The subnet of endpoint ${target.id} is not in the snapshot.`, docUrl: DOCS.gwlbRouting };
-          hops.push(h);
-          return finish('unknown', h);
-        }
-        const on = walkRoute(model, epSubnet, src.ip, dstPrivate, 1);
-        inbound = [
-          { kind: 'nacl', check: { subnetId: epSubnet.id, egress: false, peerIp: src.ip, stage: 'appliance-nacl' } },
-          { kind: 'appliance', check: { endpointId: target.id, ...(app.firewallArn ? { firewallArn: app.firewallArn } : {}), ...(app.serviceName ? { serviceName: app.serviceName } : {}), subnetId: epSubnet.id, srcIp: src.ip, dstIp: dstPrivate } },
-          ...on.steps,
-        ];
-        if (on.end.kind !== 'delivered' || on.end.subnet.id !== dst.subnet.id) {
-          const r = walkHops(model, inbound, pkt, span);
-          hops.push(...r.hops);
-          if (r.blocking) return finish(r.blocking.decision === 'block' ? 'blocked' : 'unknown', r.blocking);
-          const h: Hop = on.end.kind === 'blocked' || on.end.kind === 'unknown'
-            ? { stage: on.end.stage, decision: on.end.kind === 'blocked' ? 'block' : 'unknown', resourceId: on.end.resourceId, detail: on.end.detail }
-            : { stage: 'route', decision: 'block', resourceId: epSubnet.id, detail: `After ${target.id}, ${mapping.privateIp} is routed ${on.end.kind === 'egress' ? `to ${on.end.target.id}` : `to ${on.end.subnet.id}`}, not to ${dst.subnet.id}.`, docUrl: DOCS.gwlbRouting };
-          hops.push(h);
-          return finish(h.decision === 'block' ? 'blocked' : 'unknown', h);
-        }
-      } else if (m && target?.type !== 'local') {
-        const h: Hop = { stage: 'ingress-route', decision: 'unknown', resourceId: edge.id, relatedIds: target ? [target.id] : [], detail: `${edge.id} (the route table of ${igwId}) sends ${mapping.privateIp} to ${target?.id}, which is not an inspection endpoint Pinhole follows.`, docUrl: DOCS.gatewayRouteTables };
-        hops.push(h);
-        return finish('unknown', h);
-      } else {
-        hops.push({ stage: 'ingress-route', decision: 'pass', resourceId: edge.id, detail: `${edge.id} (the route table of ${igwId}): ${m ? m.matchedCidr.text : 'the VPC CIDR'} -> local`, docUrl: DOCS.gatewayRouteTables });
-      }
-    }
+    const ing = ingressFromGateway(model, igwId, src.ip, dstPrivate, mapping.privateIp, dst.subnet, pkt, span);
+    hops.push(...ing.hops);
+    if (ing.fail) return finish(ing.fail.decision === 'block' ? 'blocked' : 'unknown', ing.fail);
+    const inbound = ing.steps;
     const inPath = walkHops(model, inbound, pkt, span);
     hops.push(...inPath.hops);
     if (inPath.blocking) return finish(inPath.blocking.decision === 'block' ? 'blocked' : 'unknown', inPath.blocking);

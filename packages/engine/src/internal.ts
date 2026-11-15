@@ -56,7 +56,7 @@ const NOT_A_SOURCE = new Set(['nat_gateway', 'vpc_endpoint', 'transit_gateway', 
 const NOT_A_DEST = new Set(['nat_gateway', 'vpc_endpoint', 'transit_gateway', 'gateway_load_balancer_endpoint', 'lambda', 'global_accelerator_managed']);
 
 export const canSend = (e: Eni) => !NOT_A_SOURCE.has(e.interfaceType) && e.privateIps.length > 0;
-const canTake = (e: Eni) => !NOT_A_DEST.has(e.interfaceType) || isElbNode(e);
+export const canTake = (e: Eni) => !NOT_A_DEST.has(e.interfaceType) || isElbNode(e);
 
 // Pair results depend only on the model, and fixes are tried many times on the same one.
 const cache = new WeakMap<NetworkModel, Map<string, PairReach>>();

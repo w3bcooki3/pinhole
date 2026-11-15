@@ -136,7 +136,7 @@ pinhole collect --profile audit --region us-east-1,eu-west-1 --out-dir snapshots
   </details>
 
   <h3 id="what-is-in">What a snapshot contains</h3>
-  <p>VPCs, subnets, route tables, internet, NAT and egress-only gateways, peering connections, transit gateways and their route tables, network ACLs, security groups and rules, prefix lists, network interfaces, instance names, VPC endpoints, and load balancers with their listeners, rules, target groups and target health. No data from inside your servers, no credentials, no logs. It does contain your account ID, private and public IP addresses and resource names, so treat it as internal.</p>
+  <p>VPCs, subnets, route tables, internet, NAT and egress-only gateways, virtual private gateways and VPN connections (state, routes and tunnel status only; never the tunnel keys), peering connections, transit gateways and their route tables, network ACLs, security groups and rules, prefix lists, network interfaces, instance names, VPC endpoints, and load balancers with their listeners, rules, target groups and target health. No data from inside your servers, no credentials, no logs. It does contain your account ID, private and public IP addresses and resource names, so treat it as internal.</p>
 </section>
 
 <section id="console" data-group="Use it" data-title="The console">
@@ -147,11 +147,13 @@ pinhole collect --profile audit --region us-east-1,eu-west-1 --out-dir snapshots
     <div class="card"><h4>Attack graph</h4><p>Internet, entry points, exposed resources and load balancer targets, grouped by account, Region and VPC. Pan, zoom, filter and highlight.</p></div>
     <div class="card"><h4>Blast radius</h4><p>If an internet-facing server is compromised, what the attacker reaches next. Each chain shows its route, why it works and the rules that cut it, including chains that cross into another account. Crown jewels come first, with the smallest set of rules that cuts every path to them.</p></div>
     <div class="card"><h4>Exposures</h4><p>Every service the internet can open a connection to. Each opens as a page with a plain verdict, the path hop by hop, and verified fixes with commands, each marked safe or with the internal traffic it would break.</p></div>
+    <div class="card"><h4>Outbound</h4><p>What each server can send to the internet: to which addresses and ports, through which gateway, and as which public address. Data stores that can send anything anywhere are flagged as exfiltration paths.</p></div>
+    <div class="card"><h4>On-premises</h4><p>Your Site-to-Site VPN and Direct Connect links, the on-premises networks AWS routes to each, and every server and port reachable from them, with the path.</p></div>
     <div class="card"><h4>Rule hygiene</h4><p>Rules that are redundant, shadowed, stale, unused or broader than they need to be, groups that can be smaller with exactly the same effect, and rules near AWS quotas.</p></div>
     <div class="card"><h4>Policies</h4><p>Your own rules about what must never and must always be reachable, checked against every snapshot as you type, with the connection that breaks each one.</p></div>
     <div class="card"><h4>Simulator</h4><p>Switch rules off, edit them, or drop public IPs, and see which paths and chains close or open. Exports the changes for the CLI.</p></div>
     <div class="card"><h4>Compare</h4><p>Load an older snapshot of the same account and Region to see what opened or closed, and the configuration changes behind it.</p></div>
-    <div class="card"><h4>Reachability query</h4><p>"Can A reach B, and on what?" and "Who can reach B?", by name, ID or IP.</p></div>
+    <div class="card"><h4>Reachability query</h4><p>"Can A reach B, and on what?" and "Who can reach B?", by name, ID or IP, including addresses on-premises.</p></div>
     <div class="card"><h4>Coverage</h4><p>What each snapshot contained, and anything detected that Pinhole does not analyse, so a clean report is never silently incomplete.</p></div>
     <div class="card"><h4>Report</h4><p>Everything on one page for people who will not open the console. Print it, save it as PDF, or download it as one HTML file.</p></div>
   </div>
@@ -333,6 +335,35 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
   <p>A Gateway Load Balancer endpoint for a third-party appliance is followed like a firewall endpoint, but the appliance's rules are not visible to AWS APIs. Paths through it are assumed to pass, and every exposure through it says so, so it can be checked on the appliance itself.</p>
 </section>
 
+<section id="outbound" data-group="Concepts" data-title="Outbound traffic">
+  <h2>Outbound traffic</h2>
+  <p class="lede">The other direction: what each server can open to the internet. A database that can send any port to any address is an exfiltration path even when nothing can reach it.</p>
+  <!--run lines=14 egress fixtures/14-outbound/snapshot.json-->
+  <p>For each interface the destination addresses and ports are cut at every rule that could decide differently, and one connection per cell is evaluated, exactly as for exposure:</p>
+  <ul>
+    <li>the interface's security group must allow it out;</li>
+    <li>its subnet's route leads, possibly through firewalls, to the VPC's internet gateway, and the interface then needs a public IPv4 address or Elastic IP; or to a public NAT gateway that is available and whose own subnet routes to the internet gateway;</li>
+    <li>network ACLs allow the traffic out and the replies back at every subnet boundary, the NAT gateway's subnet included: replies reach the NAT gateway on its own ports (1024-65535) and the server on its ephemeral ports;</li>
+    <li>replies come back through the internet gateway, through the same firewalls.</li>
+  </ul>
+  <p>Each finding names the gateway and the public address the traffic leaves as. Severity rises with the width of what is open and with whether the server holds data (a crown jewel tag, or a database port its security group lets in). Policies can say what must never, or must always, leave: <code>{"deny": {"from": "prod-db", "to": "internet"}}</code>.</p>
+</section>
+
+<section id="onprem" data-group="Concepts" data-title="On-premises networks">
+  <h2>On-premises networks</h2>
+  <p class="lede">Site-to-Site VPN and Direct Connect are followed up to the AWS gateway, in both directions. Your own routers and firewalls are not visible to AWS, and every such path says so.</p>
+  <!--run lines=18 onprem fixtures/15-hybrid/snapshot.json-->
+  <p><b>The links</b> are virtual private gateways attached to a VPC, and VPN or Direct Connect gateway attachments of a transit gateway. <b>The on-premises networks</b> are what AWS routes to each link: VPC routes to a virtual private gateway (static, or propagated from BGP), transit gateway routes to a VPN or Direct Connect attachment, and the static routes of VPN connections. Tunnels that were down when the snapshot was taken are shown.</p>
+  <p>A connection from an on-premises address to a server works when:</p>
+  <ul>
+    <li>the server's subnet routes the client's address back to a link, and the connection arrives over that same link (on-premises routing has to be symmetric with it);</li>
+    <li>over a virtual private gateway, its route table (ingress routing), if it has one, sends the traffic to the subnet, possibly through a firewall; over a transit gateway, the attachment's route table sends it to the VPC, and the attachment subnet's network ACL and routes apply;</li>
+    <li>the network ACLs and the security group allow the client's own address (security groups cannot reference on-premises groups), and replies back on its ephemeral ports.</li>
+  </ul>
+  <!--run can fixtures/15-hybrid/snapshot.json --from 192.168.10.5 --to db --port 5432-->
+  <p>Outbound to an on-premises address is decided the same way, ending at the link. <code>pinhole can</code> and the console's query page take on-premises addresses on either side, and policies take <code>"from": "onprem"</code>.</p>
+</section>
+
 <section id="privacy" data-group="Trust" data-title="Privacy and security">
   <h2>Privacy and security</h2>
   <ul class="ticks">
@@ -364,6 +395,10 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
       <tr><td>09</td><td>Attack chains, the best fix, and what a change closes and leaves open</td></tr>
       <tr><td>10</td><td>IPv6 without a public IP, egress-only gateways, IPv6 ACL rules</td></tr>
       <tr><td>11</td><td>Attack chains across two peered accounts</td></tr>
+      <tr><td>12</td><td>AWS Network Firewall at the internet edge, rules decided per client port</td></tr>
+      <tr><td>13</td><td>Centralised inspection through a transit gateway and an inspection VPC</td></tr>
+      <tr><td>14</td><td>What servers can send out, through an internet gateway or a NAT gateway</td></tr>
+      <tr><td>15</td><td>Site-to-Site VPN and Direct Connect, through a virtual private gateway and a transit gateway</td></tr>
     </tbody>
   </table>
   </div>
@@ -377,8 +412,8 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
   <p class="lede">Read these before relying on a clean report. Anything detected but not analysed is listed on the Coverage page.</p>
   <ul class="plain">
     <li><b>Scope.</b> VPC network paths to interfaces and Application and Network Load Balancers. Not S3, API Gateway, Lambda function URLs, CloudFront, or other services that are public outside a VPC. Use a configuration scanner such as Prowler or AWS Security Hub for those.</li>
-    <li><b>Followed, with a caveat.</b> Third-party appliances behind Gateway Load Balancer endpoints (their rules are not visible), and Network Firewall rules that match on content or host names.</li>
-    <li><b>Detected, not modelled.</b> Routes to instances or interfaces acting as appliances, Global Accelerator, Classic Load Balancers, VPN and Direct Connect. Paths through them are reported as unknown.</li>
+    <li><b>Followed, with a caveat.</b> Third-party appliances behind Gateway Load Balancer endpoints (their rules are not visible), Network Firewall rules that match on content or host names, and the on-premises side of VPN and Direct Connect.</li>
+    <li><b>Detected, not modelled.</b> Routes to instances or interfaces acting as appliances, Global Accelerator and Classic Load Balancers. Paths through them are reported as unknown.</li>
     <li><b>IPv6</b> is analysed for TCP and UDP to interfaces and dual-stack load balancers. Not yet for ICMPv6 or IPv6 lateral movement.</li>
     <li><b>Wanted traffic is inferred.</b> Fixes count a lost connection as a break only with evidence it is wanted: a load balancer and its targets, a health check, or a rule that names the source's group. Traffic allowed only by an address range may or may not be used; flow logs are not read. A policy's require rules make any connection count.</li>
     <li><b>Configuration, not traffic.</b> Host firewalls, the operating system and whether anything listens on the port are outside the model. Existing connections can outlive a rule change.</li>

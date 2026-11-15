@@ -65,14 +65,14 @@ function linkIds(m: NetworkModel): { kind: JoinLink['kind']; id: string }[] {
 }
 
 type MapKey = Exclude<keyof NetworkModel, 'accountId' | 'region' | 'listeners' | 'warnings'>;
-const OWNED: MapKey[] = ['vpcs', 'subnets', 'routeTables', 'nacls', 'securityGroups', 'internetGateways', 'natGateways', 'enis', 'instances', 'loadBalancers', 'targetGroups', 'vpcEndpoints', 'firewalls'];
+const OWNED: MapKey[] = ['vpcs', 'subnets', 'routeTables', 'nacls', 'securityGroups', 'internetGateways', 'natGateways', 'vpnGateways', 'vpnConnections', 'enis', 'instances', 'loadBalancers', 'targetGroups', 'vpcEndpoints', 'firewalls'];
 /** Shared between snapshots by design; the most complete copy wins. */
 const SHARED: MapKey[] = ['peerings', 'transitGateways', 'tgwAttachments', 'tgwRouteTables', 'prefixLists', 'firewallPolicies', 'firewallRuleGroups'];
 
 function emptyModel(): NetworkModel {
   return {
     vpcs: new Map(), subnets: new Map(), routeTables: new Map(), nacls: new Map(), securityGroups: new Map(), prefixLists: new Map(),
-    internetGateways: new Map(), natGateways: new Map(), peerings: new Map(), transitGateways: new Map(), tgwAttachments: new Map(),
+    internetGateways: new Map(), natGateways: new Map(), vpnGateways: new Map(), vpnConnections: new Map(), peerings: new Map(), transitGateways: new Map(), tgwAttachments: new Map(),
     tgwRouteTables: new Map(), enis: new Map(), instances: new Map(), loadBalancers: new Map(), listeners: [], targetGroups: new Map(),
     vpcEndpoints: new Map(), firewalls: new Map(), firewallPolicies: new Map(), firewallRuleGroups: new Map(), warnings: [],
   };

@@ -81,6 +81,24 @@ export interface RawNatGateway {
   SubnetId: string;
   State?: string;
   ConnectivityType?: string;
+  NatGatewayAddresses?: { PrivateIp?: string; PublicIp?: string; AllocationId?: string; IsPrimary?: boolean }[];
+}
+
+export interface RawVpnGateway {
+  VpnGatewayId: string;
+  State?: string;
+  Type?: string;
+  VpcAttachments?: { VpcId?: string; State?: string }[];
+}
+
+export interface RawVpnConnection {
+  VpnConnectionId: string;
+  State?: string;
+  VpnGatewayId?: string;
+  TransitGatewayId?: string;
+  Options?: { StaticRoutesOnly?: boolean };
+  Routes?: { DestinationCidrBlock?: string; State?: string }[];
+  VgwTelemetry?: { Status?: string; OutsideIpAddress?: string }[];
 }
 
 export interface RawPeeringVpcInfo {
@@ -326,6 +344,9 @@ export interface Snapshot {
     InternetGateways?: RawInternetGateway[];
     EgressOnlyInternetGateways?: RawEgressOnlyInternetGateway[];
     NatGateways?: RawNatGateway[];
+    VpnGateways?: RawVpnGateway[];
+    /** DescribeVpnConnections, without the customer gateway configuration (it holds the tunnel keys). */
+    VpnConnections?: RawVpnConnection[];
     VpcPeeringConnections?: RawPeering[];
     TransitGateways?: RawTransitGateway[];
     TransitGatewayAttachments?: RawTgwAttachment[];
@@ -448,7 +469,9 @@ const SNAPSHOT: Spec = obj({
     RouteTables: arr(obj({ RouteTableId: id('rtb'), VpcId: id('vpc'), Routes: arr(ROUTE), Associations: arr(obj({ Main: 'bool', SubnetId: 'str', GatewayId: 'str', AssociationState: obj({ State: 'str' }) })), Tags: TAGS }, ['RouteTableId', 'VpcId'])),
     InternetGateways: arr(obj({ InternetGatewayId: id('igw'), Attachments: arr(obj({ VpcId: 'str', State: 'str' })) }, ['InternetGatewayId'])),
     EgressOnlyInternetGateways: arr(obj({ EgressOnlyInternetGatewayId: id('eigw'), Attachments: arr(obj({ VpcId: 'str', State: 'str' })) }, ['EgressOnlyInternetGatewayId'])),
-    NatGateways: arr(obj({ NatGatewayId: id('nat'), VpcId: 'str', SubnetId: 'str', State: 'str', ConnectivityType: 'str' }, ['NatGatewayId'])),
+    NatGateways: arr(obj({ NatGatewayId: id('nat'), VpcId: 'str', SubnetId: 'str', State: 'str', ConnectivityType: 'str', NatGatewayAddresses: arr(obj({ PrivateIp: 'str', PublicIp: 'str', AllocationId: 'str', IsPrimary: 'bool' })) }, ['NatGatewayId'])),
+    VpnGateways: arr(obj({ VpnGatewayId: id('vgw'), State: 'str', Type: 'str', VpcAttachments: arr(obj({ VpcId: 'str', State: 'str' })) }, ['VpnGatewayId'])),
+    VpnConnections: arr(obj({ VpnConnectionId: id('vpn'), State: 'str', VpnGatewayId: 'str', TransitGatewayId: 'str', Options: obj({ StaticRoutesOnly: 'bool' }), Routes: arr(obj({ DestinationCidrBlock: 'str', State: 'str' })), VgwTelemetry: arr(obj({ Status: 'str', OutsideIpAddress: 'str' })) }, ['VpnConnectionId'])),
     VpcPeeringConnections: arr(obj({ VpcPeeringConnectionId: id('pcx'), Status: obj({ Code: 'str' }), RequesterVpcInfo: PEER_INFO, AccepterVpcInfo: PEER_INFO }, ['VpcPeeringConnectionId'])),
     TransitGateways: arr(obj({ TransitGatewayId: id('tgw'), OwnerId: 'str', State: 'str', Options: obj({ SecurityGroupReferencingSupport: 'str' }) }, ['TransitGatewayId'])),
     TransitGatewayAttachments: arr(obj({ TransitGatewayAttachmentId: id('tgw-attach'), TransitGatewayId: id('tgw'), ResourceType: 'str', ResourceId: 'str', State: 'str', Association: obj({ TransitGatewayRouteTableId: 'str', State: 'str' }) }, ['TransitGatewayAttachmentId', 'TransitGatewayId'])),

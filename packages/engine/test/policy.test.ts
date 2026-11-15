@@ -92,6 +92,36 @@ describe('policies', () => {
     expect(unexposed.status).toBe('pass');
   });
 
+  it('checks what groups can send to the internet', () => {
+    const m = normalize(raw('14-outbound'));
+    const deny = one(m, { deny: { from: { names: ['db'] }, to: 'internet' } });
+    expect(deny.status).toBe('fail');
+    expect(deny.violations[0]!.detail).toMatch(/db .* can open tcp\/0-65535 to 0\.0\.0\.0\/0 .* through nat-1/);
+    expect(deny.violations[0]!.ruleIds).toEqual(['sgr-db-out']);
+    expect(one(m, { deny: { from: { names: ['app'] }, to: 'internet', ports: 'tcp/22' } }).status).toBe('pass');
+    expect(one(m, { require: { from: { names: ['app'] }, to: 'internet', ports: 'tcp/443' } }).status).toBe('pass');
+    const req = one(m, { require: { from: { names: ['batch'] }, to: 'internet', ports: 'tcp/443' } });
+    expect(req.status).toBe('fail');
+    expect(req.violations[0]!.detail).toMatch(/blocked at rtb-isolated/);
+    expect(() => parsePolicy({ rules: [{ id: 'x', deny: { from: 'internet', to: 'internet' } }] })).toThrow(/cannot both be "internet"/);
+  });
+
+  it('checks what on-premises networks can reach', () => {
+    const m = normalize(raw('15-hybrid'));
+    const ssh = one(m, { deny: { from: 'onprem', to: '*', ports: 'tcp/22' } });
+    expect(ssh.status).toBe('fail');
+    expect(ssh.violations).toHaveLength(1);
+    expect(ssh.violations[0]!.detail).toMatch(/192\.168\.10\.0\/24 on-premises can open tcp\/22 on app .* over vgw-1/);
+    expect(ssh.violations[0]!.ruleIds).toContain('sgr-app-ssh');
+    expect(one(m, { deny: { from: 'onprem', to: { names: ['db'] } } }).status).toBe('pass');
+    expect(one(m, { require: { from: 'onprem', to: { names: ['web'] }, ports: 'tcp/80' } }).status).toBe('pass');
+    const req = one(m, { require: { from: 'onprem', to: { names: ['db'] }, ports: 'tcp/5432' } });
+    expect(req.status).toBe('fail');
+    expect(req.violations[0]!.detail).toMatch(/no way back on-premises/);
+    expect(() => parsePolicy({ rules: [{ id: 'x', deny: { from: '*', to: 'onprem' } }] })).toThrow(/only be the "from"/);
+    expect(() => parsePolicy({ groups: { onprem: {} }, rules: [{ id: 'x', deny: { from: 'onprem', to: '*' } }] })).toThrow(/reserved/);
+  });
+
   it('rejects bad policies, naming the field', () => {
     const bad = (p: unknown, msg: RegExp) => expect(() => parsePolicy(p)).toThrow(msg);
     bad([], /JSON object/);

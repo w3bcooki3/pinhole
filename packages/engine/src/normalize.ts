@@ -149,6 +149,8 @@ export function normalize(input: unknown): NetworkModel {
     prefixLists: new Map(),
     internetGateways: new Map(),
     natGateways: new Map(),
+    vpnGateways: new Map(),
+    vpnConnections: new Map(),
     peerings: new Map(),
     transitGateways: new Map(),
     tgwAttachments: new Map(),
@@ -328,6 +330,23 @@ export function normalize(input: unknown): NetworkModel {
       subnetId: n.SubnetId,
       state: n.State ?? 'available',
       connectivity: n.ConnectivityType === 'private' ? 'private' : 'public',
+      privateIps: (n.NatGatewayAddresses ?? []).map((a) => a.PrivateIp).filter((x): x is string => !!x),
+      publicIps: (n.NatGatewayAddresses ?? []).map((a) => a.PublicIp).filter((x): x is string => !!x),
+    });
+  }
+  for (const g of ec2.VpnGateways ?? []) {
+    model.vpnGateways.set(g.VpnGatewayId, { id: g.VpnGatewayId, state: g.State ?? 'available', vpcIds: (g.VpcAttachments ?? []).filter((a) => a.State === 'attached' && a.VpcId).map((a) => a.VpcId!) });
+  }
+  for (const v of ec2.VpnConnections ?? []) {
+    const tel = v.VgwTelemetry ?? [];
+    model.vpnConnections.set(v.VpnConnectionId, {
+      id: v.VpnConnectionId,
+      state: v.State ?? 'available',
+      ...(v.VpnGatewayId ? { vgwId: v.VpnGatewayId } : {}),
+      ...(v.TransitGatewayId ? { tgwId: v.TransitGatewayId } : {}),
+      staticRoutes: (v.Routes ?? []).filter((r) => r.State !== 'deleted' && r.DestinationCidrBlock).map((r) => tryCidr(r.DestinationCidrBlock!, warnings, v.VpnConnectionId)).filter((c): c is Cidr => !!c),
+      tunnels: tel.length,
+      tunnelsUp: tel.filter((t) => t.Status === 'UP').length,
     });
   }
   for (const p of ec2.VpcPeeringConnections ?? []) {

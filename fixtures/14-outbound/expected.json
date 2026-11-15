@@ -1,0 +1,30 @@
+{
+  "description": "What servers can send to the internet. A web server with a public IP leaves through the internet gateway as itself. Servers in a private subnet leave through a NAT gateway as its Elastic IP, and only when the NAT gateway's subnet routes to the internet gateway and every network ACL on the way allows the traffic out and the replies back, on the server's ephemeral ports and the NAT gateway's own. A database that can send anything anywhere is an exfiltration path. A server whose subnet routes to the internet gateway but has no public IP cannot reach the internet; a subnet with only the local route cannot either.",
+  "docs": [
+    "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-basics.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/custom-network-acl.html"
+  ],
+  "paths": [
+    { "name": "Public server leaves through the internet gateway as itself", "from": { "eni": "eni-web" }, "to": { "internet": "8.8.8.8" }, "protocol": "tcp", "port": 22, "expect": { "verdict": "reachable", "returnPath": "all", "via": ["igw-1"] } },
+    { "name": "Private server leaves through the NAT gateway, replies only on ports the ACL lets back", "from": { "eni": "eni-app" }, "to": { "internet": "8.8.8.8" }, "protocol": "tcp", "port": 443, "expect": { "verdict": "reachable", "returnPath": "partial", "via": ["nat-1", "rtb-public"] } },
+    { "name": "The security group stops other ports", "from": { "eni": "eni-app" }, "to": { "internet": "8.8.8.8" }, "protocol": "tcp", "port": 80, "expect": { "verdict": "blocked", "blockedAt": "source-sg-egress" } },
+    { "name": "No public IP behind an internet gateway route", "from": { "eni": "eni-nopub" }, "to": { "internet": "8.8.8.8" }, "protocol": "tcp", "port": 443, "expect": { "verdict": "blocked", "blockedAt": "public-ip" } },
+    { "name": "No route out of an isolated subnet", "from": { "eni": "eni-batch" }, "to": { "internet": "8.8.8.8" }, "protocol": "tcp", "port": 443, "expect": { "verdict": "blocked", "blockedAt": "route" } },
+    { "name": "The NAT gateway drops ICMP replies the private subnet's ACL does not let in", "from": { "eni": "eni-db" }, "to": { "internet": "8.8.8.8" }, "protocol": "icmp", "expect": { "verdict": "blocked", "blockedAt": "return-nacl" } }
+  ],
+  "egress": {
+    "open": [
+      { "resource": "eni-db", "protocol": "tcp", "port": 4444, "via": "nat-1", "severity": "high", "returnPath": "partial", "destinations": ["0.0.0.0/0 (every internet address)"] },
+      { "resource": "eni-web", "protocol": "tcp", "port": 4444, "via": "igw-1", "severity": "medium", "returnPath": "all" },
+      { "resource": "eni-app", "protocol": "tcp", "port": 443, "via": "nat-1", "severity": "info" }
+    ],
+    "closed": [
+      { "resource": "eni-app", "protocol": "tcp", "port": 80 },
+      { "resource": "eni-batch", "protocol": "tcp", "port": 443 },
+      { "resource": "eni-nopub", "protocol": "tcp", "port": 443 }
+    ],
+    "counts": { "interfaces": 5, "open": 3, "wide": 2 }
+  }
+}

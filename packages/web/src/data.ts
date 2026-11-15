@@ -257,6 +257,7 @@ export const STAGE: Record<string, string> = {
   route: 'Route', peering: 'Peering', 'tgw-attachment': 'TGW attachment', 'tgw-route': 'TGW route', 'tgw-nacl': 'TGW subnet ACL',
   'dest-vpc-route': 'Route in VPC', scope: 'Note', resolve: 'Lookup',
   'ingress-route': 'Gateway route table', 'appliance-nacl': 'Endpoint subnet ACL', firewall: 'Network Firewall', appliance: 'Appliance',
+  nat: 'NAT gateway', 'nat-nacl': 'NAT subnet ACL', 'nat-route': 'NAT subnet route', onprem: 'On-premises link',
 };
 export const SHORT_STAGE: Record<string, string> = {
   'public-ip': 'public ip', igw: 'igw', 'dest-nacl-ingress': 'nacl in', 'dest-sg-ingress': 'sg', 'return-route': 'route back', 'return-nacl': 'nacl out',

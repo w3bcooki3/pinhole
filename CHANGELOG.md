@@ -7,6 +7,23 @@ All notable changes to this project are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Outbound: what each server can send to the internet, through an internet
+  gateway (as its public IP) or a NAT gateway (as the gateway's Elastic IP),
+  with the security group, routes, firewalls and network ACLs of both subnets,
+  and replies on the NAT gateway's and the server's ports. Data stores that
+  can send any port anywhere are flagged as exfiltration paths. `pinhole
+  egress`, the console's Outbound page, and policies with `"to": "internet"`.
+  Fixture 14.
+- On-premises networks over Site-to-Site VPN and Direct Connect: virtual
+  private gateways (with ingress routing) and transit gateway VPN and Direct
+  Connect gateway attachments are followed in both directions, with replies
+  required to come back over the same link. The on-premises networks are the
+  ranges AWS routes to each link. `pinhole onprem`, the console's
+  On-premises page, `pinhole can` and the query page with on-premises
+  addresses, and policies with `"from": "onprem"`. The collector and the
+  CloudShell script read VPN gateways and connections with two new read-only
+  permissions, and keep only state, routes and tunnel status: the tunnel
+  keys never reach the snapshot. Fixture 15.
 - AWS Network Firewall and Gateway Load Balancer appliances in the path.
   Routes to firewall and appliance endpoints are followed: ingress routing on
   the internet gateway, replies through the firewall, east-west inspection,

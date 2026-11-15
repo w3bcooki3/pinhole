@@ -19,6 +19,9 @@ import { exposureMarkdown, exposureSarif } from './formats.js';
 import type { Change } from '@pinhole/engine';
 import { across, acrossText, blastText, canText, fixesFor, fixText, hygiene, hygieneText, LookupError, plan, planText, shortcutChanges, whatIf, whatIfText } from './advanced.js';
 import { VERSION } from './version.js';
+import { egress, egressFailsAt, egressMarkdown, egressText } from './egress.js';
+import { onPremFailsAt, onPremMarkdown, onPremText } from './onprem.js';
+import { analyzeOnPrem } from '@pinhole/engine';
 import { policyCheck, policyFailsAt, policyMarkdown, policyText, readPolicy } from './policy.js';
 import { applyChanges, diffPolicy, findMinCut, PolicyError } from '@pinhole/engine';
 
@@ -37,6 +40,10 @@ Usage:
   pinhole blast    SNAPSHOT [SNAPSHOT...] [--depth N] [--min-severity LEVEL] [--fail-on LEVEL]
   pinhole fix      SNAPSHOT [--plan [--policy POLICY.json]] [--min-severity LEVEL] [--all]
   pinhole hygiene  SNAPSHOT [--fail-on LEVEL]
+  pinhole egress   SNAPSHOT [--format text|json|markdown] [--min-severity LEVEL]
+                            [--fail-on LEVEL] [--verbose]
+  pinhole onprem   SNAPSHOT [--format text|json|markdown] [--min-severity LEVEL]
+                            [--fail-on LEVEL] [--verbose]
   pinhole whatif   SNAPSHOT [--revoke SGR-ID]... [--remove-nacl ACL#ingress#N]...
                             [--remove-public-ip IP]... [--changes FILE.json]
   pinhole diff     OLD NEW [--format text|json|markdown] [--fail-on LEVEL]
@@ -58,7 +65,9 @@ exposure  Reports every interface and load balancer listener reachable from
           --format markdown writes a table for tickets and pull requests.
 can       Whether one resource can reach another, and on which services.
           WHO is an interface ID, instance ID, private IP, instance Name tag,
-          a public IP, or "internet". Without --port, lists every service.
+          a public IP, "internet", or an address on-premises (reached over
+          Site-to-Site VPN or Direct Connect). Without --port, lists every
+          service.
 blast     What an attacker reaches after taking over each internet-exposed
           resource, moving on through remote administration services, and
           the smallest set of rules that cuts every path to the crown jewels
@@ -72,6 +81,15 @@ fix       For each finding, the smallest verified change that closes it, as
           checked for the internal traffic it would break. --policy keeps
           every connection the policy's require rules need working.
           Nothing is run; review and run the commands yourself.
+egress    What each server can send to the internet: which addresses and
+          ports, through which gateway (internet gateway, NAT gateway,
+          firewall) and as which public address. A server that holds data
+          and can send anything anywhere is flagged as an exfiltration path.
+onprem    What clients on-premises can reach over Site-to-Site VPN and
+          Direct Connect: the links, the on-premises networks AWS routes to
+          each, and every server and port reachable from them, with the
+          addresses that work and the path. On-premises routers and
+          firewalls are not visible to AWS and are assumed to pass.
 hygiene   Redundant, shadowed, stale, unused and overly broad rules,
           including rules that several others cover together, the smallest
           equivalent rule set for each group, and rules near AWS quotas.
@@ -296,6 +314,40 @@ function cmdHygiene(args: string[], io: Io): number {
   return failOn && list.some((h) => SEVERITY_ORDER.indexOf(h.severity) <= SEVERITY_ORDER.indexOf(failOn)) ? 2 : 0;
 }
 
+function cmdEgress(args: string[], io: Io): number {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, 'min-severity': { type: 'string' }, 'fail-on': { type: 'string' }, verbose: { type: 'boolean', default: false } } });
+  const format = values.format;
+  if (format !== 'text' && format !== 'json' && format !== 'markdown') throw new UsageError('--format must be text, json or markdown');
+  const min = severityArg(values['min-severity'], '--min-severity') ?? 'info';
+  const failOn = severityArg(values['fail-on'], '--fail-on');
+  const r = egress(snapshotModel(positionals, 'egress'));
+  if (format === 'json') io.stdout(json({ tool: { name: 'pinhole', version: VERSION }, ...r }));
+  else if (format === 'markdown') io.stdout(egressMarkdown(r, min));
+  else io.stdout(safeForTerminal(egressText(r, min, values.verbose ?? false)));
+  if (failOn && egressFailsAt(r, failOn)) {
+    io.stderr(`${egressFailsAt(r, failOn)} outbound finding(s) at or above ${failOn}.\n`);
+    return 2;
+  }
+  return 0;
+}
+
+function cmdOnPrem(args: string[], io: Io): number {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, 'min-severity': { type: 'string' }, 'fail-on': { type: 'string' }, verbose: { type: 'boolean', default: false } } });
+  const format = values.format;
+  if (format !== 'text' && format !== 'json' && format !== 'markdown') throw new UsageError('--format must be text, json or markdown');
+  const min = severityArg(values['min-severity'], '--min-severity') ?? 'info';
+  const failOn = severityArg(values['fail-on'], '--fail-on');
+  const r = analyzeOnPrem(snapshotModel(positionals, 'onprem'));
+  if (format === 'json') io.stdout(json({ tool: { name: 'pinhole', version: VERSION }, ...r }));
+  else if (format === 'markdown') io.stdout(onPremMarkdown(r, min));
+  else io.stdout(safeForTerminal(onPremText(r, min, values.verbose ?? false)));
+  if (failOn && onPremFailsAt(r, failOn)) {
+    io.stderr(`${onPremFailsAt(r, failOn)} on-premises finding(s) at or above ${failOn}.\n`);
+    return 2;
+  }
+  return 0;
+}
+
 function cmdWhatIf(args: string[], io: Io): number {
   const { values, positionals } = parseArgs({
     args,
@@ -487,6 +539,10 @@ export async function run(argv: string[], io: Io): Promise<number> {
         return cmdFix(rest, io);
       case 'hygiene':
         return cmdHygiene(rest, io);
+      case 'egress':
+        return cmdEgress(rest, io);
+      case 'onprem':
+        return cmdOnPrem(rest, io);
       case 'whatif':
         return cmdWhatIf(rest, io);
       case 'diff':

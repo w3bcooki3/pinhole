@@ -8,6 +8,8 @@ import {
   analyzeCleanup,
   analyzeExposure,
   analyzeHygiene,
+  analyzeOnPrem,
+  onPremNetworks,
   applyChanges,
   changeScope,
   cleanupFindings,
@@ -72,8 +74,43 @@ function hopsText(r: PathResult, indent = '    '): string[] {
 
 // ------------------------------------------------------------------ can
 
+/** An address with no interface in the snapshot, or in a network AWS routes on-premises. */
+function outsideRef(model: NetworkModel, ref: string): string | undefined {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(ref)) return undefined;
+  const ip = parseIpv4(ref);
+  if (onPremNetworks(model).some((n) => ip >= n.range.start && ip <= n.range.end)) return ref;
+  if ([...model.enis.values()].some((e) => e.privateIps.includes(ref))) return undefined;
+  return isInternetRef(ref) ? undefined : ref;
+}
+
 export function canText(model: NetworkModel, fromRef: string, toRef: string, protocol: string, port: number | undefined): { text: string; json: unknown; reachable: boolean } {
+  const outTo = outsideRef(model, toRef);
+  if (outTo) {
+    // An interface to an address outside the snapshot: on-premises, or a network routed elsewhere.
+    const from = resolveEni(model, fromRef);
+    if (port === undefined && protocol !== 'icmp') throw new LookupError(`${toRef} is not in the snapshot, so its services are not known; give --port.`);
+    const r = evaluatePath(model, { from: { eni: from }, to: { ip: outTo }, protocol, ...(port !== undefined ? { port } : {}) });
+    return { text: `${r.summary}\n${hopsText(r).join('\n')}\n`, json: r, reachable: r.verdict === 'reachable' };
+  }
   const to = resolveEni(model, toRef);
+  const onprem = outsideRef(model, fromRef);
+  if (onprem) {
+    if (port === undefined) {
+      const ip = parseIpv4(onprem);
+      const report = analyzeOnPrem(model, { only: new Set([to]) });
+      const hits = report.findings.filter((f) => f.sources.some((c) => {
+        const [a, l] = c.split('/') as [string, string];
+        const start = parseIpv4(a);
+        return ip >= start && ip <= start + 2 ** (32 - Number(l)) - 1;
+      }));
+      const lines = [`From ${onprem} (on-premises) to ${name(model, to)}:`];
+      if (!hits.length) lines.push('  nothing is reachable.');
+      for (const f of hits) lines.push(`  ${sevTag(f.severity)} ${f.protocol === 'icmp' ? 'icmp echo' : f.ports.from === f.ports.to ? `${f.protocol}/${f.ports.from}` : `${f.protocol}/${f.ports.from}-${f.ports.to}`} over ${f.via}`);
+      return { text: `${lines.join('\n')}\n`, json: hits, reachable: hits.length > 0 };
+    }
+    const r = evaluatePath(model, { from: { ip: onprem }, to: { eni: to }, protocol, port });
+    return { text: `${r.summary}\n${hopsText(r).join('\n')}\n`, json: r, reachable: r.verdict === 'reachable' };
+  }
   const internet = isInternetRef(fromRef);
   if (internet) {
     if (port === undefined) {

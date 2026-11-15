@@ -182,6 +182,30 @@ export interface NatGateway {
   subnetId: string;
   state: string;
   connectivity: 'public' | 'private';
+  /** NatGatewayAddresses: the gateway's private addresses and, for a public gateway, its Elastic IPs. */
+  privateIps: string[];
+  publicIps: string[];
+}
+
+/** A virtual private gateway: the AWS end of Site-to-Site VPN and Direct Connect (private VIF or DX gateway) into one VPC. */
+export interface VpnGateway {
+  id: string;
+  state: string;
+  /** VPCs it is attached to (state "attached"). */
+  vpcIds: string[];
+}
+
+/** A Site-to-Site VPN connection, on a virtual private gateway or a transit gateway. */
+export interface VpnConnection {
+  id: string;
+  state: string;
+  vgwId?: string;
+  tgwId?: string;
+  /** Static routes (on-premises networks) for connections that do not use BGP. */
+  staticRoutes: Cidr[];
+  /** Tunnels, and how many were UP when the snapshot was taken. */
+  tunnels: number;
+  tunnelsUp: number;
 }
 
 export interface PeeringConnection {
@@ -415,6 +439,8 @@ export interface NetworkModel {
   prefixLists: Map<string, PrefixList>;
   internetGateways: Map<string, InternetGateway>;
   natGateways: Map<string, NatGateway>;
+  vpnGateways: Map<string, VpnGateway>;
+  vpnConnections: Map<string, VpnConnection>;
   peerings: Map<string, PeeringConnection>;
   transitGateways: Map<string, TransitGateway>;
   tgwAttachments: Map<string, TgwAttachment>;

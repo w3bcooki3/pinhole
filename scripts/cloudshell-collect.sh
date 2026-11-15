@@ -63,6 +63,10 @@ call "${WORK}/rtbs.json"      ec2 describe-route-tables
 call "${WORK}/igws.json"      ec2 describe-internet-gateways
 call "${WORK}/eigws.json"     ec2 describe-egress-only-internet-gateways
 call "${WORK}/nats.json"      ec2 describe-nat-gateways
+call "${WORK}/vgws.json"      ec2 describe-vpn-gateways
+# Only the fields Pinhole uses: the full response holds the tunnel pre-shared keys,
+# so they are dropped by the CLI before anything is written.
+call "${WORK}/vpns.json"      ec2 describe-vpn-connections --query '{VpnConnections: VpnConnections[].{VpnConnectionId: VpnConnectionId, State: State, VpnGatewayId: VpnGatewayId, TransitGatewayId: TransitGatewayId, Options: {StaticRoutesOnly: Options.StaticRoutesOnly}, Routes: Routes[].{DestinationCidrBlock: DestinationCidrBlock, State: State}, VgwTelemetry: VgwTelemetry[].{Status: Status}}}'
 call "${WORK}/pcx.json"       ec2 describe-vpc-peering-connections
 call "${WORK}/tgws.json"      ec2 describe-transit-gateways
 call "${WORK}/tgwatt.json"    ec2 describe-transit-gateway-attachments
@@ -171,6 +175,7 @@ jq -n \
   --slurpfile rtbs "${WORK}/rtbs.json" --slurpfile igws "${WORK}/igws.json" \
   --slurpfile eigws "${WORK}/eigws.json" --slurpfile nats "${WORK}/nats.json" \
   --slurpfile pcx "${WORK}/pcx.json" --slurpfile tgws "${WORK}/tgws.json" \
+  --slurpfile vgws "${WORK}/vgws.json" --slurpfile vpns "${WORK}/vpns.json" \
   --slurpfile tgwatt "${WORK}/tgwatt.json" --slurpfile tgwvpcatt "${WORK}/tgwvpcatt.json" \
   --slurpfile tgwrtbs "${WORK}/tgwrtbs.json" --slurpfile tgwroutes "${WORK}/tgwroutes.json" \
   --slurpfile nacls "${WORK}/nacls.json" --slurpfile sgs "${WORK}/sgs.json" \
@@ -196,6 +201,8 @@ jq -n \
       InternetGateways: ($igws[0].InternetGateways // []),
       EgressOnlyInternetGateways: ($eigws[0].EgressOnlyInternetGateways // []),
       NatGateways: ($nats[0].NatGateways // []),
+      VpnGateways: ($vgws[0].VpnGateways // []),
+      VpnConnections: (($vpns[0].VpnConnections // []) | map(del(.. | nulls))),
       VpcPeeringConnections: ($pcx[0].VpcPeeringConnections // []),
       TransitGateways: ($tgws[0].TransitGateways // []),
       TransitGatewayAttachments: ($tgwatt[0].TransitGatewayAttachments // []),

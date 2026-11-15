@@ -230,6 +230,40 @@ The client ports the firewall allows are intersected with the network ACLs' retu
 
 **Cells.** Exposure and service reachability also cut addresses and ports at firewall rule boundaries and at the network ACL and route table entries of every endpoint subnet, so each cell is decided the same way throughout.
 
+## Outbound
+
+`packages/engine/src/egress.ts`, and `outboundToInternet` in `path.ts`.
+
+An interface opening a connection to an internet address
+([internet gateways](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html),
+[NAT gateways](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html)):
+
+1. Its security groups allow it out.
+2. Its subnet's route for the address leads, possibly through firewalls, to the VPC's internet gateway; the interface then needs a public IPv4 address or Elastic IP, which it leaves as. Or the route leads to a NAT gateway that is `available` and public, whose own subnet's route leads, possibly through firewalls, to the internet gateway; the traffic leaves as the NAT gateway's Elastic IP. A private NAT gateway, an egress-only gateway (IPv6 only) or a route inside the network ends the path.
+3. Network ACLs allow it out at every subnet boundary, the NAT gateway's subnet included, and the replies back: into the NAT gateway's subnet on the NAT gateway's ports (1024-65535), out of it and into the interface's subnet on the interface's ephemeral ports.
+4. Replies come in through the internet gateway, through its route table (ingress routing) and any firewall on the way; a Network Firewall seen in one direction only drops them.
+
+The report cuts destination addresses at every security group egress rule, network ACL entry and route of the interface's subnet and its NAT gateway's subnet, firewall rule and gateway route table entry, and ports likewise; one connection per cell is evaluated, and cells with the same answer and the same deciding rules are merged. Interfaces with the same subnet, groups and public address status are evaluated once. Severity: any port range of 1,000 or more to every internet address is medium, high when the interface holds data (a crown jewel tag, or a data service port its security groups let in); a data store otherwise is low; SMTP and remote administration out are low; the rest is info.
+
+## On-premises
+
+`packages/engine/src/onprem.ts`, `hybrid.ts`, and `fromOnPrem` / `toOnPrem` in `path.ts`.
+
+**Links.** A virtual private gateway (`DescribeVpnGateways`, attached VPCs) and the transit gateway attachments of type `vpn` or `direct-connect-gateway`. VPN connections (`DescribeVpnConnections`; only state, gateway, static routes and tunnel status are kept, never the customer gateway configuration or tunnel options, which hold the pre-shared keys) say which links are VPN and whether every tunnel was down. A virtual private gateway without a VPN connection may be Direct Connect.
+
+**On-premises networks.** The ranges AWS routes to a link: active VPC routes to a virtual private gateway (static or propagated), active transit gateway routes to a VPN or Direct Connect attachment, and the static routes of VPN connections. An address with no interface in the snapshot is treated as on-premises.
+
+**From on-premises to an interface.**
+
+1. The interface's subnet route for the client decides the link the replies take. With no such route, or one to an internet or NAT gateway, the connection is blocked (`return-route`): replies cannot get back.
+2. The connection arrives over that same link ([routing is symmetric only if on-premises makes it so](https://docs.aws.amazon.com/vpn/latest/s2svpn/VPNRoutingTypes.html)). Over a virtual private gateway attached to the VPC, its gateway route table, if any, may send the traffic through a firewall first. Over a transit gateway, the attachment's associated route table must send the destination to the VPC's attachment; then the attachment subnet's route table and network ACLs apply, as for any transit gateway path.
+3. The destination subnet's network ACL and the interface's security groups allow the client's address. Security groups cannot reference on-premises groups.
+4. Replies: the return route and network ACLs on the client's ephemeral ports, and firewall symmetry, as for any connection.
+
+**From an interface to on-premises.** Security group, route (to a virtual private gateway attached to the VPC, or through a transit gateway to a VPN or Direct Connect attachment), network ACLs; then the replies arrive over the same link to the interface's subnet, and its network ACLs let them in on the interface's ephemeral ports.
+
+Every path over a link carries a caveat: on-premises routers and firewalls are not visible to AWS. The report (`analyzeOnPrem`) uses the exposure method on the on-premises address space, cut at every security group rule, network ACL entry and route of the interface's VPC, transit gateway route, gateway route table entry and firewall rule. Severity is the internet rating of the service lowered one level, and one more when only 256 or fewer on-premises addresses reach it.
+
 ## Out of scope, detected and warned about
 
 | Detected | How |
@@ -238,7 +272,7 @@ The client ports the firewall allows are intersected with the network ACLs' retu
 | Third-party appliances | routes to `GatewayLoadBalancer` endpoints that are not Network Firewall endpoints (followed, assumed to pass) |
 | Appliances and NAT instances | routes to an interface or instance |
 | Ingress routing elsewhere | gateway route tables that send traffic to something other than `local` or an inspection endpoint |
-| VPN / Direct Connect | routes to a virtual private gateway |
+| On-premises side of VPN / Direct Connect | routes to a virtual private gateway, VPN and Direct Connect gateway attachments (followed to the link, then assumed to pass) |
 | IPv6 | VPC IPv6 CIDRs, egress-only internet gateways |
 | Global Accelerator | `global_accelerator_managed` interfaces |
 | CloudFront | security group rules using the CloudFront origin-facing prefix list |

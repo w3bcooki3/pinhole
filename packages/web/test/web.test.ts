@@ -296,6 +296,47 @@ describe('web console', () => {
       expect(doc.querySelector('.pol-err')).toBeNull();
     });
 
+    it('outbound lists what servers can send to the internet and traces one', () => {
+      const { doc, api } = page();
+      api.loadText(fixture('14-outbound'), 'out.json');
+      api.go('egress');
+      expect(text(doc, '.eg-stats')).toMatch(/can reach the internet/);
+      const rows = [...doc.querySelectorAll('.eg-t tbody tr')] as HTMLElement[];
+      expect(rows.length).toBeGreaterThan(0);
+      const db = rows.find((r) => /db/.test(r.textContent ?? '') && /nat-1/.test(r.textContent ?? ''))!;
+      expect(db).toBeTruthy();
+      expect(db.textContent).toMatch(/any port/);
+      db.click();
+      expect(text(doc, '.eg-detail')).toMatch(/nat-1/);
+      expect(doc.querySelector('.eg-detail .trace, .eg-detail ol, .eg-detail .steps')).not.toBeNull();
+      expect(rows.some((r) => /nopub|batch/.test(r.textContent ?? ''))).toBe(false);
+    });
+
+    it('on-premises lists the links and what clients there reach, and the query page takes their addresses', () => {
+      const { doc, api } = page();
+      api.loadText(fixture('15-hybrid'), 'hybrid.json');
+      api.go('onprem');
+      expect(text(doc, '.op-links')).toMatch(/vgw-1/);
+      expect(text(doc, '.op-links')).toMatch(/192\.168\.0\.0\/16/);
+      expect(text(doc, '.op-links')).toMatch(/Direct Connect/);
+      const rows = [...doc.querySelectorAll('.op-t tbody tr')] as HTMLElement[];
+      expect(rows.length).toBe(3);
+      expect(rows.some((r) => /db/.test(r.textContent ?? ''))).toBe(false);
+      rows[0]!.click();
+      expect(text(doc, '.op-detail')).toMatch(/not visible to AWS/);
+      api.go('ask', { askMode: 'pair', askFrom: '192.168.10.5', askTo: 'db', askProto: 'tcp', askPort: '5432' });
+      expect(text(doc, '.ask-results')).toMatch(/no way back on-premises/);
+      api.go('ask', { askMode: 'pair', askFrom: 'web', askTo: '10.50.1.1', askProto: 'tcp', askPort: '443' });
+      expect(text(doc, '.ask-results')).toMatch(/reachable/i);
+    });
+
+    it('on-premises says so when there are no links', () => {
+      const { doc, api } = page();
+      api.loadText(fixture('06-public-ip-without-igw-route'), 'x.json');
+      api.go('onprem');
+      expect(text(doc, '.page')).toMatch(/No VPN or Direct Connect links/);
+    });
+
     it('blast radius lists chains, traces one and offers the rule that cuts the most', () => {
       const { doc, api } = load9();
       api.go('blast');
@@ -419,7 +460,7 @@ describe('web console', () => {
 describe('documentation', () => {
   it('builds, with every example produced by the real CLI', () => {
     const out = execFileSync(process.execPath, [join(root, 'scripts/build-docs.mjs')], { cwd: root, encoding: 'utf8' });
-    expect(out).toMatch(/18 sections, 11 live examples/);
+    expect(out).toMatch(/20 sections, 14 live examples/);
     const html = readFileSync(join(root, 'site/docs/index.html'), 'utf8');
     expect(html).not.toMatch(/<!--(run|trace|policy)/);
     expect(html).toContain('pinhole blast account-a/snapshot.json account-b/snapshot.json');

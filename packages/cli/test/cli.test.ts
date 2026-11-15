@@ -53,6 +53,28 @@ describe('pinhole CLI', () => {
     expect(r.stdout).not.toMatch(/eni-private-eip/);
   });
 
+  it('onprem lists the links, the networks behind them and what they reach', async () => {
+    const r = await cli('onprem', fx('15-hybrid'));
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/Site-to-Site VPN through vgw-1 \(vpn-1, 1 of 2 tunnels up\)/);
+    expect(r.stdout).toMatch(/Direct Connect through tgw-attach-dx on tgw-1/);
+    expect(r.stdout).toMatch(/\[MEDIUM\] tcp\/22 on app/);
+    expect(r.stdout).not.toMatch(/on db/);
+    expect((await cli('onprem', fx('15-hybrid'), '--fail-on', 'medium')).code).toBe(2);
+    expect(JSON.parse((await cli('onprem', fx('15-hybrid'), '--format', 'json')).stdout).reachable).toBe(2);
+    expect((await cli('onprem', fx('06-public-ip-without-igw-route'))).stdout).toMatch(/No VPN or Direct Connect links/);
+  });
+
+  it('can answers for addresses on-premises, both ways', async () => {
+    const f = fx('15-hybrid');
+    expect((await cli('can', f, '--from', '192.168.10.5', '--to', 'app')).stdout).toMatch(/tcp\/22 over vgw-1/);
+    expect((await cli('can', f, '--from', '192.168.10.5', '--to', 'db', '--port', '5432')).stdout).toMatch(/blocked at return-route/);
+    const out = await cli('can', f, '--from', 'web', '--to', '10.50.1.1', '--port', '443');
+    expect(out.stdout).toMatch(/reachable/);
+    expect(out.stdout).toMatch(/note: On-premises routers and firewalls are not visible/);
+    expect((await cli('can', f, '--from', 'web', '--to', '10.50.1.1')).stderr).toMatch(/give --port/);
+  });
+
   it('does not pass terminal escape sequences from snapshot text through', async () => {
     const snap = JSON.parse(readFileSync(fx('06-public-ip-without-igw-route'), 'utf8'));
     snap.ec2.Instances = [{ InstanceId: 'i-public', Tags: [{ Key: 'Name', Value: 'web\u001b[2J\u001b]0;owned\u0007' }], NetworkInterfaces: [{ NetworkInterfaceId: 'eni-public', Attachment: { DeviceIndex: 0 } }] }];

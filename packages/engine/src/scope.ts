@@ -5,7 +5,8 @@
  * Out of scope: the rules inside third-party appliances behind Gateway Load
  * Balancer endpoints (followed, assumed to pass, and marked), routes to
  * instances or interfaces acting as appliances, Global Accelerator,
- * CloudFront, Classic Load Balancers and VPN/Direct Connect paths.
+ * CloudFront, Classic Load Balancers, and the on-premises side of VPN and
+ * Direct Connect (followed up to the AWS gateway, then assumed to pass).
  */
 import { DOCS } from './docs.js';
 import type { NetworkModel, Warning } from './types.js';
@@ -51,7 +52,12 @@ export function detectOutOfScope(model: NetworkModel): Warning[] {
     add({ code: 'third-party-appliance', message: `Routes send traffic to third-party appliances through Gateway Load Balancer endpoints. Paths through them are followed, but their rules are not visible to AWS APIs, so they are assumed to pass and marked on every path: ${gwlbVpce.join('; ')}.`, resourceIds: gwlbVpce, docUrl: DOCS.gwlbRouting });
   }
   if (vgw.length) {
-    add({ code: 'vpn-or-direct-connect', message: `Routes target virtual private gateways (VPN / Direct Connect); on-premises paths are not modelled: ${vgw.join('; ')}.`, resourceIds: vgw, docUrl: DOCS.vpn });
+    add({ code: 'vpn-or-direct-connect', message: `Routes target virtual private gateways (VPN / Direct Connect). Paths to and from on-premises are followed up to the gateway; on-premises routers and firewalls are not visible to AWS, so those paths assume they pass: ${vgw.join('; ')}.`, resourceIds: vgw, docUrl: DOCS.vpn });
+  }
+
+  const onPremAtt = [...model.tgwAttachments.values()].filter((a) => a.resourceType === 'vpn' || a.resourceType === 'direct-connect-gateway');
+  if (onPremAtt.length) {
+    add({ code: 'vpn-or-direct-connect', message: `Transit gateway attachments lead on-premises. Paths over them are followed up to the transit gateway; on-premises routers and firewalls are not visible to AWS, so those paths assume they pass: ${onPremAtt.map((a) => `${a.id} (${a.resourceType})`).join('; ')}.`, resourceIds: onPremAtt.map((a) => a.id), docUrl: DOCS.tgwVpn });
   }
 
   const gwlbs = [...model.loadBalancers.values()].filter((l) => l.type === 'gateway');

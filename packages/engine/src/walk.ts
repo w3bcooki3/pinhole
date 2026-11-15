@@ -56,6 +56,10 @@ export type Stage =
   | 'appliance-nacl'
   | 'firewall'
   | 'appliance'
+  | 'nat'
+  | 'nat-nacl'
+  | 'nat-route'
+  | 'onprem'
   | 'scope';
 
 export interface Hop {
@@ -102,7 +106,7 @@ export type WalkStep = { kind: 'hop'; hop: Hop } | { kind: 'nacl'; check: NaclCh
 export type WalkEnd =
   | { kind: 'delivered'; vpcId: string; subnet: Subnet; relation: PeerRelation }
   /** Left the modelled network through a gateway (internet, NAT, VPN...). */
-  | { kind: 'egress'; vpcId: string; target: Route['target'] }
+  | { kind: 'egress'; vpcId: string; target: Route['target']; /** For a transit gateway: the VPN or Direct Connect attachment it leaves through. */ attachment?: TgwAttachment }
   | { kind: 'blocked'; stage: Stage; resourceId: string; detail: string; docUrl?: string }
   | { kind: 'unknown'; stage: Stage; resourceId: string; detail: string; docUrl?: string };
 
@@ -176,6 +180,117 @@ function throughAppliance(model: NetworkModel, steps: WalkStep[], from: Subnet, 
   const next = walkRoute(model, epSubnet, srcIp, dstIp, depth + 1);
   steps.push(...next.steps);
   return { steps, end: next.end };
+}
+
+/**
+ * Routes a packet that has entered transit gateway attachment `srcAtt` (from a
+ * VPC, a VPN or Direct Connect) by the attachment's route table, to a VPC
+ * attachment and into that VPC, or out through a VPN / Direct Connect attachment.
+ */
+function fromTgwAttachment(model: NetworkModel, steps: WalkStep[], srcAtt: TgwAttachment, srcIp: number, dstIp: number, depth: number, az: string | undefined): Walk {
+  const end = (e: WalkEnd): Walk => ({ steps, end: e });
+  const tgwId = srcAtt.tgwId;
+  const dstText = formatIpv4(dstIp);
+  const fromVpcId = srcAtt.resourceType === 'vpc' ? srcAtt.resourceId : '';
+  const tgwRtbId = srcAtt.associatedRouteTableId;
+  const tgwRtb = tgwRtbId ? model.tgwRouteTables.get(tgwRtbId) : undefined;
+  if (!tgwRtbId) {
+    return end({ kind: 'blocked', stage: 'tgw-route', resourceId: srcAtt.id, detail: `${srcAtt.id} is not associated with a transit gateway route table.`, docUrl: DOCS.tgwRouteTables });
+  }
+  if (!tgwRtb || !tgwRtb.routesKnown) {
+    return end({ kind: 'unknown', stage: 'tgw-route', resourceId: tgwRtbId, detail: `Routes of ${tgwRtbId} are not in the snapshot (shared transit gateway or missing permission).` });
+  }
+  const tr = lookupTgwRoute(tgwRtb, dstIp, model.prefixLists);
+  if (!tr) {
+    return end({ kind: 'blocked', stage: 'tgw-route', resourceId: tgwRtb.id, detail: `${tgwRtb.id} has no route matching ${dstText}.`, docUrl: DOCS.tgwRouteTables });
+  }
+  if (tr.state === 'blackhole') {
+    steps.push(hop({ stage: 'tgw-route', decision: 'block', resourceId: tgwRtb.id, detail: `${tgwRtb.id}: ${tr.matchedCidr.text} is a ${tr.type} blackhole route`, docUrl: DOCS.tgwRouteTables }));
+    return end({ kind: 'blocked', stage: 'tgw-route', resourceId: tgwRtb.id, detail: `Best route for ${dstText} in ${tgwRtb.id} is a blackhole.`, docUrl: DOCS.tgwRouteTables });
+  }
+  const dstAttId = tr.attachmentIds[0];
+  const dstAtt = dstAttId ? model.tgwAttachments.get(dstAttId) : undefined;
+  steps.push(hop({
+    stage: 'tgw-route',
+    decision: 'pass',
+    resourceId: tgwRtb.id,
+    relatedIds: [tgwId, ...tr.attachmentIds],
+    detail: `${tgwRtb.id}: ${tr.matchedCidr.text} -> ${tr.attachmentIds.join(', ')} (${tr.type})${tr.attachmentIds.length > 1 ? '; ECMP, first attachment followed' : ''}`,
+    docUrl: DOCS.tgwRouteTables,
+  }));
+  if (!dstAtt) {
+    return end({ kind: 'unknown', stage: 'tgw-route', resourceId: dstAttId ?? tgwRtb.id, detail: `Attachment ${dstAttId ?? '(none)'} is not in the snapshot.` });
+  }
+  steps.push(hop({ stage: 'tgw-route', decision: 'pass', resourceId: dstAtt.id, detail: `${dstAtt.id} (${dstAtt.resourceType} ${dstAtt.resourceId})` }));
+  if (dstAtt.resourceType === 'vpn' || dstAtt.resourceType === 'direct-connect-gateway') {
+    return end({ kind: 'egress', vpcId: fromVpcId, target: { type: 'tgw', id: tgwId }, attachment: dstAtt });
+  }
+  if (dstAtt.resourceType !== 'vpc') {
+    return end({ kind: 'unknown', stage: 'scope', resourceId: dstAtt.id, detail: `Transit gateway forwards to a ${dstAtt.resourceType} attachment; v1 only follows VPC attachments.`, docUrl: DOCS.tgwHowItWorks });
+  }
+  const dstVpcId = dstAtt.resourceId;
+  if (!model.vpcs.has(dstVpcId)) {
+    return end({ kind: 'unknown', stage: 'tgw-route', resourceId: dstVpcId, detail: `${dstVpcId} is in another account and not in this snapshot.` });
+  }
+  if (!vpcContains(model, dstVpcId, dstIp)) {
+    // Centralised inspection: the attachment subnet sends the packet to an
+    // appliance, which hands it back towards the transit gateway.
+    const att = dstAtt.subnetIds.map((id) => model.subnets.get(id)).find((sub): sub is Subnet => !!sub && sub.availabilityZone === az) ?? dstAtt.subnetIds.map((id) => model.subnets.get(id)).find((sub): sub is Subnet => !!sub);
+    const attRt = att ? routeTableForSubnet(model, att) : undefined;
+    const via = attRt ? lookupRoute(attRt, dstIp, model.prefixLists) : undefined;
+    if (att && attRt && via && via.route.state === 'active' && via.route.target.type === 'vpce' && applianceOf(model, via.route.target.id)) {
+      steps.push(hop({ stage: 'dest-vpc-route', decision: 'pass', resourceId: attRt.id, relatedIds: [via.route.target.id], detail: `${routeDetail(attRt.id, via.route, via.matchedCidr.text)} from attachment subnet ${att.id}`, docUrl: DOCS.gwlbRouting }));
+      steps.push(nacl({ subnetId: att.id, egress: true, peerIp: dstIp, stage: 'tgw-nacl' }));
+      return throughAppliance(model, steps, att, via.route.target.id, srcIp, dstIp, depth);
+    }
+    return end({ kind: 'unknown', stage: 'scope', resourceId: dstVpcId, detail: `${dstText} is not inside ${dstVpcId}, and its attachment subnet does not send it to an inspection endpoint; onward routing is not modelled.` });
+  }
+  const dstSubnet = deliverInVpc(model, dstVpcId, dstIp);
+  if (!dstSubnet) return end({ kind: 'blocked', stage: 'tgw-route', resourceId: dstVpcId, detail: `${dstText} is in no subnet of ${dstVpcId}.` });
+
+  // The TGW uses its interface in the destination's AZ when there is one,
+  // otherwise an interface in another AZ (how-transit-gateways-work).
+  const dstTgwSubnet = attachmentSubnetInAz(model, dstAtt, dstSubnet.availabilityZone) ?? dstAtt.subnetIds.map((id) => model.subnets.get(id)).find((s): s is Subnet => !!s);
+  if (!dstTgwSubnet) {
+    return end({ kind: 'unknown', stage: 'tgw-attachment', resourceId: dstAtt.id, detail: `Subnets of ${dstAtt.id} are not in the snapshot.` });
+  }
+  // Inside the destination VPC the attachment subnet's route table decides.
+  const dstRt = routeTableForSubnet(model, dstTgwSubnet);
+  const inner = dstRt ? lookupRoute(dstRt, dstIp, model.prefixLists) : undefined;
+  if (!dstRt || !inner) {
+    return end({ kind: 'blocked', stage: 'dest-vpc-route', resourceId: dstRt?.id ?? dstTgwSubnet.id, detail: `No route for ${dstText} from attachment subnet ${dstTgwSubnet.id}.` });
+  }
+  if (inner.route.target.type === 'vpce' && inner.route.state === 'active' && applianceOf(model, inner.route.target.id)) {
+    steps.push(hop({ stage: 'dest-vpc-route', decision: 'pass', resourceId: dstRt.id, relatedIds: [inner.route.target.id], detail: `${routeDetail(dstRt.id, inner.route, inner.matchedCidr.text)} from attachment subnet ${dstTgwSubnet.id}`, docUrl: DOCS.gwlbRouting }));
+    steps.push(nacl({ subnetId: dstTgwSubnet.id, egress: true, peerIp: dstIp, stage: 'tgw-nacl' }));
+    return throughAppliance(model, steps, dstTgwSubnet, inner.route.target.id, srcIp, dstIp, depth);
+  }
+  if (inner.route.target.type !== 'local' || inner.route.state !== 'active') {
+    return end({
+      kind: 'unknown',
+      stage: 'scope',
+      resourceId: dstRt.id,
+      detail: `Attachment subnet ${dstTgwSubnet.id} routes ${dstText} to ${inner.route.target.id} (middlebox or inspection path); not modelled in v1.`,
+      docUrl: DOCS.gwlbRouting,
+    });
+  }
+  steps.push(hop({ stage: 'dest-vpc-route', decision: 'pass', resourceId: dstRt.id, detail: `${routeDetail(dstRt.id, inner.route, inner.matchedCidr.text)} from attachment subnet ${dstTgwSubnet.id}` }));
+
+  const tgw = model.transitGateways.get(tgwId);
+  const relation: PeerRelation = { kind: 'tgw', sgReferencing: !!tgw?.sgReferencing && srcAtt.sgReferencing && dstAtt.sgReferencing };
+  if (dstTgwSubnet.id !== dstSubnet.id) {
+    // TGW -> instance in different subnets: TGW subnet outbound, then instance subnet inbound.
+    steps.push(nacl({ subnetId: dstTgwSubnet.id, egress: true, peerIp: dstIp, stage: 'tgw-nacl' }));
+    steps.push(nacl({ subnetId: dstSubnet.id, egress: false, peerIp: srcIp, stage: 'dest-nacl-ingress' }));
+  } else {
+    steps.push(hop({ stage: 'tgw-nacl', decision: 'info', resourceId: dstSubnet.id, detail: `Destination shares ${dstSubnet.id} with the TGW attachment; NACLs are not evaluated for TGW -> instance.`, docUrl: DOCS.tgwNacls }));
+  }
+  return end({ kind: 'delivered', vpcId: dstVpcId, subnet: dstSubnet, relation });
+}
+
+/** A packet arriving from on-premises through a VPN or Direct Connect attachment of a transit gateway. */
+export function walkFromTgwAttachment(model: NetworkModel, att: TgwAttachment, srcIp: number, dstIp: number): Walk {
+  return fromTgwAttachment(model, [], att, srcIp, dstIp, 0, undefined);
 }
 
 export function walkRoute(model: NetworkModel, from: Subnet, srcIp: number, dstIp: number, depth = 0): Walk {
@@ -262,97 +377,7 @@ export function walkRoute(model: NetworkModel, from: Subnet, srcIp: number, dstI
       // instance -> TGW: TGW subnet inbound, using the source IP.
       steps.push(nacl({ subnetId: srcTgwSubnet.id, egress: false, peerIp: srcIp, stage: 'tgw-nacl' }));
 
-      const tgwRtbId = srcAtt.associatedRouteTableId;
-      const tgwRtb = tgwRtbId ? model.tgwRouteTables.get(tgwRtbId) : undefined;
-      if (!tgwRtbId) {
-        return end({ kind: 'blocked', stage: 'tgw-route', resourceId: srcAtt.id, detail: `${srcAtt.id} is not associated with a transit gateway route table.`, docUrl: DOCS.tgwRouteTables });
-      }
-      if (!tgwRtb || !tgwRtb.routesKnown) {
-        return end({ kind: 'unknown', stage: 'tgw-route', resourceId: tgwRtbId, detail: `Routes of ${tgwRtbId} are not in the snapshot (shared transit gateway or missing permission).` });
-      }
-      const tr = lookupTgwRoute(tgwRtb, dstIp, model.prefixLists);
-      if (!tr) {
-        return end({ kind: 'blocked', stage: 'tgw-route', resourceId: tgwRtb.id, detail: `${tgwRtb.id} has no route matching ${dstText}.`, docUrl: DOCS.tgwRouteTables });
-      }
-      if (tr.state === 'blackhole') {
-        steps.push(hop({ stage: 'tgw-route', decision: 'block', resourceId: tgwRtb.id, detail: `${tgwRtb.id}: ${tr.matchedCidr.text} is a ${tr.type} blackhole route`, docUrl: DOCS.tgwRouteTables }));
-        return end({ kind: 'blocked', stage: 'tgw-route', resourceId: tgwRtb.id, detail: `Best route for ${dstText} in ${tgwRtb.id} is a blackhole.`, docUrl: DOCS.tgwRouteTables });
-      }
-      const dstAttId = tr.attachmentIds[0];
-      const dstAtt = dstAttId ? model.tgwAttachments.get(dstAttId) : undefined;
-      steps.push(hop({
-        stage: 'tgw-route',
-        decision: 'pass',
-        resourceId: tgwRtb.id,
-        relatedIds: [tgwId, ...tr.attachmentIds],
-        detail: `${tgwRtb.id}: ${tr.matchedCidr.text} -> ${tr.attachmentIds.join(', ')} (${tr.type})${tr.attachmentIds.length > 1 ? '; ECMP, first attachment followed' : ''}`,
-        docUrl: DOCS.tgwRouteTables,
-      }));
-      if (!dstAtt) {
-        return end({ kind: 'unknown', stage: 'tgw-route', resourceId: dstAttId ?? tgwRtb.id, detail: `Attachment ${dstAttId ?? '(none)'} is not in the snapshot.` });
-      }
-      steps.push(hop({ stage: 'tgw-route', decision: 'pass', resourceId: dstAtt.id, detail: `${dstAtt.id} (${dstAtt.resourceType} ${dstAtt.resourceId})` }));
-      if (dstAtt.resourceType !== 'vpc') {
-        return end({ kind: 'unknown', stage: 'scope', resourceId: dstAtt.id, detail: `Transit gateway forwards to a ${dstAtt.resourceType} attachment; v1 only follows VPC attachments.`, docUrl: DOCS.tgwHowItWorks });
-      }
-      const dstVpcId = dstAtt.resourceId;
-      if (!model.vpcs.has(dstVpcId)) {
-        return end({ kind: 'unknown', stage: 'tgw-route', resourceId: dstVpcId, detail: `${dstVpcId} is in another account and not in this snapshot.` });
-      }
-      if (!vpcContains(model, dstVpcId, dstIp)) {
-        // Centralised inspection: the attachment subnet sends the packet to an
-        // appliance, which hands it back towards the transit gateway.
-        const att = dstAtt.subnetIds.map((id) => model.subnets.get(id)).find((sub): sub is Subnet => !!sub && sub.availabilityZone === from.availabilityZone) ?? dstAtt.subnetIds.map((id) => model.subnets.get(id)).find((sub): sub is Subnet => !!sub);
-        const attRt = att ? routeTableForSubnet(model, att) : undefined;
-        const via = attRt ? lookupRoute(attRt, dstIp, model.prefixLists) : undefined;
-        if (att && attRt && via && via.route.state === 'active' && via.route.target.type === 'vpce' && applianceOf(model, via.route.target.id)) {
-          steps.push(hop({ stage: 'dest-vpc-route', decision: 'pass', resourceId: attRt.id, relatedIds: [via.route.target.id], detail: `${routeDetail(attRt.id, via.route, via.matchedCidr.text)} from attachment subnet ${att.id}`, docUrl: DOCS.gwlbRouting }));
-          steps.push(nacl({ subnetId: att.id, egress: true, peerIp: dstIp, stage: 'tgw-nacl' }));
-          return throughAppliance(model, steps, att, via.route.target.id, srcIp, dstIp, depth);
-        }
-        return end({ kind: 'unknown', stage: 'scope', resourceId: dstVpcId, detail: `${dstText} is not inside ${dstVpcId}, and its attachment subnet does not send it to an inspection endpoint; onward routing is not modelled.` });
-      }
-      const dstSubnet = deliverInVpc(model, dstVpcId, dstIp);
-      if (!dstSubnet) return end({ kind: 'blocked', stage: 'tgw-route', resourceId: dstVpcId, detail: `${dstText} is in no subnet of ${dstVpcId}.` });
-
-      // The TGW uses its interface in the destination's AZ when there is one,
-      // otherwise an interface in another AZ (how-transit-gateways-work).
-      const dstTgwSubnet = attachmentSubnetInAz(model, dstAtt, dstSubnet.availabilityZone) ?? dstAtt.subnetIds.map((id) => model.subnets.get(id)).find((s): s is Subnet => !!s);
-      if (!dstTgwSubnet) {
-        return end({ kind: 'unknown', stage: 'tgw-attachment', resourceId: dstAtt.id, detail: `Subnets of ${dstAtt.id} are not in the snapshot.` });
-      }
-      // Inside the destination VPC the attachment subnet's route table decides.
-      const dstRt = routeTableForSubnet(model, dstTgwSubnet);
-      const inner = dstRt ? lookupRoute(dstRt, dstIp, model.prefixLists) : undefined;
-      if (!dstRt || !inner) {
-        return end({ kind: 'blocked', stage: 'dest-vpc-route', resourceId: dstRt?.id ?? dstTgwSubnet.id, detail: `No route for ${dstText} from attachment subnet ${dstTgwSubnet.id}.` });
-      }
-      if (inner.route.target.type === 'vpce' && inner.route.state === 'active' && applianceOf(model, inner.route.target.id)) {
-        steps.push(hop({ stage: 'dest-vpc-route', decision: 'pass', resourceId: dstRt.id, relatedIds: [inner.route.target.id], detail: `${routeDetail(dstRt.id, inner.route, inner.matchedCidr.text)} from attachment subnet ${dstTgwSubnet.id}`, docUrl: DOCS.gwlbRouting }));
-        steps.push(nacl({ subnetId: dstTgwSubnet.id, egress: true, peerIp: dstIp, stage: 'tgw-nacl' }));
-        return throughAppliance(model, steps, dstTgwSubnet, inner.route.target.id, srcIp, dstIp, depth);
-      }
-      if (inner.route.target.type !== 'local' || inner.route.state !== 'active') {
-        return end({
-          kind: 'unknown',
-          stage: 'scope',
-          resourceId: dstRt.id,
-          detail: `Attachment subnet ${dstTgwSubnet.id} routes ${dstText} to ${inner.route.target.id} (middlebox or inspection path); not modelled in v1.`,
-          docUrl: DOCS.gwlbRouting,
-        });
-      }
-      steps.push(hop({ stage: 'dest-vpc-route', decision: 'pass', resourceId: dstRt.id, detail: `${routeDetail(dstRt.id, inner.route, inner.matchedCidr.text)} from attachment subnet ${dstTgwSubnet.id}` }));
-
-      const tgw = model.transitGateways.get(tgwId);
-      const relation: PeerRelation = { kind: 'tgw', sgReferencing: !!tgw?.sgReferencing && srcAtt.sgReferencing && dstAtt.sgReferencing };
-      if (dstTgwSubnet.id !== dstSubnet.id) {
-        // TGW -> instance in different subnets: TGW subnet outbound, then instance subnet inbound.
-        steps.push(nacl({ subnetId: dstTgwSubnet.id, egress: true, peerIp: dstIp, stage: 'tgw-nacl' }));
-        steps.push(nacl({ subnetId: dstSubnet.id, egress: false, peerIp: srcIp, stage: 'dest-nacl-ingress' }));
-      } else {
-        steps.push(hop({ stage: 'tgw-nacl', decision: 'info', resourceId: dstSubnet.id, detail: `Destination shares ${dstSubnet.id} with the TGW attachment; NACLs are not evaluated for TGW -> instance.`, docUrl: DOCS.tgwNacls }));
-      }
-      return end({ kind: 'delivered', vpcId: dstVpcId, subnet: dstSubnet, relation });
+      return fromTgwAttachment(model, steps, srcAtt, srcIp, dstIp, depth, from.availabilityZone);
     }
 
     case 'igw': {
@@ -369,6 +394,14 @@ export function walkRoute(model: NetworkModel, from: Subnet, srcIp: number, dstI
     case 'vpce':
       if (applianceOf(model, r.target.id)) return throughAppliance(model, steps, from, r.target.id, srcIp, dstIp, depth);
       return end({ kind: 'egress', vpcId: from.vpcId, target: r.target });
+
+    case 'vgw': {
+      const vgw = model.vpnGateways.get(r.target.id);
+      if (vgw && !vgw.vpcIds.includes(from.vpcId)) {
+        return end({ kind: 'blocked', stage: 'route', resourceId: r.target.id, detail: `${r.target.id} is not attached to ${from.vpcId}.`, docUrl: DOCS.vpn });
+      }
+      return end({ kind: 'egress', vpcId: from.vpcId, target: r.target });
+    }
 
     default:
       // NAT gateway, VPN gateway, interface or instance (middlebox), etc.

@@ -12,7 +12,7 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { normalize, evaluatePath, analyzeExposure, analyzeBlastRadius, analyzeHygiene, applyChanges, diffExposure, findFixes, reachServices, serviceLabel } from '../src/index.js';
+import { analyzeEgress, analyzeOnPrem, normalize, evaluatePath, analyzeExposure, analyzeBlastRadius, analyzeHygiene, applyChanges, diffExposure, findFixes, reachServices, serviceLabel } from '../src/index.js';
 import type { Change, Endpoint, ExposureFinding, PathResult } from '../src/index.js';
 import { INTERNET6, RangeSet6 } from '../src/ipv6.js';
 
@@ -45,6 +45,17 @@ interface Expected {
     topChain?: { steps: string[]; endsWith: string };
   };
   hygiene?: { exact: string[] };
+  egress?: {
+    open?: { resource: string; protocol: string; port: number; via: string; severity?: string; returnPath?: string; destinations?: string[] }[];
+    closed?: { resource: string; protocol: string; port: number }[];
+    counts?: { interfaces: number; open: number; wide: number };
+  };
+  onprem?: {
+    links?: { id: string; kind: string; networks: string[] }[];
+    reachable?: { resource: string; protocol: string; port: number; via: string; sources?: string[] }[];
+    unreachable?: { resource: string; protocol: string; port: number }[];
+    counts?: { interfaces: number; reachable: number };
+  };
   fixes?: { resource: string; protocol: string; port: number; best: string; allVerified?: boolean }[];
   whatIf?: {
     name: string;
@@ -130,6 +141,31 @@ describe('fixtures', () => {
         });
       }
 
+      const op = expected.onprem;
+      if (op) {
+        it('on-premises report', () => {
+          const report = analyzeOnPrem(normalize(snapshot));
+          const summary = `\n${report.findings.map((f) => `${f.resourceId} ${f.protocol}/${f.ports.from}-${f.ports.to} from ${f.sources.join(',')} via ${f.via}`).join('\n')}`;
+          for (const l of op.links ?? []) {
+            const got = report.links.find((x) => x.id === l.id);
+            expect(got, `link ${l.id}`).toBeDefined();
+            expect(got?.kind).toBe(l.kind);
+            expect(got?.networks).toEqual(l.networks);
+          }
+          for (const e of op.reachable ?? []) {
+            const f = report.findings.find((x) => x.resourceId === e.resource && x.protocol === e.protocol && e.port >= x.ports.from && e.port <= x.ports.to);
+            expect(f, `expected ${e.resource} ${e.protocol}/${e.port} reachable from on-premises${summary}`).toBeDefined();
+            expect(f?.via, summary).toBe(e.via);
+            if (e.sources) expect(f?.sources, summary).toEqual(e.sources);
+            expect(f?.caveats?.length, 'on-premises paths carry a caveat').toBeGreaterThan(0);
+          }
+          for (const e of op.unreachable ?? []) {
+            expect(report.findings.find((x) => x.resourceId === e.resource && x.protocol === e.protocol && e.port >= x.ports.from && e.port <= x.ports.to), `${e.resource} ${e.protocol}/${e.port}${summary}`).toBeUndefined();
+          }
+          if (op.counts) expect({ interfaces: report.interfaces, reachable: report.reachable }).toEqual(op.counts);
+        });
+      }
+
       const lat = expected.lateral;
       for (const r of lat?.reach ?? []) {
         it(`reach: ${r.from} -> ${r.to}`, () => {
@@ -156,6 +192,23 @@ describe('fixtures', () => {
             expect(all[0]!.path.startsWith(shape(lat.topChain.steps)), summary).toBe(true);
             expect(all[0]!.impact, summary).toBe(lat.topChain.endsWith);
           }
+        });
+      }
+      if (expected.egress) {
+        it('outbound report', () => {
+          const r = analyzeEgress(normalize(snapshot));
+          const summary = `\n${r.findings.map((f) => `${f.resourceId} ${f.protocol}/${f.ports.from}-${f.ports.to} via ${f.via.gateway} ${f.severity}`).join('\n')}`;
+          const find = (e: { resource: string; protocol: string; port: number }) => r.findings.find((f) => f.resourceId === e.resource && f.protocol === e.protocol && f.ports.from <= e.port && e.port <= f.ports.to);
+          for (const e of expected.egress!.open ?? []) {
+            const f = find(e);
+            expect(f, `expected ${e.resource} ${e.protocol}/${e.port} out${summary}`).toBeDefined();
+            expect(f?.via.gateway, summary).toBe(e.via);
+            if (e.severity) expect(f?.severity, summary).toBe(e.severity);
+            if (e.returnPath) expect(f?.returnPath, summary).toBe(e.returnPath);
+            if (e.destinations) expect(f?.destinations, summary).toEqual(e.destinations);
+          }
+          for (const e of expected.egress!.closed ?? []) expect(find(e), `expected ${e.resource} ${e.protocol}/${e.port} NOT out${summary}`).toBeUndefined();
+          if (expected.egress!.counts) expect({ interfaces: r.interfaces, open: r.open, wide: r.wide }).toEqual(expected.egress!.counts);
         });
       }
       if (expected.hygiene) {

@@ -1,0 +1,668 @@
+{
+ "schemaVersion": 1,
+ "source": "fixture",
+ "accountId": "111122223333",
+ "region": "us-east-1",
+ "ec2": {
+  "Vpcs": [
+   {
+    "VpcId": "vpc-a",
+    "CidrBlock": "10.0.0.0/16",
+    "OwnerId": "111122223333"
+   },
+   {
+    "VpcId": "vpc-b",
+    "CidrBlock": "10.1.0.0/16",
+    "OwnerId": "111122223333"
+   }
+  ],
+  "Subnets": [
+   {
+    "SubnetId": "subnet-app",
+    "VpcId": "vpc-a",
+    "CidrBlock": "10.0.1.0/24",
+    "AvailabilityZone": "us-east-1a"
+   },
+   {
+    "SubnetId": "subnet-db",
+    "VpcId": "vpc-a",
+    "CidrBlock": "10.0.2.0/24",
+    "AvailabilityZone": "us-east-1a"
+   },
+   {
+    "SubnetId": "subnet-web",
+    "VpcId": "vpc-b",
+    "CidrBlock": "10.1.1.0/24",
+    "AvailabilityZone": "us-east-1a"
+   },
+   {
+    "SubnetId": "subnet-b-tgw",
+    "VpcId": "vpc-b",
+    "CidrBlock": "10.1.0.0/28",
+    "AvailabilityZone": "us-east-1a"
+   }
+  ],
+  "VpnGateways": [
+   {
+    "VpnGatewayId": "vgw-1",
+    "State": "available",
+    "Type": "ipsec.1",
+    "VpcAttachments": [
+     {
+      "VpcId": "vpc-a",
+      "State": "attached"
+     }
+    ]
+   }
+  ],
+  "VpnConnections": [
+   {
+    "VpnConnectionId": "vpn-1",
+    "State": "available",
+    "VpnGatewayId": "vgw-1",
+    "Options": {
+     "StaticRoutesOnly": true
+    },
+    "Routes": [
+     {
+      "DestinationCidrBlock": "192.168.0.0/16",
+      "State": "available"
+     }
+    ],
+    "VgwTelemetry": [
+     {
+      "Status": "UP",
+      "OutsideIpAddress": "203.0.113.1"
+     },
+     {
+      "Status": "DOWN",
+      "OutsideIpAddress": "203.0.113.2"
+     }
+    ]
+   },
+   {
+    "VpnConnectionId": "vpn-2",
+    "State": "available",
+    "TransitGatewayId": "tgw-1",
+    "Options": {
+     "StaticRoutesOnly": false
+    },
+    "Routes": [],
+    "VgwTelemetry": [
+     {
+      "Status": "UP"
+     },
+     {
+      "Status": "UP"
+     }
+    ]
+   }
+  ],
+  "RouteTables": [
+   {
+    "RouteTableId": "rtb-app",
+    "VpcId": "vpc-a",
+    "Associations": [
+     {
+      "SubnetId": "subnet-app"
+     }
+    ],
+    "Routes": [
+     {
+      "DestinationCidrBlock": "10.0.0.0/16",
+      "State": "active",
+      "Origin": "CreateRouteTable",
+      "GatewayId": "local"
+     },
+     {
+      "DestinationCidrBlock": "192.168.0.0/16",
+      "State": "active",
+      "Origin": "CreateRoute",
+      "GatewayId": "vgw-1"
+     }
+    ]
+   },
+   {
+    "RouteTableId": "rtb-db",
+    "VpcId": "vpc-a",
+    "Associations": [
+     {
+      "SubnetId": "subnet-db"
+     },
+     {
+      "Main": true
+     }
+    ],
+    "Routes": [
+     {
+      "DestinationCidrBlock": "10.0.0.0/16",
+      "State": "active",
+      "Origin": "CreateRouteTable",
+      "GatewayId": "local"
+     }
+    ]
+   },
+   {
+    "RouteTableId": "rtb-web",
+    "VpcId": "vpc-b",
+    "Associations": [
+     {
+      "SubnetId": "subnet-web"
+     }
+    ],
+    "Routes": [
+     {
+      "DestinationCidrBlock": "10.1.0.0/16",
+      "State": "active",
+      "Origin": "CreateRouteTable",
+      "GatewayId": "local"
+     },
+     {
+      "DestinationCidrBlock": "10.50.0.0/16",
+      "State": "active",
+      "Origin": "CreateRoute",
+      "TransitGatewayId": "tgw-1"
+     },
+     {
+      "DestinationCidrBlock": "172.16.0.0/12",
+      "State": "active",
+      "Origin": "CreateRoute",
+      "TransitGatewayId": "tgw-1"
+     }
+    ]
+   },
+   {
+    "RouteTableId": "rtb-b-tgw",
+    "VpcId": "vpc-b",
+    "Associations": [
+     {
+      "SubnetId": "subnet-b-tgw"
+     },
+     {
+      "Main": true
+     }
+    ],
+    "Routes": [
+     {
+      "DestinationCidrBlock": "10.1.0.0/16",
+      "State": "active",
+      "Origin": "CreateRouteTable",
+      "GatewayId": "local"
+     }
+    ]
+   }
+  ],
+  "TransitGateways": [
+   {
+    "TransitGatewayId": "tgw-1",
+    "State": "available",
+    "Options": {
+     "SecurityGroupReferencingSupport": "disable"
+    }
+   }
+  ],
+  "TransitGatewayAttachments": [
+   {
+    "TransitGatewayAttachmentId": "tgw-attach-b",
+    "TransitGatewayId": "tgw-1",
+    "ResourceType": "vpc",
+    "ResourceId": "vpc-b",
+    "State": "available",
+    "Association": {
+     "TransitGatewayRouteTableId": "tgw-rtb-spoke",
+     "State": "associated"
+    }
+   },
+   {
+    "TransitGatewayAttachmentId": "tgw-attach-vpn",
+    "TransitGatewayId": "tgw-1",
+    "ResourceType": "vpn",
+    "ResourceId": "vpn-2",
+    "State": "available",
+    "Association": {
+     "TransitGatewayRouteTableId": "tgw-rtb-onprem",
+     "State": "associated"
+    }
+   },
+   {
+    "TransitGatewayAttachmentId": "tgw-attach-dx",
+    "TransitGatewayId": "tgw-1",
+    "ResourceType": "direct-connect-gateway",
+    "ResourceId": "dxgw-1",
+    "State": "available",
+    "Association": {
+     "TransitGatewayRouteTableId": "tgw-rtb-onprem",
+     "State": "associated"
+    }
+   }
+  ],
+  "TransitGatewayVpcAttachments": [
+   {
+    "TransitGatewayAttachmentId": "tgw-attach-b",
+    "TransitGatewayId": "tgw-1",
+    "VpcId": "vpc-b",
+    "SubnetIds": [
+     "subnet-b-tgw"
+    ],
+    "State": "available",
+    "Options": {
+     "ApplianceModeSupport": "disable"
+    }
+   }
+  ],
+  "TransitGatewayRouteTables": [
+   {
+    "TransitGatewayRouteTableId": "tgw-rtb-spoke",
+    "TransitGatewayId": "tgw-1",
+    "State": "available"
+   },
+   {
+    "TransitGatewayRouteTableId": "tgw-rtb-onprem",
+    "TransitGatewayId": "tgw-1",
+    "State": "available"
+   }
+  ],
+  "TransitGatewayRoutes": {
+   "tgw-rtb-spoke": [
+    {
+     "DestinationCidrBlock": "10.50.0.0/16",
+     "TransitGatewayAttachments": [
+      {
+       "TransitGatewayAttachmentId": "tgw-attach-vpn",
+       "ResourceId": "vpn-2",
+       "ResourceType": "vpn"
+      }
+     ],
+     "Type": "propagated",
+     "State": "active"
+    },
+    {
+     "DestinationCidrBlock": "172.16.0.0/12",
+     "TransitGatewayAttachments": [
+      {
+       "TransitGatewayAttachmentId": "tgw-attach-dx",
+       "ResourceId": "dxgw-1",
+       "ResourceType": "direct-connect-gateway"
+      }
+     ],
+     "Type": "propagated",
+     "State": "active"
+    }
+   ],
+   "tgw-rtb-onprem": [
+    {
+     "DestinationCidrBlock": "10.1.0.0/16",
+     "TransitGatewayAttachments": [
+      {
+       "TransitGatewayAttachmentId": "tgw-attach-b",
+       "ResourceId": "vpc-b",
+       "ResourceType": "vpc"
+      }
+     ],
+     "Type": "propagated",
+     "State": "active"
+    }
+   ]
+  },
+  "NetworkAcls": [
+   {
+    "NetworkAclId": "acl-a",
+    "VpcId": "vpc-a",
+    "IsDefault": false,
+    "Associations": [
+     {
+      "SubnetId": "subnet-app"
+     },
+     {
+      "SubnetId": "subnet-db"
+     }
+    ],
+    "Entries": [
+     {
+      "RuleNumber": 100,
+      "Protocol": "-1",
+      "RuleAction": "allow",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 100,
+      "Protocol": "-1",
+      "RuleAction": "allow",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     }
+    ]
+   },
+   {
+    "NetworkAclId": "acl-web",
+    "VpcId": "vpc-b",
+    "IsDefault": false,
+    "Associations": [
+     {
+      "SubnetId": "subnet-web"
+     }
+    ],
+    "Entries": [
+     {
+      "RuleNumber": 50,
+      "Protocol": "6",
+      "RuleAction": "deny",
+      "Egress": false,
+      "CidrBlock": "172.16.0.0/12",
+      "PortRange": {
+       "From": 3389,
+       "To": 3389
+      }
+     },
+     {
+      "RuleNumber": 100,
+      "Protocol": "-1",
+      "RuleAction": "allow",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 100,
+      "Protocol": "-1",
+      "RuleAction": "allow",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     }
+    ]
+   },
+   {
+    "NetworkAclId": "acl-b-tgw",
+    "VpcId": "vpc-b",
+    "IsDefault": false,
+    "Associations": [
+     {
+      "SubnetId": "subnet-b-tgw"
+     }
+    ],
+    "Entries": [
+     {
+      "RuleNumber": 100,
+      "Protocol": "-1",
+      "RuleAction": "allow",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 100,
+      "Protocol": "-1",
+      "RuleAction": "allow",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     }
+    ]
+   }
+  ],
+  "SecurityGroups": [
+   {
+    "GroupId": "sg-app",
+    "GroupName": "app",
+    "VpcId": "vpc-a"
+   },
+   {
+    "GroupId": "sg-db",
+    "GroupName": "db",
+    "VpcId": "vpc-a"
+   },
+   {
+    "GroupId": "sg-web",
+    "GroupName": "web",
+    "VpcId": "vpc-b"
+   }
+  ],
+  "SecurityGroupRules": [
+   {
+    "SecurityGroupRuleId": "sgr-app-ssh",
+    "GroupId": "sg-app",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 22,
+    "ToPort": 22,
+    "CidrIpv4": "192.168.10.0/24"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-app-https",
+    "GroupId": "sg-app",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 443,
+    "ToPort": 443,
+    "CidrIpv4": "192.168.0.0/16"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-app-out",
+    "GroupId": "sg-app",
+    "IsEgress": true,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-db-pg",
+    "GroupId": "sg-db",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 5432,
+    "ToPort": 5432,
+    "CidrIpv4": "192.168.0.0/16"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-db-out",
+    "GroupId": "sg-db",
+    "IsEgress": true,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-web-http",
+    "GroupId": "sg-web",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 80,
+    "ToPort": 80,
+    "CidrIpv4": "10.50.0.0/16"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-web-rdp",
+    "GroupId": "sg-web",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 3389,
+    "ToPort": 3389,
+    "CidrIpv4": "172.16.0.0/12"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-web-out",
+    "GroupId": "sg-web",
+    "IsEgress": true,
+    "IpProtocol": "tcp",
+    "FromPort": 443,
+    "ToPort": 443,
+    "CidrIpv4": "10.50.0.0/16"
+   }
+  ],
+  "NetworkInterfaces": [
+   {
+    "NetworkInterfaceId": "eni-app",
+    "SubnetId": "subnet-app",
+    "VpcId": "vpc-a",
+    "InterfaceType": "interface",
+    "PrivateIpAddress": "10.0.1.10",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.1.10",
+      "Primary": true
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-app"
+     }
+    ],
+    "Attachment": {
+     "InstanceId": "i-app",
+     "DeviceIndex": 0
+    },
+    "Status": "in-use"
+   },
+   {
+    "NetworkInterfaceId": "eni-db",
+    "SubnetId": "subnet-db",
+    "VpcId": "vpc-a",
+    "InterfaceType": "interface",
+    "PrivateIpAddress": "10.0.2.10",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.2.10",
+      "Primary": true
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-db"
+     }
+    ],
+    "Attachment": {
+     "InstanceId": "i-db",
+     "DeviceIndex": 0
+    },
+    "Status": "in-use"
+   },
+   {
+    "NetworkInterfaceId": "eni-web",
+    "SubnetId": "subnet-web",
+    "VpcId": "vpc-b",
+    "InterfaceType": "interface",
+    "PrivateIpAddress": "10.1.1.10",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.1.1.10",
+      "Primary": true
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-web"
+     }
+    ],
+    "Attachment": {
+     "InstanceId": "i-web",
+     "DeviceIndex": 0
+    },
+    "Status": "in-use"
+   }
+  ],
+  "Instances": [
+   {
+    "InstanceId": "i-app",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "app"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-app",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   },
+   {
+    "InstanceId": "i-db",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "db"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-db",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   },
+   {
+    "InstanceId": "i-web",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "web"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-web",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   }
+  ]
+ }
+}
