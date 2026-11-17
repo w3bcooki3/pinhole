@@ -149,6 +149,8 @@ export function normalize(input: unknown): NetworkModel {
     prefixLists: new Map(),
     internetGateways: new Map(),
     natGateways: new Map(),
+    elasticIps: new Map(),
+    ...(ec2.Addresses ? { elasticIpsKnown: true } : {}),
     vpnGateways: new Map(),
     vpnConnections: new Map(),
     peerings: new Map(),
@@ -334,6 +336,12 @@ export function normalize(input: unknown): NetworkModel {
       privateIps: (n.NatGatewayAddresses ?? []).map((a) => a.PrivateIp).filter((x): x is string => !!x),
       publicIps: (n.NatGatewayAddresses ?? []).map((a) => a.PublicIp).filter((x): x is string => !!x),
     });
+  }
+  for (const a of ec2.Addresses ?? []) {
+    if (!a.PublicIp) continue;
+    const name = a.Tags?.find((t) => t.Key === 'Name')?.Value;
+    const id = a.AllocationId ?? a.PublicIp;
+    model.elasticIps.set(id, { id, publicIp: a.PublicIp, ...(name ? { name } : {}), ...(a.AssociationId ? { associationId: a.AssociationId } : {}), ...(a.NetworkInterfaceId ? { eniId: a.NetworkInterfaceId } : {}), ...(a.InstanceId ? { instanceId: a.InstanceId } : {}) });
   }
   for (const g of ec2.VpnGateways ?? []) {
     model.vpnGateways.set(g.VpnGatewayId, { id: g.VpnGatewayId, state: g.State ?? 'available', vpcIds: (g.VpcAttachments ?? []).filter((a) => a.State === 'attached' && a.VpcId).map((a) => a.VpcId!) });

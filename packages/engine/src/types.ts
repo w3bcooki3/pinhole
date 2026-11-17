@@ -187,6 +187,18 @@ export interface NatGateway {
   publicIps: string[];
 }
 
+/** An Elastic IP allocated to the account (DescribeAddresses). Billed by the hour whether or not it is attached. */
+export interface ElasticIp {
+  /** Allocation ID, or the address itself when the snapshot has none. */
+  id: string;
+  publicIp: string;
+  name?: string;
+  /** Set when the address is attached to something. */
+  associationId?: string;
+  eniId?: string;
+  instanceId?: string;
+}
+
 /** A virtual private gateway: the AWS end of Site-to-Site VPN and Direct Connect (private VIF or DX gateway) into one VPC. */
 export interface VpnGateway {
   id: string;
@@ -467,6 +479,10 @@ export interface NetworkModel {
   prefixLists: Map<string, PrefixList>;
   internetGateways: Map<string, InternetGateway>;
   natGateways: Map<string, NatGateway>;
+  /** Elastic IPs; empty when the snapshot has no DescribeAddresses output (see elasticIpsKnown). */
+  elasticIps: Map<string, ElasticIp>;
+  /** Whether the snapshot listed Elastic IPs at all (older snapshots did not). */
+  elasticIpsKnown?: boolean;
   vpnGateways: Map<string, VpnGateway>;
   vpnConnections: Map<string, VpnConnection>;
   peerings: Map<string, PeeringConnection>;

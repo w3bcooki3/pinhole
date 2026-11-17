@@ -1,0 +1,789 @@
+{
+ "schemaVersion": 1,
+ "source": "fixture",
+ "accountId": "111122223333",
+ "region": "us-east-1",
+ "ec2": {
+  "Vpcs": [
+   {
+    "VpcId": "vpc-1",
+    "CidrBlock": "10.0.0.0/16",
+    "OwnerId": "111122223333"
+   }
+  ],
+  "Subnets": [
+   {
+    "SubnetId": "subnet-public-a",
+    "VpcId": "vpc-1",
+    "CidrBlock": "10.0.0.0/24",
+    "AvailabilityZone": "us-east-1a"
+   },
+   {
+    "SubnetId": "subnet-private-a",
+    "VpcId": "vpc-1",
+    "CidrBlock": "10.0.1.0/24",
+    "AvailabilityZone": "us-east-1a"
+   },
+   {
+    "SubnetId": "subnet-private-b",
+    "VpcId": "vpc-1",
+    "CidrBlock": "10.0.2.0/24",
+    "AvailabilityZone": "us-east-1b"
+   },
+   {
+    "SubnetId": "subnet-public-b",
+    "VpcId": "vpc-1",
+    "CidrBlock": "10.0.3.0/24",
+    "AvailabilityZone": "us-east-1b"
+   }
+  ],
+  "InternetGateways": [
+   {
+    "InternetGatewayId": "igw-1",
+    "Attachments": [
+     {
+      "VpcId": "vpc-1",
+      "State": "available"
+     }
+    ]
+   }
+  ],
+  "NatGateways": [
+   {
+    "NatGatewayId": "nat-1",
+    "VpcId": "vpc-1",
+    "SubnetId": "subnet-public-a",
+    "State": "available",
+    "ConnectivityType": "public",
+    "NatGatewayAddresses": [
+     {
+      "PrivateIp": "10.0.0.5",
+      "PublicIp": "192.0.2.50",
+      "AllocationId": "eipalloc-nat1",
+      "IsPrimary": true
+     }
+    ]
+   },
+   {
+    "NatGatewayId": "nat-2",
+    "VpcId": "vpc-1",
+    "SubnetId": "subnet-public-b",
+    "State": "available",
+    "ConnectivityType": "public",
+    "NatGatewayAddresses": [
+     {
+      "PrivateIp": "10.0.3.5",
+      "PublicIp": "192.0.2.51",
+      "AllocationId": "eipalloc-nat2",
+      "IsPrimary": true
+     }
+    ]
+   }
+  ],
+  "Addresses": [
+   {
+    "AllocationId": "eipalloc-nat1",
+    "PublicIp": "192.0.2.50",
+    "AssociationId": "eipassoc-nat1",
+    "NetworkInterfaceId": "eni-nat1",
+    "PrivateIpAddress": "10.0.0.5",
+    "Domain": "vpc"
+   },
+   {
+    "AllocationId": "eipalloc-nat2",
+    "PublicIp": "192.0.2.51",
+    "AssociationId": "eipassoc-nat2",
+    "NetworkInterfaceId": "eni-nat2",
+    "PrivateIpAddress": "10.0.3.5",
+    "Domain": "vpc"
+   },
+   {
+    "AllocationId": "eipalloc-legacy",
+    "PublicIp": "198.51.100.12",
+    "AssociationId": "eipassoc-legacy",
+    "NetworkInterfaceId": "eni-legacy",
+    "InstanceId": "i-legacy",
+    "PrivateIpAddress": "10.0.0.12",
+    "Domain": "vpc"
+   },
+   {
+    "AllocationId": "eipalloc-idle",
+    "PublicIp": "203.0.113.7",
+    "Domain": "vpc",
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "old-vpn-endpoint"
+     }
+    ]
+   }
+  ],
+  "RouteTables": [
+   {
+    "RouteTableId": "rtb-public",
+    "VpcId": "vpc-1",
+    "Associations": [
+     {
+      "Main": true
+     },
+     {
+      "SubnetId": "subnet-public-a"
+     },
+     {
+      "SubnetId": "subnet-public-b"
+     }
+    ],
+    "Routes": [
+     {
+      "DestinationCidrBlock": "10.0.0.0/16",
+      "GatewayId": "local",
+      "State": "active",
+      "Origin": "CreateRouteTable"
+     },
+     {
+      "DestinationCidrBlock": "0.0.0.0/0",
+      "State": "active",
+      "Origin": "CreateRoute",
+      "GatewayId": "igw-1"
+     }
+    ]
+   },
+   {
+    "RouteTableId": "rtb-private-a",
+    "VpcId": "vpc-1",
+    "Associations": [
+     {
+      "SubnetId": "subnet-private-a"
+     }
+    ],
+    "Routes": [
+     {
+      "DestinationCidrBlock": "10.0.0.0/16",
+      "GatewayId": "local",
+      "State": "active",
+      "Origin": "CreateRouteTable"
+     },
+     {
+      "DestinationCidrBlock": "0.0.0.0/0",
+      "State": "active",
+      "Origin": "CreateRoute",
+      "NatGatewayId": "nat-1"
+     }
+    ]
+   },
+   {
+    "RouteTableId": "rtb-private-b",
+    "VpcId": "vpc-1",
+    "Associations": [
+     {
+      "SubnetId": "subnet-private-b"
+     }
+    ],
+    "Routes": [
+     {
+      "DestinationCidrBlock": "10.0.0.0/16",
+      "GatewayId": "local",
+      "State": "active",
+      "Origin": "CreateRouteTable"
+     },
+     {
+      "DestinationCidrBlock": "0.0.0.0/0",
+      "State": "active",
+      "Origin": "CreateRoute",
+      "NatGatewayId": "nat-1"
+     },
+     {
+      "DestinationPrefixListId": "pl-63a5400a",
+      "GatewayId": "vpce-s3",
+      "State": "active",
+      "Origin": "CreateRoute"
+     }
+    ]
+   },
+   {
+    "RouteTableId": "rtb-unused",
+    "VpcId": "vpc-1",
+    "Associations": [],
+    "Routes": [
+     {
+      "DestinationCidrBlock": "10.0.0.0/16",
+      "GatewayId": "local",
+      "State": "active",
+      "Origin": "CreateRouteTable"
+     },
+     {
+      "DestinationCidrBlock": "0.0.0.0/0",
+      "State": "active",
+      "Origin": "CreateRoute",
+      "NatGatewayId": "nat-2"
+     }
+    ]
+   }
+  ],
+  "NetworkAcls": [
+   {
+    "NetworkAclId": "acl-1",
+    "VpcId": "vpc-1",
+    "IsDefault": true,
+    "Associations": [
+     {
+      "SubnetId": "subnet-public-a"
+     },
+     {
+      "SubnetId": "subnet-private-a"
+     },
+     {
+      "SubnetId": "subnet-private-b"
+     },
+     {
+      "SubnetId": "subnet-public-b"
+     }
+    ],
+    "Entries": [
+     {
+      "RuleNumber": 100,
+      "Protocol": "-1",
+      "RuleAction": "allow",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 100,
+      "Protocol": "-1",
+      "RuleAction": "allow",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": false,
+      "CidrBlock": "0.0.0.0/0"
+     },
+     {
+      "RuleNumber": 32767,
+      "Protocol": "-1",
+      "RuleAction": "deny",
+      "Egress": true,
+      "CidrBlock": "0.0.0.0/0"
+     }
+    ]
+   }
+  ],
+  "SecurityGroups": [
+   {
+    "GroupId": "sg-web",
+    "GroupName": "web",
+    "VpcId": "vpc-1"
+   },
+   {
+    "GroupId": "sg-closed",
+    "GroupName": "closed",
+    "VpcId": "vpc-1"
+   },
+   {
+    "GroupId": "sg-outbound",
+    "GroupName": "outbound-only",
+    "VpcId": "vpc-1"
+   },
+   {
+    "GroupId": "sg-alb",
+    "GroupName": "alb",
+    "VpcId": "vpc-1"
+   }
+  ],
+  "SecurityGroupRules": [
+   {
+    "SecurityGroupRuleId": "sgr-0001",
+    "GroupId": "sg-web",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 443,
+    "ToPort": 443,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-0002",
+    "GroupId": "sg-web",
+    "IsEgress": true,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-0003",
+    "GroupId": "sg-outbound",
+    "IsEgress": true,
+    "IpProtocol": "tcp",
+    "FromPort": 443,
+    "ToPort": 443,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-0004",
+    "GroupId": "sg-alb",
+    "IsEgress": false,
+    "IpProtocol": "tcp",
+    "FromPort": 443,
+    "ToPort": 443,
+    "CidrIpv4": "0.0.0.0/0"
+   },
+   {
+    "SecurityGroupRuleId": "sgr-0005",
+    "GroupId": "sg-alb",
+    "IsEgress": true,
+    "IpProtocol": "-1",
+    "FromPort": -1,
+    "ToPort": -1,
+    "CidrIpv4": "10.0.0.0/16"
+   }
+  ],
+  "NetworkInterfaces": [
+   {
+    "NetworkInterfaceId": "eni-web",
+    "SubnetId": "subnet-public-a",
+    "VpcId": "vpc-1",
+    "InterfaceType": "interface",
+    "Description": "",
+    "RequesterManaged": false,
+    "PrivateIpAddress": "10.0.0.10",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.0.10",
+      "Primary": true,
+      "Association": {
+       "PublicIp": "198.51.100.10",
+       "IpOwnerId": "amazon"
+      }
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-web"
+     }
+    ],
+    "Status": "in-use",
+    "Attachment": {
+     "InstanceId": "i-web",
+     "DeviceIndex": 0
+    }
+   },
+   {
+    "NetworkInterfaceId": "eni-old",
+    "SubnetId": "subnet-public-a",
+    "VpcId": "vpc-1",
+    "InterfaceType": "interface",
+    "Description": "",
+    "RequesterManaged": false,
+    "PrivateIpAddress": "10.0.0.11",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.0.11",
+      "Primary": true,
+      "Association": {
+       "PublicIp": "198.51.100.11",
+       "IpOwnerId": "amazon"
+      }
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-closed"
+     }
+    ],
+    "Status": "in-use",
+    "Attachment": {
+     "InstanceId": "i-old",
+     "DeviceIndex": 0
+    }
+   },
+   {
+    "NetworkInterfaceId": "eni-legacy",
+    "SubnetId": "subnet-public-a",
+    "VpcId": "vpc-1",
+    "InterfaceType": "interface",
+    "Description": "",
+    "RequesterManaged": false,
+    "PrivateIpAddress": "10.0.0.12",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.0.12",
+      "Primary": true,
+      "Association": {
+       "PublicIp": "198.51.100.12",
+       "IpOwnerId": "111122223333"
+      }
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-closed"
+     }
+    ],
+    "Status": "in-use",
+    "Attachment": {
+     "InstanceId": "i-legacy",
+     "DeviceIndex": 0
+    }
+   },
+   {
+    "NetworkInterfaceId": "eni-outbound",
+    "SubnetId": "subnet-public-a",
+    "VpcId": "vpc-1",
+    "InterfaceType": "interface",
+    "Description": "",
+    "RequesterManaged": false,
+    "PrivateIpAddress": "10.0.0.13",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.0.13",
+      "Primary": true,
+      "Association": {
+       "PublicIp": "198.51.100.13",
+       "IpOwnerId": "amazon"
+      }
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-outbound"
+     }
+    ],
+    "Status": "in-use",
+    "Attachment": {
+     "InstanceId": "i-outbound",
+     "DeviceIndex": 0
+    }
+   },
+   {
+    "NetworkInterfaceId": "eni-app",
+    "SubnetId": "subnet-private-a",
+    "VpcId": "vpc-1",
+    "InterfaceType": "interface",
+    "Description": "",
+    "RequesterManaged": false,
+    "PrivateIpAddress": "10.0.1.10",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.1.10",
+      "Primary": true
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-outbound"
+     }
+    ],
+    "Status": "in-use",
+    "Attachment": {
+     "InstanceId": "i-app",
+     "DeviceIndex": 0
+    }
+   },
+   {
+    "NetworkInterfaceId": "eni-worker",
+    "SubnetId": "subnet-private-b",
+    "VpcId": "vpc-1",
+    "InterfaceType": "interface",
+    "Description": "",
+    "RequesterManaged": false,
+    "PrivateIpAddress": "10.0.2.10",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.2.10",
+      "Primary": true
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-outbound"
+     }
+    ],
+    "Status": "in-use",
+    "Attachment": {
+     "InstanceId": "i-worker",
+     "DeviceIndex": 0
+    }
+   },
+   {
+    "NetworkInterfaceId": "eni-alb-a",
+    "SubnetId": "subnet-public-a",
+    "VpcId": "vpc-1",
+    "InterfaceType": "interface",
+    "Description": "ELB app/alb-empty/0123456789abcdef",
+    "RequesterManaged": true,
+    "PrivateIpAddress": "10.0.0.30",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.0.30",
+      "Primary": true,
+      "Association": {
+       "PublicIp": "198.51.100.30",
+       "IpOwnerId": "amazon"
+      }
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-alb"
+     }
+    ],
+    "Status": "in-use"
+   },
+   {
+    "NetworkInterfaceId": "eni-alb-b",
+    "SubnetId": "subnet-public-b",
+    "VpcId": "vpc-1",
+    "InterfaceType": "interface",
+    "Description": "ELB app/alb-empty/0123456789abcdef",
+    "RequesterManaged": true,
+    "PrivateIpAddress": "10.0.3.30",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.3.30",
+      "Primary": true,
+      "Association": {
+       "PublicIp": "198.51.100.31",
+       "IpOwnerId": "amazon"
+      }
+     }
+    ],
+    "Groups": [
+     {
+      "GroupId": "sg-alb"
+     }
+    ],
+    "Status": "in-use"
+   },
+   {
+    "NetworkInterfaceId": "eni-nat1",
+    "SubnetId": "subnet-public-a",
+    "VpcId": "vpc-1",
+    "InterfaceType": "nat_gateway",
+    "Description": "Interface for NAT Gateway nat-1",
+    "RequesterManaged": true,
+    "PrivateIpAddress": "10.0.0.5",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.0.5",
+      "Primary": true,
+      "Association": {
+       "PublicIp": "192.0.2.50",
+       "IpOwnerId": "111122223333"
+      }
+     }
+    ],
+    "Groups": [],
+    "Status": "in-use"
+   },
+   {
+    "NetworkInterfaceId": "eni-nat2",
+    "SubnetId": "subnet-public-b",
+    "VpcId": "vpc-1",
+    "InterfaceType": "nat_gateway",
+    "Description": "Interface for NAT Gateway nat-2",
+    "RequesterManaged": true,
+    "PrivateIpAddress": "10.0.3.5",
+    "PrivateIpAddresses": [
+     {
+      "PrivateIpAddress": "10.0.3.5",
+      "Primary": true,
+      "Association": {
+       "PublicIp": "192.0.2.51",
+       "IpOwnerId": "111122223333"
+      }
+     }
+    ],
+    "Groups": [],
+    "Status": "in-use"
+   }
+  ],
+  "Instances": [
+   {
+    "InstanceId": "i-web",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "web"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-web",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   },
+   {
+    "InstanceId": "i-old",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "old"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-old",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   },
+   {
+    "InstanceId": "i-legacy",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "legacy"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-legacy",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   },
+   {
+    "InstanceId": "i-outbound",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "outbound"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-outbound",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   },
+   {
+    "InstanceId": "i-app",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "app"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-app",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   },
+   {
+    "InstanceId": "i-worker",
+    "State": {
+     "Name": "running"
+    },
+    "Tags": [
+     {
+      "Key": "Name",
+      "Value": "worker"
+     }
+    ],
+    "NetworkInterfaces": [
+     {
+      "NetworkInterfaceId": "eni-worker",
+      "Attachment": {
+       "DeviceIndex": 0
+      }
+     }
+    ]
+   }
+  ],
+  "VpcEndpoints": [
+   {
+    "VpcEndpointId": "vpce-s3",
+    "VpcEndpointType": "Gateway",
+    "ServiceName": "com.amazonaws.us-east-1.s3",
+    "VpcId": "vpc-1",
+    "State": "available"
+   }
+  ]
+ },
+ "elbv2": {
+  "LoadBalancers": [
+   {
+    "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/alb-empty/0123456789abcdef",
+    "LoadBalancerName": "alb-empty",
+    "Type": "application",
+    "Scheme": "internet-facing",
+    "VpcId": "vpc-1",
+    "SecurityGroups": [
+     "sg-alb"
+    ],
+    "AvailabilityZones": [
+     {
+      "SubnetId": "subnet-public-a",
+      "ZoneName": "us-east-1a"
+     },
+     {
+      "SubnetId": "subnet-public-b",
+      "ZoneName": "us-east-1b"
+     }
+    ]
+   }
+  ],
+  "Listeners": [
+   {
+    "ListenerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:listener/app/alb-empty/0123456789abcdef/l1",
+    "LoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/alb-empty/0123456789abcdef",
+    "Port": 443,
+    "Protocol": "HTTPS",
+    "DefaultActions": [
+     {
+      "Type": "forward",
+      "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/empty/0123456789abcdef"
+     }
+    ]
+   }
+  ],
+  "TargetGroups": [
+   {
+    "TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/empty/0123456789abcdef",
+    "TargetGroupName": "empty",
+    "Protocol": "HTTP",
+    "Port": 8080,
+    "TargetType": "instance",
+    "VpcId": "vpc-1"
+   }
+  ],
+  "TargetHealth": {
+   "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/empty/0123456789abcdef": []
+  },
+  "TargetGroupAttributes": {
+   "arn:aws:elasticloadbalancing:us-east-1:111122223333:targetgroup/empty/0123456789abcdef": []
+  }
+ }
+}

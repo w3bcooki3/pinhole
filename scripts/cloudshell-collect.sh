@@ -63,6 +63,7 @@ call "${WORK}/rtbs.json"      ec2 describe-route-tables
 call "${WORK}/igws.json"      ec2 describe-internet-gateways
 call "${WORK}/eigws.json"     ec2 describe-egress-only-internet-gateways
 call "${WORK}/nats.json"      ec2 describe-nat-gateways
+call "${WORK}/eips.json"      ec2 describe-addresses
 call "${WORK}/vgws.json"      ec2 describe-vpn-gateways
 # Only the fields Pinhole uses: the full response holds the tunnel pre-shared keys,
 # so they are dropped by the CLI before anything is written.
@@ -185,7 +186,7 @@ jq -n \
   --arg account "${ACCOUNT}" --arg region "${REGION}" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --slurpfile vpcs "${WORK}/vpcs.json" --slurpfile subnets "${WORK}/subnets.json" \
   --slurpfile rtbs "${WORK}/rtbs.json" --slurpfile igws "${WORK}/igws.json" \
-  --slurpfile eigws "${WORK}/eigws.json" --slurpfile nats "${WORK}/nats.json" \
+  --slurpfile eigws "${WORK}/eigws.json" --slurpfile nats "${WORK}/nats.json" --slurpfile eips "${WORK}/eips.json" \
   --slurpfile pcx "${WORK}/pcx.json" --slurpfile tgws "${WORK}/tgws.json" \
   --slurpfile vgws "${WORK}/vgws.json" --slurpfile vpns "${WORK}/vpns.json" \
   --slurpfile tgwatt "${WORK}/tgwatt.json" --slurpfile tgwvpcatt "${WORK}/tgwvpcatt.json" \
@@ -214,6 +215,7 @@ jq -n \
       InternetGateways: ($igws[0].InternetGateways // []),
       EgressOnlyInternetGateways: ($eigws[0].EgressOnlyInternetGateways // []),
       NatGateways: ($nats[0].NatGateways // []),
+      Addresses: ($eips[0].Addresses // []),
       VpnGateways: ($vgws[0].VpnGateways // []),
       VpnConnections: (($vpns[0].VpnConnections // []) | map(del(.. | nulls))),
       VpcPeeringConnections: ($pcx[0].VpcPeeringConnections // []),

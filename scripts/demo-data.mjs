@@ -96,6 +96,7 @@ export const DEMO = [
   { name: 'network-hub us-west-1', snapshot: withScope(moved(fx('13-inspection-vpc'), '777788889999', 'us-west-1'), '777788889999', 'us-west-1') },
   { name: 'datacenter-link us-west-2', snapshot: withScope(moved(fx('15-hybrid'), '333344445555', 'us-west-2'), '333344445555', 'us-west-2') },
   { name: 'partner-api eu-west-2', snapshot: withScope(moved(fx('16-privatelink'), '222233334444', 'eu-west-2'), '222233334444', 'eu-west-2') },
+  { name: 'sandbox us-east-1', snapshot: withScope(moved(fx('17-savings'), '555566667777', 'us-east-1'), '555566667777', 'us-east-1') },
   { name: 'prod us-east-1, a week earlier', snapshot: richProdEarlier() },
 ];
 

@@ -51,8 +51,8 @@ describe('web console', () => {
   it('compares two snapshots of one account and region, and uses only the latest elsewhere', () => {
     const { doc, api } = page();
     // The demo has an older copy of prod us-east-1: it is kept for Compare and left out of the dashboard.
-    // 21 exposures across the estates, plus 3 behind the Network Firewall in 'inspected us-east-1'.
-    expect(text(doc, '#total')).toBe('24');
+    // 23 exposures across the estates, plus 3 behind the Network Firewall in 'inspected us-east-1'.
+    expect(text(doc, '#total')).toBe('26');
     expect(text(doc, '.chip-older')).toBe('+1 older');
     api.go('compare');
     expect(text(doc, '#cmp-verdict')).toMatch(/^2 new or wider internet exposures, no new attack chains, 1 closed or narrower, 3 configuration changes\./);
@@ -258,7 +258,7 @@ describe('web console', () => {
   it('lists every page in the navigation, and the search finds pages by other words', () => {
     const { doc } = page();
     const routes = [...doc.querySelectorAll('#main-nav a[data-route]')].map((a) => a.getAttribute('data-route'));
-    for (const r of ['dashboard', 'issues', 'graph', 'blast', 'resources', 'egress', 'onprem', 'privatelink', 'hygiene', 'policy', 'coverage', 'simulator', 'compare', 'ask', 'report', 'connect']) expect(routes, r).toContain(r);
+    for (const r of ['dashboard', 'issues', 'graph', 'blast', 'resources', 'egress', 'onprem', 'privatelink', 'hygiene', 'policy', 'savings', 'coverage', 'simulator', 'compare', 'ask', 'report', 'connect']) expect(routes, r).toContain(r);
     expect(doc.querySelector('.menu-btn')?.getAttribute('aria-controls')).toBe('main-nav');
   });
 
@@ -323,6 +323,23 @@ describe('web console', () => {
       expect(text(doc, '.eg-detail')).toMatch(/nat-1/);
       expect(doc.querySelector('.eg-detail .trace, .eg-detail ol, .eg-detail .steps')).not.toBeNull();
       expect(rows.some((r) => /nopub|batch/.test(r.textContent ?? ''))).toBe(false);
+    });
+
+    it('savings lists unused network resources with their cost, and shows why and the commands', () => {
+      const { doc, api } = page();
+      api.loadText(fixture('17-savings'), 'savings.json');
+      expect(text(doc, '#summary')).toMatch(/5 unused network resources cost about \$71\.18 a month/);
+      api.go('savings');
+      expect(text(doc, '.eg-sum')).toMatch(/5 unused resources cost about \$71\.18 a month/);
+      const rows = [...doc.querySelectorAll('.sv-t tbody tr')] as HTMLElement[];
+      expect(rows).toHaveLength(7);
+      expect(rows.some((r) => /outbound|web \(/.test(r.textContent ?? ''))).toBe(false);
+      const eip = rows.find((r) => /old-vpn-endpoint/.test(r.textContent ?? ''))!;
+      eip.click();
+      expect(text(doc, '.eg-detail')).toMatch(/aws ec2 release-address --allocation-id eipalloc-idle/);
+      api.loadText(fixture('14-outbound'), 'old.json');
+      api.go('savings');
+      expect(text(doc, '.warn-bar')).toMatch(/no Elastic IP list/);
     });
 
     it('on-premises lists the links and what clients there reach, and the query page takes their addresses', () => {
@@ -499,7 +516,7 @@ describe('web console', () => {
 describe('documentation', () => {
   it('builds, with every example produced by the real CLI', () => {
     const out = execFileSync(process.execPath, [join(root, 'scripts/build-docs.mjs')], { cwd: root, encoding: 'utf8' });
-    expect(out).toMatch(/21 sections, 16 live examples/);
+    expect(out).toMatch(/22 sections, 17 live examples/);
     const html = readFileSync(join(root, 'site/docs/index.html'), 'utf8');
     expect(html).not.toMatch(/<!--(run|trace|policy)/);
     expect(html).toContain('pinhole blast account-a/snapshot.json account-b/snapshot.json');

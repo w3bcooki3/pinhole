@@ -20,6 +20,7 @@ import type { Change } from '@pinhole/engine';
 import { across, acrossText, blastText, canText, fixesFor, fixText, hygiene, hygieneText, LookupError, plan, planText, shortcutChanges, whatIf, whatIfText } from './advanced.js';
 import { VERSION } from './version.js';
 import { egress, egressFailsAt, egressMarkdown, egressText } from './egress.js';
+import { savings, savingsMarkdown, savingsText } from './savings.js';
 import { onPremFailsAt, onPremMarkdown, onPremText } from './onprem.js';
 import { privateLinkFailsAt, privateLinkMarkdown, privateLinkText } from './privatelink.js';
 import { analyzeOnPrem, analyzeOnPremBlast, analyzePrivateLink } from '@pinhole/engine';
@@ -42,6 +43,7 @@ Usage:
   pinhole fix      SNAPSHOT [--plan [--policy POLICY.json]] [--min-severity LEVEL] [--all]
   pinhole hygiene  SNAPSHOT [--fail-on LEVEL]
   pinhole egress   SNAPSHOT [--format text|json|markdown] [--min-severity LEVEL]
+  pinhole savings  SNAPSHOT [--format text|json|markdown] [--fail-over USD]
                             [--fail-on LEVEL] [--verbose]
   pinhole onprem   SNAPSHOT [--format text|json|markdown] [--min-severity LEVEL]
                             [--fail-on LEVEL] [--verbose]
@@ -91,6 +93,14 @@ egress    What each server can send to the internet: which addresses and
           ports, through which gateway (internet gateway, NAT gateway,
           firewall) and as which public address. A server that holds data
           and can send anything anywhere is flagged as an exfiltration path.
+savings   Network resources that cost money and serve nothing: Elastic IPs
+          attached to nothing, public IPs nothing reaches or sends from,
+          NAT gateways no route uses, load balancers with nothing behind
+          them. Also per-gigabyte costs worth checking: S3 through a NAT
+          gateway with no (free) gateway endpoint, a NAT gateway in another
+          zone. Each finding says why, from the analysis, and how to fix it.
+          --fail-over exits 2 when the unused total passes that many USD a
+          month.
 onprem    What clients on-premises can reach over Site-to-Site VPN and
           Direct Connect: the links, the on-premises networks AWS routes to
           each, and every server and port reachable from them, with the
@@ -347,6 +357,23 @@ function cmdEgress(args: string[], io: Io): number {
   return 0;
 }
 
+function cmdSavings(args: string[], io: Io): number {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, 'fail-over': { type: 'string' } } });
+  const format = values.format;
+  if (format !== 'text' && format !== 'json' && format !== 'markdown') throw new UsageError('--format must be text, json or markdown');
+  const limit = values['fail-over'] === undefined ? undefined : Number(values['fail-over']);
+  if (limit !== undefined && !(limit >= 0)) throw new UsageError('--fail-over must be a number of US dollars, e.g. 20');
+  const r = savings(snapshotModel(positionals, 'savings'));
+  if (format === 'json') io.stdout(json({ tool: { name: 'pinhole', version: VERSION }, ...r }));
+  else if (format === 'markdown') io.stdout(savingsMarkdown(r));
+  else io.stdout(safeForTerminal(savingsText(r)));
+  if (limit !== undefined && r.unusedMonthly > limit) {
+    io.stderr(`Unused network resources cost about $${r.unusedMonthly.toFixed(2)} a month, over $${limit}.\n`);
+    return 2;
+  }
+  return 0;
+}
+
 function cmdOnPrem(args: string[], io: Io): number {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, strict: true, options: { ...FORMAT, 'min-severity': { type: 'string' }, 'fail-on': { type: 'string' }, verbose: { type: 'boolean', default: false } } });
   const format = values.format;
@@ -577,6 +604,8 @@ export async function run(argv: string[], io: Io): Promise<number> {
         return cmdHygiene(rest, io);
       case 'egress':
         return cmdEgress(rest, io);
+      case 'savings':
+        return cmdSavings(rest, io);
       case 'onprem':
         return cmdOnPrem(rest, io);
       case 'privatelink':

@@ -16,6 +16,7 @@ import { reportDoc, reportHtml, REPORT_CSS } from './report.js';
 import { comparePage } from './compare.js';
 import { policyPage } from './policy.js';
 import { egressOf, egressPage } from './egress.js';
+import { savingsPage, savingsTotal, usd } from './savings.js';
 import { onPremOf, onPremPage } from './onprem.js';
 import { privateLinkOf, privateLinkPage } from './privatelink.js';
 import { askPage, blastPage, fixesSection, hygienePage, openPalette, planBox, simulatorPage } from './pages.js';
@@ -23,8 +24,8 @@ import type { Ctx } from './pages.js';
 import type { Change } from '@pinhole/engine';
 
 
-type Route = 'dashboard' | 'graph' | 'blast' | 'issues' | 'resources' | 'hygiene' | 'policy' | 'egress' | 'onprem' | 'privatelink' | 'coverage' | 'simulator' | 'compare' | 'ask' | 'report' | 'connect';
-const ROUTES: Route[] = ['dashboard', 'graph', 'blast', 'issues', 'resources', 'hygiene', 'policy', 'egress', 'onprem', 'privatelink', 'coverage', 'simulator', 'compare', 'ask', 'report', 'connect'];
+type Route = 'dashboard' | 'graph' | 'blast' | 'issues' | 'resources' | 'hygiene' | 'policy' | 'savings' | 'egress' | 'onprem' | 'privatelink' | 'coverage' | 'simulator' | 'compare' | 'ask' | 'report' | 'connect';
+const ROUTES: Route[] = ['dashboard', 'graph', 'blast', 'issues', 'resources', 'hygiene', 'policy', 'savings', 'egress', 'onprem', 'privatelink', 'coverage', 'simulator', 'compare', 'ask', 'report', 'connect'];
 const PAGES: { route: Route; label: string; icon: string; keys?: string }[] = [
   { route: 'dashboard', label: 'Dashboard', icon: 'home' },
   { route: 'graph', label: 'Attack graph', icon: 'graph' },
@@ -36,6 +37,7 @@ const PAGES: { route: Route; label: string; icon: string; keys?: string }[] = [
   { route: 'privatelink', label: 'PrivateLink', icon: 'link', keys: 'endpoint service vpce private link' },
   { route: 'hygiene', label: 'Rule hygiene', icon: 'broom', keys: 'cleanup redundant shadowed unused firewall rules' },
   { route: 'policy', label: 'Policies', icon: 'policy', keys: 'rules deny require compliance' },
+  { route: 'savings', label: 'Savings', icon: 'coin', keys: 'cost money bill elastic ip nat gateway idle unused load balancer s3 endpoint' },
   { route: 'coverage', label: 'Coverage', icon: 'shield' },
   { route: 'simulator', label: 'Simulator', icon: 'flask', keys: 'what if change' },
   { route: 'compare', label: 'Compare snapshots', icon: 'compare' },
@@ -433,6 +435,7 @@ function dashboard(): HTMLElement {
   const lbs = res.filter((x) => x.kind.includes('Load')).length;
   const crit = chainRows.filter((c) => c.c.severity === 'critical').length;
   const stopped = D.withJoined(st.snaps).some((x) => D.blastOf(x).stats.truncated);
+  const saving = savingsTotal(st.snaps);
   const targets = new Set(chainRows.map((c) => `${c.snap.key}|${c.c.targetId}`)).size;
   // A link inside a sentence: the count is the thing you click.
   const ln = (text: string, act: () => void, id?: string) => on(h('button', { type: 'button', class: 'inl', ...(id ? { id } : {}) }, text), 'click', act);
@@ -447,6 +450,7 @@ function dashboard(): HTMLElement {
     chainRows.length ? h('span', {}, 'If one of those servers is compromised, ', ln(`${D.plural(chainRows.length, 'attack chain')}`, () => go('blast')), ` lead to ${D.plural(targets, 'internal resource')}${crit ? ` (${crit} critical)` : ''}. `) : stopped ? '' : 'No attack chain leads further in from them. ',
     stopped ? h('span', {}, 'The attack chain analysis stopped early on a large network; ', ln('finish it on Blast radius', () => go('blast')), '. ') : null,
     warn ? h('span', {}, ln(D.plural(warn, 'coverage note'), () => go('coverage')), ' mark configuration that could not be fully analysed.') : 'Everything loaded was analysed.',
+    saving.count ? h('span', {}, ' ', ln(`${D.plural(saving.count, 'unused network resource')} ${saving.count === 1 ? 'costs' : 'cost'} about ${usd(saving.monthly)} a month`, () => go('savings')), '.') : null,
   );
   page.append(h('section', { class: 'box summary', id: 'summary' }, lead, more, rows.length ? h('div', { class: 'sum-sev' }, bar, legend) : null));
 
@@ -1084,6 +1088,7 @@ function renderNow() {
     case 'hygiene': view = hygienePage(ctx); break;
     case 'policy': view = policyPage(ctx); break;
     case 'egress': view = egressPage(ctx); break;
+    case 'savings': view = savingsPage(ctx); break;
     case 'onprem': view = onPremPage(ctx); break;
     case 'privatelink': view = privateLinkPage(ctx); break;
     case 'simulator': view = simulatorPage(ctx); break;
@@ -1147,6 +1152,8 @@ function renderNow() {
           link('hygiene', 'broom', 'Rule hygiene', hyg),
           link('policy', 'policy', 'Policies'),
           link('coverage', 'shield', 'Coverage', warn),
+          h('div', { class: 'grp' }, 'Cost'),
+          link('savings', 'coin', 'Savings', savingsTotal(st.snaps).count),
           h('div', { class: 'grp' }, 'Tools'),
           link('simulator', 'flask', 'Simulator', st.changes.length),
           link('compare', 'compare', 'Compare', st.all.length - st.snaps.length),

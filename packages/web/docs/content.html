@@ -148,6 +148,7 @@ pinhole collect --profile audit --region us-east-1,eu-west-1 --out-dir snapshots
     <div class="card"><h4>Blast radius</h4><p>If an internet-facing server is compromised, what the attacker reaches next. Each chain shows its route, why it works and the rules that cut it, including chains that cross into another account. Crown jewels come first, with the smallest set of rules that cuts every path to them.</p></div>
     <div class="card"><h4>Exposures</h4><p>Every service the internet can open a connection to. Each opens as a page with a plain verdict, the path hop by hop, and verified fixes with commands, each marked safe or with the internal traffic it would break.</p></div>
     <div class="card"><h4>Outbound</h4><p>What each server can send to the internet: to which addresses and ports, through which gateway, and as which public address. Data stores that can send anything anywhere are flagged as exfiltration paths.</p></div>
+    <div class="card"><h4>Savings</h4><p>Network resources that cost money and serve nothing: Elastic IPs attached to nothing, public IPs nothing uses, NAT gateways on no route, load balancers with nothing behind them, and S3 traffic paying NAT gateway fees. Each with its monthly cost and the commands to remove it.</p></div>
     <div class="card"><h4>On-premises</h4><p>Your Site-to-Site VPN and Direct Connect links, the on-premises networks AWS routes to each, and every server and port reachable from them, with the path.</p></div>
     <div class="card"><h4>PrivateLink</h4><p>Who can reach your services through endpoint services, what they reach behind the load balancer, and VPC endpoints whose policy allows anything.</p></div>
     <div class="card"><h4>Rule hygiene</h4><p>Rules that are redundant, shadowed, stale, unused or broader than they need to be, groups that can be smaller with exactly the same effect, and rules near AWS quotas.</p></div>
@@ -355,6 +356,21 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
   <p>Each finding names the gateway and the public address the traffic leaves as. Severity rises with the width of what is open and with whether the server holds data (a crown jewel tag, or a database port its security group lets in). Policies can say what must never, or must always, leave: <code>{"deny": {"from": "prod-db", "to": "internet"}}</code>.</p>
 </section>
 
+<section id="savings" data-group="Concepts" data-title="Savings">
+  <h2>Savings</h2>
+  <p class="lede">The same snapshot shows what the network pays for and never uses. No billing access and no traffic data are needed: Pinhole reads the network itself.</p>
+  <!--run lines=16 savings fixtures/17-savings/snapshot.json-->
+  <p>Findings marked <strong>unused</strong> are resources nothing can use, so removing them changes nothing but the bill:</p>
+  <ul>
+    <li>an Elastic IP attached to nothing;</li>
+    <li>a public IP that no internet address can open a connection to, on any port, and that the server cannot send out through either (both directions come from the exposure and outbound analyses);</li>
+    <li>a NAT gateway that no route table in use points to: none associated with a subnet, the main table, or a gateway;</li>
+    <li>a load balancer with no listeners, or whose listeners forward only to empty target groups.</li>
+  </ul>
+  <p>Findings marked <strong>check</strong> cost per gigabyte, and the snapshot has no traffic volumes, so they give the rate and the alternative: a subnet that reaches S3 through a NAT gateway with no S3 gateway endpoint (gateway endpoints for S3 and DynamoDB are free), and a subnet whose NAT gateway is in another Availability Zone. A load balancer whose listeners forward to no target group at all is also a check: it may only redirect or return a fixed response.</p>
+  <p>Each finding gives the commands that remove the resource. Nothing is changed by Pinhole. Prices are AWS list prices for us-east-1 (public IPv4 $0.005 an hour, NAT gateway $0.045 an hour and per GB, Application and Network Load Balancer $0.0225 an hour); most other Regions charge the same or a little more. Snapshots collected before Pinhole read Elastic IPs (<code>ec2:DescribeAddresses</code>) cannot show idle ones, and say so. <code>pinhole savings --fail-over 20</code> exits 2 when unused resources cost more than $20 a month, for a scheduled check.</p>
+</section>
+
 <section id="onprem" data-group="Concepts" data-title="On-premises networks">
   <h2>On-premises networks</h2>
   <p class="lede">Site-to-Site VPN and Direct Connect are followed up to the AWS gateway, in both directions. Your own routers and firewalls are not visible to AWS, and every such path says so.</p>
@@ -474,6 +490,6 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
   <dl class="terms">
     <dt><code>0</code></dt><dd>Success.</dd>
     <dt><code>1</code></dt><dd>Usage or input error, with a message on standard error.</dd>
-    <dt><code>2</code></dt><dd>The <code>--fail-on</code> threshold was reached.</dd>
+    <dt><code>2</code></dt><dd>The <code>--fail-on</code> threshold was reached (for <code>savings</code>, the <code>--fail-over</code> amount).</dd>
   </dl>
 </section>

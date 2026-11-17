@@ -54,3 +54,5 @@ export { findCrownJewels, findMinCut } from './cut.js';
 export type { CrownJewel, CutEdge, MinCut } from './cut.js';
 export { checkPolicy, diffPolicy, parsePolicy, PolicyError } from './policy.js';
 export type { PolicyFile, PolicyReport, PolicyResult, PolicyRule, Selector, Target, Violation } from './policy.js';
+export { analyzeSavings, PRICES } from './savings.js';
+export type { SavingsCode, SavingsFinding, SavingsReport } from './savings.js';

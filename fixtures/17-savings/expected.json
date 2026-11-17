@@ -1,0 +1,23 @@
+{
+  "description": "Network resources that cost money and serve nothing, next to look-alikes that do serve something. An Elastic IP attached to nothing, a NAT gateway no used route table points to, an internet-facing load balancer whose only target group is empty, and two servers whose public IPs nothing can reach and which cannot send out through them either (one auto-assigned, one an Elastic IP). Not flagged: a web server the internet reaches, a server that uses its public IP only to send out, and the NAT gateway the private subnets use. Two per-gigabyte costs are reported for checking: a private subnet that reaches S3 through the NAT gateway with no gateway endpoint, and a subnet in us-east-1b whose NAT gateway is in us-east-1a (its route table already has the S3 endpoint).",
+  "docs": [
+    "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/elastic-ip-addresses-eip.html",
+    "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/working-with-ip-addresses.html",
+    "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html",
+    "https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-s3.html"
+  ],
+  "paths": [],
+  "savings": {
+    "exact": [
+      "idle-elastic-ip eipalloc-idle",
+      "unused-nat-gateway nat-2",
+      "idle-load-balancer arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/alb-empty/0123456789abcdef",
+      "unused-public-ip eni-old",
+      "unused-public-ip eni-legacy",
+      "s3-through-nat rtb-private-a",
+      "nat-in-other-zone nat-1"
+    ],
+    "unusedMonthly": 71.18,
+    "publicIpv4": 9
+  }
+}

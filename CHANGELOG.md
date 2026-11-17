@@ -31,6 +31,18 @@ All notable changes to this project are recorded here. The format follows
   and animations stop when the system asks for reduced motion. The console
   follows the system's dark setting until a theme is chosen. The dashboard
   states its summary in sentences, with the counts as links.
+- Savings: network resources that cost money and serve nothing, from the
+  same snapshot, without billing access. Elastic IPs attached to nothing;
+  public IPs that no internet address reaches and that send nothing out;
+  NAT gateways no route table in use points to; load balancers with nothing
+  behind them. Each comes with its monthly cost (us-east-1 list prices) and
+  the AWS CLI commands to remove it. Per-gigabyte costs are listed for
+  checking: S3 through a NAT gateway with no gateway endpoint (free), and a
+  NAT gateway in another Availability Zone. `pinhole savings`, with
+  `--fail-over USD` for scheduled checks, and a Savings page in the console
+  with the monthly total on the dashboard. The collector and the CloudShell
+  script now read Elastic IPs (`ec2:DescribeAddresses`, 36 read-only
+  actions). Fixture 17.
 - Large networks: attack chains, the fix plan, crown jewel cuts and fix
   checks evaluate each pair of server groups once instead of each pair of
   servers (servers that no rule, route or address range tells apart share

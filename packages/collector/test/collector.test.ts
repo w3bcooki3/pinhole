@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { analyzeExposure, analyzeOnPrem, analyzePrivateLink, normalize } from '@pinhole/engine';
+import { analyzeExposure, analyzeOnPrem, analyzePrivateLink, normalize, analyzeSavings } from '@pinhole/engine';
 import type { Snapshot } from '@pinhole/engine';
 import { collectSnapshot, READ_ONLY_OPERATION } from '../src/collect.js';
 import type { Send } from '../src/collect.js';
@@ -32,7 +32,7 @@ const findingKeys = (s: unknown) =>
     .sort();
 
 describe('collectSnapshot', () => {
-  for (const name of ['04-blackhole-routes', '07-alb-private-targets', '08-nlb-client-ip-preservation', '12-network-firewall', '13-inspection-vpc', '15-hybrid', '16-privatelink']) {
+  for (const name of ['04-blackhole-routes', '07-alb-private-targets', '08-nlb-client-ip-preservation', '12-network-firewall', '13-inspection-vpc', '15-hybrid', '16-privatelink', '17-savings']) {
     it(`reproduces fixture ${name} through paginated API calls`, async () => {
       const original = fixture(name);
       const { send, calls } = fakeSend(original);
@@ -57,6 +57,15 @@ describe('collectSnapshot', () => {
     expect(calls.filter((c) => c === 'ec2:DescribeVpcEndpointServicePermissions')).toHaveLength(3);
     const pl = (s: unknown) => JSON.stringify(analyzePrivateLink(normalize(s)));
     expect(pl(snap)).toEqual(pl(fixture('16-privatelink')));
+  });
+
+  it('reads Elastic IPs, including those attached to nothing', async () => {
+    const { send, calls } = fakeSend(fixture('17-savings'));
+    const snap = await collectSnapshot(send, { region: 'us-east-1' });
+    expect(calls).toContain('ec2:DescribeAddresses');
+    const sv = (s: unknown) => analyzeSavings(normalize(s)).findings.map((f) => `${f.code} ${f.resourceId}`).sort();
+    expect(sv(snap)).toEqual(sv(fixture('17-savings')));
+    expect(normalize(snap).elasticIpsKnown).toBe(true);
   });
 
   it('keeps VPN tunnel keys out of the snapshot', async () => {
@@ -145,7 +154,7 @@ describe('scripts/cloudshell-collect.sh', () => {
     return { snap: JSON.parse(readFileSync(out, 'utf8')) as Snapshot, calls: readFileSync(log, 'utf8').trim().split('\n') };
   }
 
-  for (const name of ['04-blackhole-routes', '07-alb-private-targets', '08-nlb-client-ip-preservation', '12-network-firewall', '13-inspection-vpc', '16-privatelink']) {
+  for (const name of ['04-blackhole-routes', '07-alb-private-targets', '08-nlb-client-ip-preservation', '12-network-firewall', '13-inspection-vpc', '16-privatelink', '17-savings']) {
     it.skipIf(!hasJq)(`builds an equivalent snapshot for ${name}`, () => {
       const { snap, calls } = runScript(name);
       expect(snap.source).toBe('aws-cli');
@@ -161,6 +170,14 @@ describe('scripts/cloudshell-collect.sh', () => {
     expect(JSON.stringify(snap)).not.toMatch(/secret-psk|PreSharedKey|CustomerGatewayConfiguration|null/);
     const onprem = (s: unknown) => analyzeOnPrem(normalize(s)).findings.map((f) => `${f.resourceId} ${f.protocol}/${f.ports.from} ${f.sources.join(',')} ${f.via}`).sort();
     expect(onprem(snap)).toEqual(onprem(fixture('15-hybrid')));
+  });
+
+  it.skipIf(!hasJq)('reads Elastic IPs with the script, so idle ones are found', () => {
+    const { snap, calls } = runScript('17-savings');
+    expect(calls).toContain('ec2:DescribeAddresses');
+    const sv = (s: unknown) => analyzeSavings(normalize(s)).findings.map((f) => `${f.code} ${f.resourceId}`).sort();
+    expect(sv(snap)).toEqual(sv(fixture('17-savings')));
+    expect(sv(snap)).toContain('idle-elastic-ip eipalloc-idle');
   });
 
   it.skipIf(!hasJq)('reads PrivateLink services with the script too', () => {

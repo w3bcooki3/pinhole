@@ -35,6 +35,7 @@ export function respond(snap, service, op, input, pageSize = 1) {
     case 'ec2:DescribeEgressOnlyInternetGateways': return page('EgressOnlyInternetGateways', ec2.EgressOnlyInternetGateways);
     case 'ec2:DescribeNatGateways': return page('NatGateways', ec2.NatGateways);
     // Not paginated in the real API. Real responses carry the customer gateway configuration and the tunnel keys.
+    case 'ec2:DescribeAddresses': return { Addresses: ec2.Addresses ?? [] };
     case 'ec2:DescribeVpnGateways': return { VpnGateways: ec2.VpnGateways ?? [] };
     case 'ec2:DescribeVpnConnections': return { VpnConnections: (ec2.VpnConnections ?? []).map((v) => ({ ...v, CustomerGatewayConfiguration: '<vpn_connection><pre_shared_key>secret-psk</pre_shared_key></vpn_connection>', Options: { ...(v.Options ?? {}), TunnelOptions: [{ PreSharedKey: 'secret-psk' }] } })) };
     case 'ec2:DescribeVpcPeeringConnections': return page('VpcPeeringConnections', ec2.VpcPeeringConnections);

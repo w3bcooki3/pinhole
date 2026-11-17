@@ -64,15 +64,15 @@ function linkIds(m: NetworkModel): { kind: JoinLink['kind']; id: string }[] {
   return out;
 }
 
-type MapKey = Exclude<keyof NetworkModel, 'accountId' | 'region' | 'listeners' | 'warnings'>;
-const OWNED: MapKey[] = ['vpcs', 'subnets', 'routeTables', 'nacls', 'securityGroups', 'internetGateways', 'natGateways', 'vpnGateways', 'vpnConnections', 'enis', 'instances', 'loadBalancers', 'targetGroups', 'vpcEndpoints', 'endpointServices', 'firewalls'];
+type MapKey = Exclude<keyof NetworkModel, 'accountId' | 'region' | 'listeners' | 'warnings' | 'elasticIpsKnown'>;
+const OWNED: MapKey[] = ['vpcs', 'subnets', 'routeTables', 'nacls', 'securityGroups', 'internetGateways', 'natGateways', 'elasticIps', 'vpnGateways', 'vpnConnections', 'enis', 'instances', 'loadBalancers', 'targetGroups', 'vpcEndpoints', 'endpointServices', 'firewalls'];
 /** Shared between snapshots by design; the most complete copy wins. */
 const SHARED: MapKey[] = ['peerings', 'transitGateways', 'tgwAttachments', 'tgwRouteTables', 'prefixLists', 'firewallPolicies', 'firewallRuleGroups'];
 
 function emptyModel(): NetworkModel {
   return {
     vpcs: new Map(), subnets: new Map(), routeTables: new Map(), nacls: new Map(), securityGroups: new Map(), prefixLists: new Map(),
-    internetGateways: new Map(), natGateways: new Map(), vpnGateways: new Map(), vpnConnections: new Map(), peerings: new Map(), transitGateways: new Map(), tgwAttachments: new Map(),
+    internetGateways: new Map(), natGateways: new Map(), elasticIps: new Map(), vpnGateways: new Map(), vpnConnections: new Map(), peerings: new Map(), transitGateways: new Map(), tgwAttachments: new Map(),
     tgwRouteTables: new Map(), enis: new Map(), instances: new Map(), loadBalancers: new Map(), listeners: [], targetGroups: new Map(),
     vpcEndpoints: new Map(), endpointServices: new Map(), firewalls: new Map(), firewallPolicies: new Map(), firewallRuleGroups: new Map(), warnings: [],
   };
@@ -114,7 +114,7 @@ export function joinSnapshots(inputs: JoinInput[]): JoinResult {
       const { key, model: m } = inputs[i]!;
       for (const k of OWNED) {
         const into = model[k] as Map<string, unknown>;
-        for (const [id, v] of m[k] as Map<string, unknown>) {
+        for (const [id, v] of (m[k] as Map<string, unknown> | undefined) ?? []) {
           if (into.has(id)) clashes.push(id);
           into.set(id, v);
           owner.set(id, key);
@@ -125,6 +125,7 @@ export function joinSnapshots(inputs: JoinInput[]): JoinResult {
         for (const [id, v] of m[k] as Map<string, unknown>) into.set(id, into.has(id) ? better(into.get(id), v) : v);
       }
       model.listeners.push(...m.listeners);
+      if (m.elasticIpsKnown) model.elasticIpsKnown = true;
       // Warnings about the other side of a link are answered by joining.
       model.warnings.push(...m.warnings.map((w) => ({ ...w, message: `${key}: ${w.message}` })));
     }

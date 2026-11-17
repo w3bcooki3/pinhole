@@ -12,7 +12,7 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { analyzeEgress, analyzeOnPrem, analyzeOnPremBlast, analyzePrivateLink, normalize, evaluatePath, analyzeExposure, analyzeBlastRadius, analyzeHygiene, applyChanges, diffExposure, findFixes, reachServices, serviceLabel } from '../src/index.js';
+import { analyzeEgress, analyzeOnPrem, analyzeOnPremBlast, analyzePrivateLink, normalize, evaluatePath, analyzeExposure, analyzeBlastRadius, analyzeHygiene, applyChanges, diffExposure, findFixes, reachServices, serviceLabel, analyzeSavings } from '../src/index.js';
 import type { Change, Endpoint, ExposureFinding, PathResult } from '../src/index.js';
 import { INTERNET6, RangeSet6 } from '../src/ipv6.js';
 
@@ -45,6 +45,12 @@ interface Expected {
     topChain?: { steps: string[]; endsWith: string };
   };
   hygiene?: { exact: string[] };
+  savings?: {
+    /** Every finding, as "code resourceId", in any order. */
+    exact: string[];
+    unusedMonthly?: number;
+    publicIpv4?: number;
+  };
   egress?: {
     open?: { resource: string; protocol: string; port: number; via: string; severity?: string; returnPath?: string; destinations?: string[] }[];
     closed?: { resource: string; protocol: string; port: number }[];
@@ -248,6 +254,15 @@ describe('fixtures', () => {
           }
           for (const e of expected.egress!.closed ?? []) expect(find(e), `expected ${e.resource} ${e.protocol}/${e.port} NOT out${summary}`).toBeUndefined();
           if (expected.egress!.counts) expect({ interfaces: r.interfaces, open: r.open, wide: r.wide }).toEqual(expected.egress!.counts);
+        });
+      }
+      if (expected.savings) {
+        it('savings', () => {
+          const r = analyzeSavings(normalize(snapshot));
+          const got = r.findings.map((f) => `${f.code} ${f.resourceId}`);
+          expect(got.sort(), r.findings.map((f) => f.title).join('\n')).toEqual([...expected.savings!.exact].sort());
+          if (expected.savings!.unusedMonthly !== undefined) expect(r.unusedMonthly).toBe(expected.savings!.unusedMonthly);
+          if (expected.savings!.publicIpv4 !== undefined) expect(r.publicIpv4.count).toBe(expected.savings!.publicIpv4);
         });
       }
       if (expected.hygiene) {

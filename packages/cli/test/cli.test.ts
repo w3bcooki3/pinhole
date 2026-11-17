@@ -67,6 +67,20 @@ describe('pinhole CLI', () => {
     expect((await cli('onprem', fx('06-public-ip-without-igw-route'))).stdout).toMatch(/No VPN or Direct Connect links/);
   });
 
+  it('savings lists unused network resources with their monthly cost and the commands to remove them', async () => {
+    const r = await cli('savings', fx('17-savings'));
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/5 unused resources cost about \$71\.18 a month/);
+    expect(r.stdout).toMatch(/aws ec2 release-address --allocation-id eipalloc-idle/);
+    expect(r.stdout).toMatch(/--network-interface-id eni-old --no-associate-public-ip-address/);
+    expect(r.stdout).not.toMatch(/eni-outbound|eni-web/);
+    const j = JSON.parse((await cli('savings', fx('17-savings'), '--format', 'json')).stdout);
+    expect(j.findings).toHaveLength(7);
+    expect((await cli('savings', fx('17-savings'), '--fail-over', '50')).code).toBe(2);
+    expect((await cli('savings', fx('17-savings'), '--fail-over', '100')).code).toBe(0);
+    expect((await cli('savings', fx('14-outbound'))).stdout).toMatch(/no Elastic IP list/);
+  });
+
   it('privatelink reports who may connect to each service and what it reaches', async () => {
     const r = await cli('privatelink', fx('16-privatelink'));
     expect(r.code).toBe(0);

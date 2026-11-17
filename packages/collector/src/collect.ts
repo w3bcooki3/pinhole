@@ -118,6 +118,8 @@ export async function collectSnapshot(send: Send, opts: CollectOptions): Promise
   set(ec2, 'InternetGateways', await c.all('ec2', 'DescribeInternetGateways', 'InternetGateways'));
   set(ec2, 'EgressOnlyInternetGateways', await c.all('ec2', 'DescribeEgressOnlyInternetGateways', 'EgressOnlyInternetGateways'));
   set(ec2, 'NatGateways', await c.all('ec2', 'DescribeNatGateways', 'NatGateways'));
+  // Elastic IPs, including those attached to nothing (billed by the hour either way).
+  set(ec2, 'Addresses', await c.all('ec2', 'DescribeAddresses', 'Addresses'));
   set(ec2, 'VpnGateways', await c.all('ec2', 'DescribeVpnGateways', 'VpnGateways'));
   // Only the fields the analysis uses: the response also holds the customer
   // gateway configuration and tunnel options, which contain the pre-shared keys.

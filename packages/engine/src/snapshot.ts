@@ -84,6 +84,18 @@ export interface RawNatGateway {
   NatGatewayAddresses?: { PrivateIp?: string; PublicIp?: string; AllocationId?: string; IsPrimary?: boolean }[];
 }
 
+/** DescribeAddresses: Elastic IPs allocated to the account, attached or not. */
+export interface RawAddress {
+  AllocationId?: string;
+  PublicIp?: string;
+  AssociationId?: string;
+  NetworkInterfaceId?: string;
+  InstanceId?: string;
+  PrivateIpAddress?: string;
+  Domain?: string;
+  Tags?: { Key?: string; Value?: string }[];
+}
+
 export interface RawVpnGateway {
   VpnGatewayId: string;
   State?: string;
@@ -361,6 +373,8 @@ export interface Snapshot {
     InternetGateways?: RawInternetGateway[];
     EgressOnlyInternetGateways?: RawEgressOnlyInternetGateway[];
     NatGateways?: RawNatGateway[];
+    /** DescribeAddresses: Elastic IPs, including those attached to nothing. */
+    Addresses?: RawAddress[];
     VpnGateways?: RawVpnGateway[];
     /** DescribeVpnConnections, without the customer gateway configuration (it holds the tunnel keys). */
     VpnConnections?: RawVpnConnection[];
@@ -492,6 +506,7 @@ const SNAPSHOT: Spec = obj({
     InternetGateways: arr(obj({ InternetGatewayId: id('igw'), Attachments: arr(obj({ VpcId: 'str', State: 'str' })) }, ['InternetGatewayId'])),
     EgressOnlyInternetGateways: arr(obj({ EgressOnlyInternetGatewayId: id('eigw'), Attachments: arr(obj({ VpcId: 'str', State: 'str' })) }, ['EgressOnlyInternetGatewayId'])),
     NatGateways: arr(obj({ NatGatewayId: id('nat'), VpcId: 'str', SubnetId: 'str', State: 'str', ConnectivityType: 'str', NatGatewayAddresses: arr(obj({ PrivateIp: 'str', PublicIp: 'str', AllocationId: 'str', IsPrimary: 'bool' })) }, ['NatGatewayId'])),
+    Addresses: arr(obj({ AllocationId: 'str', PublicIp: 'str', AssociationId: 'str', NetworkInterfaceId: 'str', InstanceId: 'str', PrivateIpAddress: 'str', Domain: 'str', Tags: TAGS }, ['PublicIp'])),
     VpnGateways: arr(obj({ VpnGatewayId: id('vgw'), State: 'str', Type: 'str', VpcAttachments: arr(obj({ VpcId: 'str', State: 'str' })) }, ['VpnGatewayId'])),
     VpnConnections: arr(obj({ VpnConnectionId: id('vpn'), State: 'str', VpnGatewayId: 'str', TransitGatewayId: 'str', Options: obj({ StaticRoutesOnly: 'bool' }), Routes: arr(obj({ DestinationCidrBlock: 'str', State: 'str' })), VgwTelemetry: arr(obj({ Status: 'str', OutsideIpAddress: 'str' })) }, ['VpnConnectionId'])),
     VpcPeeringConnections: arr(obj({ VpcPeeringConnectionId: id('pcx'), Status: obj({ Code: 'str' }), RequesterVpcInfo: PEER_INFO, AccepterVpcInfo: PEER_INFO }, ['VpcPeeringConnectionId'])),
