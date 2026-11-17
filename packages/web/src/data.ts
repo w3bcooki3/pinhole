@@ -59,10 +59,13 @@ export function analyse(value: unknown, name: string): Snap {
 
 const blastCache = new WeakMap<Snap, BlastReport>();
 const hygieneCache = new WeakMap<Snap, HygieneFinding[]>();
+// Blast radius stops after a set number of server group pairs so a large
+// account does not freeze the tab; the reader can ask for the rest.
+const unlimited = new WeakSet<Snap>();
 export function blastOf(snap: Snap): BlastReport {
   let b = blastCache.get(snap);
   if (!b) {
-    b = analyzeBlastRadius(snap.model, reportOf(snap));
+    b = analyzeBlastRadius(snap.model, reportOf(snap), unlimited.has(snap) ? { maxPairs: Number.POSITIVE_INFINITY } : {});
     blastCache.set(snap, b);
   }
   return b;
@@ -116,10 +119,19 @@ const planCache = new WeakMap<Snap, FixPlan>();
 export function planOf(snap: Snap): FixPlan {
   let p = planCache.get(snap);
   if (!p) {
-    p = planFixes(snap.model, reportOf(snap), blastOf(snap));
+    // A large network gets a time limit: the plan says when it stopped early.
+    p = planFixes(snap.model, reportOf(snap), blastOf(snap), { timeMs: 10_000 });
     planCache.set(snap, p);
   }
   return p;
+}
+/** Whether the plan is already worked out (the dashboard shows the page first otherwise). */
+export const planReady = (snap: Snap) => planCache.has(snap);
+
+/** Runs blast radius again without the limit, and everything built on it. */
+export function finishBlast(snap: Snap): void {
+  unlimited.add(snap);
+  for (const c of [blastCache, chokeCache, cutCache, planCache] as WeakMap<Snap, unknown>[]) c.delete(snap);
 }
 
 const fixCache = new WeakMap<ExposureFinding, FixCandidate[]>();

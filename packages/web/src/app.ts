@@ -432,6 +432,7 @@ function dashboard(): HTMLElement {
   const warn = st.snaps.reduce((n, x) => n + x.warnings.length, 0);
   const lbs = res.filter((x) => x.kind.includes('Load')).length;
   const crit = chainRows.filter((c) => c.c.severity === 'critical').length;
+  const stopped = D.withJoined(st.snaps).some((x) => D.blastOf(x).stats.truncated);
   const targets = new Set(chainRows.map((c) => `${c.snap.key}|${c.c.targetId}`)).size;
   // A link inside a sentence: the count is the thing you click.
   const ln = (text: string, act: () => void, id?: string) => on(h('button', { type: 'button', class: 'inl', ...(id ? { id } : {}) }, text), 'click', act);
@@ -443,13 +444,23 @@ function dashboard(): HTMLElement {
   const more = h(
     'p',
     { class: 'sum-more' },
-    chainRows.length ? h('span', {}, 'If one of those servers is compromised, ', ln(`${D.plural(chainRows.length, 'attack chain')}`, () => go('blast')), ` lead to ${D.plural(targets, 'internal resource')}${crit ? ` (${crit} critical)` : ''}. `) : 'No attack chain leads further in from them. ',
+    chainRows.length ? h('span', {}, 'If one of those servers is compromised, ', ln(`${D.plural(chainRows.length, 'attack chain')}`, () => go('blast')), ` lead to ${D.plural(targets, 'internal resource')}${crit ? ` (${crit} critical)` : ''}. `) : stopped ? '' : 'No attack chain leads further in from them. ',
+    stopped ? h('span', {}, 'The attack chain analysis stopped early on a large network; ', ln('finish it on Blast radius', () => go('blast')), '. ') : null,
     warn ? h('span', {}, ln(D.plural(warn, 'coverage note'), () => go('coverage')), ' mark configuration that could not be fully analysed.') : 'Everything loaded was analysed.',
   );
   page.append(h('section', { class: 'box summary', id: 'summary' }, lead, more, rows.length ? h('div', { class: 'sum-sev' }, bar, legend) : null));
 
   // What to do: the smallest verified set of changes.
-  grid.append(planBox(ctx));
+  // On a large network the plan takes a while: show the page first, then the plan.
+  const large = st.snaps.reduce((n, x) => n + x.model.enis.size, 0) > 300;
+  if (!large || D.withJoined(st.snaps).every(D.planReady)) grid.append(planBox(ctx));
+  else {
+    const wait = h('section', { class: 'box', id: 'plan' }, boxHead('Fix plan', 'Fewest changes that close every critical and high risk, each proved by re-analysis'), h('div', { class: 'pad' }, h('p', { class: 'dim', style: 'margin:0' }, 'Working out the fix plan. On a large network this takes a few seconds.')));
+    grid.append(wait);
+    setTimeout(() => {
+      if (wait.isConnected) wait.replaceWith(planBox(ctx));
+    }, 30);
+  }
 
   const cats: { key: CatFilter; label: string }[] = [
     { key: 'admin', label: 'Remote administration' },

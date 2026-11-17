@@ -31,7 +31,7 @@
  */
 import { analyzeExposure } from './exposure.js';
 import type { ExposureReport } from './exposure.js';
-import { analyzeBlastRadius, findingKey } from './blast.js';
+import { analyzeBlastRadius, blastGroupRep, findingKey } from './blast.js';
 import type { AttackChain, BlastReport } from './blast.js';
 import { internalBreaks } from './internal.js';
 import type { Breakage } from './internal.js';
@@ -42,6 +42,7 @@ import { compareSeverity } from './risk.js';
 import { applyChanges, cliFor, ruleText } from './whatif.js';
 import type { Change } from './whatif.js';
 import type { NetworkModel } from './types.js';
+import { LINEAGE } from './lineage.js';
 
 export interface CrownJewel {
   eniId: string;
@@ -112,6 +113,9 @@ export function findMinCut(model: NetworkModel, exposure: ExposureReport, blast:
   const jewelIds = new Set(jewels.map((j) => j.eniId));
   const empty: MinCut = { jewels, edges: [], ruleIds: [], changes: [], cli: [], rules: [], verified: true, before: 0, after: 0, breaks: [], uncuttable: false, cost: 0 };
   const before = blast.chains.filter((c) => jewelIds.has(c.targetId)).length;
+  // Interfaces that no rule tells apart share one node (see blast.ts), so the graph stays small.
+  const rep = (id: string) => blastGroupRep(blast, id);
+  const jewelReps = new Set([...jewelIds].map(rep));
   if (!before) return empty;
 
   // Graph: node 0 is the internet, 1 the sink; then controls(eni) and reaches(jewel).
@@ -148,7 +152,7 @@ export function findMinCut(model: NetworkModel, exposure: ExposureReport, blast:
     }
     // Closing a public website or other low-risk service is a last resort.
     const weight = compareSeverity(worst, 'high') <= 0 ? 1 : 10;
-    addEdge(0, node(`c:${en.eniId}`), open ? undefined : [...rules], { from: 'internet', fromName: 'the internet', to: en.eniId, toName: en.name, kind: 'entry', ruleIds: [...rules] }, weight);
+    addEdge(0, node(`c:${rep(en.eniId)}`), open ? undefined : [...rules], { from: 'internet', fromName: 'the internet', to: en.eniId, toName: en.name, kind: 'entry', ruleIds: [...rules] }, weight);
   }
   // Lateral edges.
   for (const e of blast.edges) {
@@ -162,15 +166,15 @@ export function findMinCut(model: NetworkModel, exposure: ExposureReport, blast:
       }
       return [...rules];
     };
-    if (pivots.length) addEdge(node(`c:${e.from}`), node(`c:${e.to}`), cutRules(pivots), { from: e.from, fromName: name(e.from), to: e.to, toName: name(e.to), kind: 'pivot', ruleIds: cutRules(pivots) ?? [] });
-    if (jewelIds.has(e.to)) {
+    if (pivots.length) addEdge(node(`c:${rep(e.from)}`), node(`c:${rep(e.to)}`), cutRules(pivots), { from: e.from, fromName: name(e.from), to: e.to, toName: name(e.to), kind: 'pivot', ruleIds: cutRules(pivots) ?? [] });
+    if (jewelReps.has(rep(e.to))) {
       const important = e.services.filter((s) => s.verdict === 'reachable' && (s.category === 'data' || s.category === 'control' || s.category === 'admin' || s.severity === 'critical'));
-      if (important.length) addEdge(node(`c:${e.from}`), node(`r:${e.to}`), cutRules(important), { from: e.from, fromName: name(e.from), to: e.to, toName: name(e.to), kind: 'jewel', ruleIds: cutRules(important) ?? [] });
+      if (important.length) addEdge(node(`c:${rep(e.from)}`), node(`r:${rep(e.to)}`), cutRules(important), { from: e.from, fromName: name(e.from), to: e.to, toName: name(e.to), kind: 'jewel', ruleIds: cutRules(important) ?? [] });
     }
   }
-  for (const j of jewelIds) if (ids.has(`r:${j}`)) addEdge(node(`r:${j}`), 1, undefined, { from: j, fromName: name(j), to: 'sink', toName: '', kind: 'jewel', ruleIds: [] });
+  for (const j of jewelReps) if (ids.has(`r:${j}`)) addEdge(node(`r:${j}`), 1, undefined, { from: j, fromName: name(j), to: 'sink', toName: '', kind: 'jewel', ruleIds: [] });
   // A jewel the attacker takes over is reached too.
-  for (const j of jewelIds) if (ids.has(`c:${j}`)) addEdge(node(`c:${j}`), node(`r:${j}`), undefined, { from: j, fromName: name(j), to: j, toName: name(j), kind: 'jewel', ruleIds: [] });
+  for (const j of jewelReps) if (ids.has(`c:${j}`)) addEdge(node(`c:${j}`), node(`r:${j}`), undefined, { from: j, fromName: name(j), to: j, toName: name(j), kind: 'jewel', ruleIds: [] });
 
   // Edmonds-Karp.
   let flow = 0;
@@ -209,21 +213,41 @@ export function findMinCut(model: NetworkModel, exposure: ExposureReport, blast:
   for (const u of seen) for (const ed of g[u]!) if (ed.meta && !seen.has(ed.to)) edges.push(ed.meta);
   const uncuttable = flow >= INF;
   let ruleIds = [...new Set(edges.flatMap((e) => e.ruleIds))];
-  const remaining = (list: string[]) => {
-    try {
-      const m1 = applyChanges(model, list.map((ruleId): Change => ({ kind: 'revoke-sg-rule', ruleId })));
-      const e1 = analyzeExposure(m1);
-      return analyzeBlastRadius(m1, e1).chains.filter((c) => jewelIds.has(c.targetId)).length;
-    } catch {
-      return Infinity;
-    }
-  };
+
   // Shared rules are counted once per edge in the flow, so the union can hold
-  // a rule the others already cover: drop each one that is not needed.
-  if (!uncuttable && ruleIds.length > 1 && remaining(ruleIds) === 0) {
-    for (const id of [...ruleIds].reverse()) {
-      const without = ruleIds.filter((x) => x !== id);
-      if (without.length && remaining(without) === 0) ruleIds = without;
+  // a rule the others already cover: drop each one that is not needed. Each
+  // trial is the model with every chosen rule removed and one put back, made
+  // from the model before it, so only pairs into that rule's group are
+  // analysed again.
+  const chainsLeft = (m1: NetworkModel) => analyzeBlastRadius(m1, analyzeExposure(m1)).chains.filter((c) => jewelIds.has(c.targetId)).length;
+  const groupOfRule = new Map<string, string>();
+  for (const sg of model.securityGroups.values()) for (const r of sg.ingress) groupOfRule.set(r.id, sg.id);
+  const putBack = (cur: NetworkModel, id: string): NetworkModel => {
+    const gid = groupOfRule.get(id)!;
+    const now = cur.securityGroups.get(gid)!;
+    const keep = new Set(now.ingress.map((r) => r.id)).add(id);
+    const out: NetworkModel = { ...cur, securityGroups: new Map(cur.securityGroups).set(gid, { ...now, ingress: model.securityGroups.get(gid)!.ingress.filter((r) => keep.has(r.id)) }) };
+    // To the analyses this is the reverse of removing the rule: the same group is touched.
+    LINEAGE.set(out, { base: cur, changes: [{ kind: 'revoke-sg-rule', ruleId: id }] });
+    return out;
+  };
+  if (!uncuttable && ruleIds.length > 1) {
+    let cur: NetworkModel | undefined;
+    try {
+      cur = applyChanges(model, ruleIds.map((ruleId): Change => ({ kind: 'revoke-sg-rule', ruleId })));
+    } catch {
+      cur = undefined;
+    }
+    if (cur && chainsLeft(cur) === 0) {
+      for (const id of [...ruleIds].reverse()) {
+        const without = ruleIds.filter((x) => x !== id);
+        if (!without.length || !groupOfRule.has(id)) continue;
+        const trial = putBack(cur, id);
+        if (chainsLeft(trial) === 0) {
+          ruleIds = without;
+          cur = trial;
+        }
+      }
     }
   }
   const kept = new Set(ruleIds);

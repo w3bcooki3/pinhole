@@ -7,7 +7,6 @@
     "declarationMap": false,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": [],
-    "baseUrl": ".",
     "paths": { "@pinhole/engine": ["../engine/src/index.ts"] }
   },
   "files": ["src/app.ts", "src/css.d.ts", "docs/docs.ts"]

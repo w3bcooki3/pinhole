@@ -15,16 +15,19 @@
  * exploit: it assumes credentials or a vulnerability on each pivot service.
  */
 import type { ExposureFinding, ExposureReport } from './exposure.js';
-import { parseIpv4 } from './ipv4.js';
-import { candidateRules, isLateralTarget, serviceLabel } from './reach.js';
+import { parseCidr, parseIpv4 } from './ipv4.js';
+import { firewallAddressCuts } from './firewall.js';
+import { candidateRules, isLateralTarget, reachServices, serviceLabel } from './reach.js';
 import type { OnPremReport } from './hybrid.js';
-import { pairReach } from './internal.js';
+import { pairReach, touchedInterfaces } from './internal.js';
+import { LINEAGE } from './lineage.js';
 import type { PairReach, ServiceReach } from './reach.js';
 import { compareSeverity, isPivotService, SEVERITY_ORDER } from './risk.js';
 import type { ServiceCategory, Severity } from './risk.js';
 import { displayName } from './topology.js';
 import { jewelTag } from './jewels.js';
-import type { NetworkModel } from './types.js';
+import type { Eni, IpRange, NetworkModel } from './types.js';
+import type { Change } from './whatif.js';
 
 export interface BlastEntry {
   eniId: string;
@@ -188,20 +191,227 @@ export function analyzeOnPremBlast(model: NetworkModel, onprem: OnPremReport, op
   return blastFrom(model, entries, direct, opts, 'on-premises');
 }
 
+/**
+ * Interfaces that no rule, route or firewall can tell apart: same subnet,
+ * same security groups, same interface type and crown jewel tag, and a
+ * private IP in the same cell of every address range anywhere in the model.
+ * Reachability between two interfaces depends only on these, so it is
+ * evaluated once per pair of groups instead of once per pair of interfaces.
+ * Only the interface IDs and addresses in a trace differ within a group.
+ */
+interface Groups {
+  of: Map<string, number>;
+  /** Members of each group, in model order. */
+  members: string[][];
+  cuts: Set<number>;
+  /** Results per pair of groups (index from * count + to); null when no rule can match. */
+  memo: Map<number, PairReach | null>;
+  /** For a changed copy that shares the grouping: the original's groups, and the groups the changes touch. */
+  parent?: { groups: Groups; touched: Set<number> };
+}
+const groupCache = new WeakMap<NetworkModel, Groups>();
+const groupsByReport = new WeakMap<BlastReport, Map<string, string>>();
+
+/** Every address boundary in the model: any parsed range, wherever it is held. */
+function addressCuts(model: NetworkModel): number[] {
+  const cuts = new Set<number>();
+  const seen = new WeakSet<object>();
+  const add = (r: IpRange) => {
+    cuts.add(r.start);
+    cuts.add(r.end + 1);
+  };
+  const visit = (v: unknown, depth: number): void => {
+    if (!v || typeof v !== 'object' || depth > 12 || seen.has(v)) return;
+    seen.add(v);
+    if (v instanceof Map) {
+      for (const x of v.values()) visit(x, depth + 1);
+      return;
+    }
+    if (v instanceof Set || Array.isArray(v)) {
+      for (const x of v) visit(x, depth + 1);
+      return;
+    }
+    const o = v as Record<string, unknown>;
+    if (typeof o.start === 'number' && typeof o.end === 'number') add(o as unknown as IpRange);
+    for (const k in o) {
+      const x = o[k];
+      if (typeof x === 'string' && x.includes('/') && /^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(x)) {
+        try {
+          add(parseCidr(x));
+        } catch {
+          /* not an address */
+        }
+      } else if (x && typeof x === 'object') visit(x, depth + 1);
+    }
+  };
+  // Interfaces are what is being grouped; their own addresses are not boundaries.
+  for (const [k, v] of Object.entries(model)) if (k !== 'enis' && k !== 'instances') visit(v, 0);
+  for (const r of firewallAddressCuts(model)) add(r);
+  return [...cuts].sort((a, b) => a - b);
+}
+
+/** Changes that neither move an interface between groups nor add an address boundary the grouping lacks. */
+function keepsGrouping(base: Groups, changes: Change[]): boolean {
+  const known = (cidr?: string) => {
+    if (!cidr || cidr.includes(':')) return true;
+    try {
+      const r = parseCidr(cidr);
+      return base.cuts.has(r.start) && base.cuts.has(r.end + 1);
+    } catch {
+      return false;
+    }
+  };
+  return changes.every((c) => {
+    switch (c.kind) {
+      case 'revoke-sg-rule':
+      case 'remove-public-ip':
+      case 'add-public-ip':
+      case 'remove-nacl-entry':
+        return true;
+      case 'edit-sg-rule':
+        return known(c.cidr);
+      case 'add-sg-rule':
+        return known(c.cidr) && !c.prefixListId;
+      case 'add-nacl-entry':
+        return known(c.cidr);
+      default:
+        return false;
+    }
+  });
+}
+
+function groupsOf(model: NetworkModel, targetList?: Eni[]): Groups {
+  const hit = groupCache.get(model);
+  if (hit) return hit;
+  const targets = targetList ?? targetsOf(model);
+  const line = LINEAGE.get(model);
+  if (line) {
+    const base = groupsOf(line.base);
+    if (keepsGrouping(base, line.changes) && targets.length === base.of.size && targets.every((e) => base.of.has(e.id))) {
+      const touched = new Set<number>();
+      for (const m of [line.base, model]) for (const id of touchedInterfaces(m, line.changes)) if (base.of.has(id)) touched.add(base.of.get(id)!);
+      const g: Groups = { of: base.of, members: base.members, cuts: base.cuts, memo: new Map(), parent: { groups: base, touched } };
+      groupCache.set(model, g);
+      return g;
+    }
+  }
+  const cutList = addressCuts(model);
+  const cuts = cutList;
+  const cell = (ip: number) => {
+    let lo = 0;
+    let hi = cuts.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cuts[mid]! <= ip) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  const byKey = new Map<string, number>();
+  const g: Groups = { of: new Map(), members: [], cuts: new Set(cutList), memo: new Map() };
+  for (const e of targets) {
+    const ip = e.privateIps[0];
+    const key = `${e.subnetId}|${[...e.groupIds].sort().join(',')}|${e.interfaceType}|${ip ? cell(parseIpv4(ip)) : 'none'}|${jewelTag(model, e) ?? ''}`;
+    let i = byKey.get(key);
+    if (i === undefined) {
+      i = g.members.length;
+      byKey.set(key, i);
+      g.members.push([]);
+    }
+    g.members[i]!.push(e.id);
+    g.of.set(e.id, i);
+  }
+  groupCache.set(model, g);
+  return g;
+}
+
+/** A remembered result from this model or, for a pair the changes cannot touch, from the model it was made from. */
+function recall(groups: Groups, key: number, gf: number, gt: number): PairReach | null | undefined {
+  let g: Groups | undefined = groups;
+  while (g) {
+    const v = g.memo.get(key);
+    if (v !== undefined) return v;
+    if (!g.parent || g.parent.touched.has(gf) || g.parent.touched.has(gt)) return undefined;
+    g = g.parent.groups;
+  }
+  return undefined;
+}
+
+const targetsOf = (model: NetworkModel) => [...model.enis.values()].filter(isLateralTarget);
+
+/**
+ * Where to keep a new result: the oldest model it is valid for. A changed
+ * copy that cannot touch the pair stores it with the model it was made from,
+ * so other copies made from that model (other trial changes) find it too.
+ */
+function home(groups: Groups, gf: number, gt: number): Groups {
+  let g = groups;
+  while (g.parent && !g.parent.touched.has(gf) && !g.parent.touched.has(gt)) g = g.parent.groups;
+  return g;
+}
+
+/**
+ * Every service `from` can open on `to`, shared between interfaces that no
+ * rule tells apart. The per-hop explanations are left out: callers read only
+ * the services and the rules that let each through. Use reachServices for a
+ * full trace of one pair.
+ */
+export function reachBetween(model: NetworkModel, from: string, to: string): PairReach {
+  const groups = groupsOf(model);
+  const gf = groups.of.get(from);
+  const gt = groups.of.get(to);
+  if (gf === undefined || gt === undefined || from === to) return slim(pairReach(model, from, to));
+  const key = gf * groups.members.length + gt;
+  let hit = recall(groups, key, gf, gt);
+  if (hit === undefined) {
+    const src = model.enis.get(from)!;
+    const ip = src.privateIps[0];
+    const rules = ip ? candidateRules(model, src, model.enis.get(to)!, parseIpv4(ip)) : [];
+    hit = rules !== 'any' && rules.length === 0 ? null : slim(reachServices(model, from, to));
+  }
+  const at = home(groups, gf, gt);
+  if (!at.memo.has(key)) at.memo.set(key, hit);
+  if (hit === null) return { from, to, services: [], cells: 0 };
+  return hit.from === from && hit.to === to ? hit : { from, to, services: hit.services, cells: hit.cells };
+}
+
+/** The interface that stands for `eniId` in a report's grouped lateral edges (itself when ungrouped). */
+export function blastGroupRep(report: BlastReport, eniId: string): string {
+  return groupsByReport.get(report)?.get(eniId) ?? eniId;
+}
+
+/**
+ * A pair result without the per-hop explanations: lateral edges are many,
+ * and only the rules on each hop are read from them. The edges that make up
+ * attack chains are evaluated again in full.
+ */
+function slim(r: PairReach): PairReach {
+  return {
+    ...r,
+    services: r.services.map((s) => ({ ...s, trace: s.trace.filter((h) => h.ruleIds?.length).map((h) => ({ stage: h.stage, decision: h.decision, resourceId: h.resourceId, detail: '', ruleIds: h.ruleIds! })) })),
+  };
+}
+
 function blastFrom(model: NetworkModel, entries: BlastEntry[], direct: Direct, opts: BlastOptions, origin: string): BlastReport {
   const maxDepth = opts.maxDepth ?? 3;
   const maxPairs = opts.maxPairs ?? 50_000;
-  const targets = [...model.enis.values()].filter(isLateralTarget);
-  const memo = new Map<string, PairReach>();
+  const groups = groupsOf(model);
+  const G = groups.members.length;
   const stats = { pairsConsidered: 0, pairsEvaluated: 0, cellsEvaluated: 0, truncated: false, redundantChains: 0 };
 
   const reachableFromInternet = (eniId: string, s: ServiceReach) =>
     (direct.get(eniId) ?? []).some((d) => d.protocol === s.protocol && (!s.ports || (d.from <= s.ports.to && d.to >= s.ports.from)));
 
+  /** Reachability between two distinct interfaces, evaluated once per pair of groups. */
   const pair = (from: string, to: string): PairReach | undefined => {
-    const key = `${from}>${to}`;
-    const hit = memo.get(key);
-    if (hit) return hit;
+    const gf = groups.of.get(from);
+    const gt = groups.of.get(to);
+    const key = gf === undefined || gt === undefined ? -1 : gf * G + gt;
+    if (key >= 0) {
+      const hit = recall(groups, key, gf!, gt!);
+      if (hit === null) return { from, to, services: [], cells: 0 };
+      if (hit) return hit.from === from && hit.to === to ? hit : { from, to, services: hit.services, cells: hit.cells };
+    }
     stats.pairsConsidered += 1;
     const src = model.enis.get(from)!;
     const dst = model.enis.get(to)!;
@@ -209,63 +419,128 @@ function blastFrom(model: NetworkModel, entries: BlastEntry[], direct: Direct, o
     // Cheap check first: no inbound rule that could match means no connection.
     const rules = ip ? candidateRules(model, src, dst, parseIpv4(ip)) : [];
     if (rules !== 'any' && rules.length === 0) {
-      const none = { from, to, services: [], cells: 0 };
-      memo.set(key, none);
-      return none;
+      if (key >= 0) home(groups, gf!, gt!).memo.set(key, null);
+      return { from, to, services: [], cells: 0 };
     }
     if (stats.pairsEvaluated >= maxPairs) {
       stats.truncated = true;
       return undefined;
     }
     stats.pairsEvaluated += 1;
-    const r = pairReach(model, from, to);
+    const r = slim(reachServices(model, from, to));
     stats.cellsEvaluated += r.cells;
-    memo.set(key, r);
+    if (key >= 0) home(groups, gf!, gt!).memo.set(key, r);
     return r;
   };
 
-  const edges = new Map<string, LateralEdge>();
+  const edges = new Map<number, LateralEdge>();
   const chains: AttackChain[] = [];
   const hidden = new Set<string>();
   const footprints: BlastFootprint[] = [];
+  const isPivot = (r: PairReach) => r.services.some((s) => s.pivot && s.verdict === 'reachable');
+  const isImportant = (s: ServiceReach) => s.verdict === 'reachable' && (s.category === 'data' || s.category === 'control' || s.category === 'admin' || s.severity === 'critical');
+  type Hit = { svc: ServiceReach; via: string; depth: number };
+  // Per pair of groups, computed once: the services, whether one gives a foothold, and those that can end a chain.
+  const facts = new Map<number, { r: PairReach; pivot: boolean; important: ServiceReach[]; takeover: boolean } | null>();
+  const factsOf = (gf: number, gt: number, from: string, dst: string) => {
+    const k = gf * G + gt;
+    let f = facts.get(k);
+    if (f !== undefined) return f;
+    const r = pair(from, dst);
+    if (!r) return undefined; // stopped early: try again next time, in case the limit changes nothing
+    f = r.services.length ? { r, pivot: isPivot(r), important: r.services.filter(isImportant), takeover: r.services.some((s) => s.pivot && s.verdict === 'reachable') } : null;
+    facts.set(k, f);
+    if (f) edges.set(k, { from, to: dst, services: r.services, pivot: f.pivot });
+    return f;
+  };
 
   for (const entry of entries) {
-    // Breadth-first, so each interface is reached by its shortest chain.
-    const parent = new Map<string, { from: string; svc: ServiceReach } | null>([[entry.eniId, null]]);
-    const depthOf = new Map<string, number>([[entry.eniId, 0]]);
-    let frontier = [entry.eniId];
-    const hits = new Map<string, { svc: ServiceReach; via: string; depth: number }[]>();
+    // Where the attacker stands in a group: its first member, or the second when
+    // the first is the entry itself (the attacker already holds that one).
+    const others = (g: number) => (groups.members[g]![0] === entry.eniId || groups.members[g]!.includes(entry.eniId) ? groups.members[g]!.filter((id) => id !== entry.eniId) : groups.members[g]!);
+    const entryG = groups.of.get(entry.eniId)!;
+    const pos = (g: number) => {
+      const m = g === entryG ? others(g) : groups.members[g]!;
+      return m;
+    };
+    // Breadth-first over groups, so each interface is reached by its shortest chain.
+    const depthG = new Map<number, number>();
+    const parentG = new Map<number, { from: string; svc: ServiceReach }>();
+    const hitsG = new Map<number, { svc: ServiceReach; via: string; alt?: string; depth: number }[]>();
+    const takeG = new Set<number>();
+    let frontier: (number | 'entry')[] = ['entry'];
     for (let depth = 1; depth <= maxDepth && frontier.length; depth++) {
-      const next: string[] = [];
-      for (const from of frontier) {
-        for (const dst of targets) {
-          if (dst.id === from || dst.id === entry.eniId) continue;
-          const r = pair(from, dst.id);
-          if (!r || r.services.length === 0) continue;
-          const pivot = r.services.some((s) => s.pivot && s.verdict === 'reachable');
-          edges.set(`${from}>${dst.id}`, { from, to: dst.id, services: r.services, pivot });
-          const list = hits.get(dst.id) ?? [];
-          for (const svc of r.services) list.push({ svc, via: from, depth });
-          hits.set(dst.id, list);
-          if (!depthOf.has(dst.id)) {
-            depthOf.set(dst.id, depth);
-            const best = r.services.find((s) => s.pivot && s.verdict === 'reachable') ?? r.services[0]!;
-            parent.set(dst.id, { from, svc: best });
-            if (pivot) next.push(dst.id);
+      const next: number[] = [];
+      for (const fg of frontier) {
+        const fm = fg === 'entry' ? [entry.eniId] : pos(fg);
+        const from = fm[0];
+        if (!from) continue;
+        const gf = fg === 'entry' ? entryG : fg;
+        const alt = fg === 'entry' ? undefined : fm[1];
+        for (let tg = 0; tg < G; tg++) {
+          const tm = pos(tg);
+          const p0 = tm[0];
+          if (!p0) continue;
+          // Within one group, the attacker on one member reaches another member.
+          const dst = p0 === from ? tm[1] : p0;
+          if (!dst) continue;
+          const f = factsOf(gf, tg, from, dst);
+          if (!f) continue;
+          if (f.important.length) {
+            const list = hitsG.get(tg) ?? hitsG.set(tg, []).get(tg)!;
+            for (const svc of f.important) list.push({ svc, via: from, ...(alt ? { alt } : {}), depth });
+          }
+          if (f.takeover) takeG.add(tg);
+          if (!depthG.has(tg)) {
+            depthG.set(tg, depth);
+            parentG.set(tg, { from, svc: f.r.services.find((s) => s.pivot && s.verdict === 'reachable') ?? f.r.services[0]! });
+            if (f.pivot) next.push(tg);
           }
         }
       }
       frontier = next;
     }
 
-    // One chain per (target, impact): the most damaging service reached there.
+    // Back to interfaces: every member of a reached group, except the entry itself.
+    const depthOf = new Map<string, number>([[entry.eniId, 0]]);
+    const hits = new Map<string, Hit[]>();
+    const takeovers0 = new Set<string>();
+    for (const [g, d] of [...depthG].sort((a, b) => a[1] - b[1] || a[0] - b[0])) {
+      const raw = hitsG.get(g) ?? [];
+      const vias = new Set(raw.map((h) => h.via));
+      let shared: Hit[] | undefined;
+      for (const id of pos(g)) {
+        if (!depthOf.has(id)) depthOf.set(id, d);
+        if (takeG.has(g)) takeovers0.add(id);
+        if (!raw.length) continue;
+        if (!vias.has(id)) {
+          // Most members are nobody's position: they all see the same list.
+          shared ??= raw.map((h) => ({ svc: h.svc, via: h.via, depth: h.depth }));
+          hits.set(id, shared);
+          continue;
+        }
+        const list: Hit[] = [];
+        for (const h of raw) {
+          const via = h.via === id ? h.alt : h.via;
+          if (via) list.push({ svc: h.svc, via, depth: h.depth });
+        }
+        if (list.length) hits.set(id, list);
+      }
+    }
+    const parent = {
+      get: (id: string): { from: string; svc: ServiceReach } | null | undefined => {
+        if (id === entry.eniId) return null;
+        const g = groups.of.get(id);
+        return g === undefined ? undefined : parentG.get(g);
+      },
+    };
+
     let dataStores = 0;
-    let takeovers = 0;
+    const takeovers = takeovers0.size;
     for (const [dstId, list] of hits) {
-      const reachable = list.filter((h) => h.svc.verdict === 'reachable');
-      if (reachable.some((h) => h.svc.category === 'data')) dataStores += 1;
-      if (reachable.some((h) => h.svc.pivot)) takeovers += 1;
-      const important = reachable.filter((h) => h.svc.category === 'data' || h.svc.category === 'control' || h.svc.category === 'admin' || h.svc.severity === 'critical');
+      // Only services that can end a chain are kept per interface (see above).
+      const important = list;
+      if (important.some((h) => h.svc.category === 'data')) dataStores += 1;
       const interesting = important.filter((h) => !reachableFromInternet(dstId, h.svc));
       for (const cat of new Set(important.filter((h) => reachableFromInternet(dstId, h.svc)).map((h) => h.svc.category))) hidden.add(`${dstId}|${cat}`);
       const seen = new Set<ServiceCategory>();
@@ -326,11 +601,35 @@ function blastFrom(model: NetworkModel, entries: BlastEntry[], direct: Direct, o
     cur.altRoutes.push(c.steps);
   }
   const out = [...merged.values()];
+  // Every step of every route has its own edge, with the full trace for that exact pair.
+  const full = new Set<string>();
+  const routeEdges = new Map<string, LateralEdge>();
+  for (const c of out) {
+    for (const route of [c.steps, ...c.altRoutes]) {
+      for (let i = 1; i < route.length; i++) {
+        const a = route[i - 1]!.eniId;
+        const b = route[i]!.eniId;
+        if (full.has(`${a}>${b}`)) continue;
+        full.add(`${a}>${b}`);
+        const r = pairReach(model, a, b);
+        if (!r.services.length) continue;
+        routeEdges.set(`${a}>${b}`, { from: a, to: b, services: r.services, pivot: isPivot(r) });
+      }
+    }
+  }
   for (const c of out) {
     c.entries.sort((a, b) => compareSeverity(a.severity, b.severity) || a.name.localeCompare(b.name));
     if (c.entries.length > 1) c.why.push(`Also reachable from ${c.entries.filter((e) => e.eniId !== c.entry.eniId).map((e) => e.name).join(', ')}.`);
   }
   out.sort((a, b) => b.score - a.score || a.steps.length - b.steps.length || a.id.localeCompare(b.id));
   stats.redundantChains = hidden.size;
-  return { entries, edges: [...edges.values()], chains: out, hidden: [...hidden], footprints, stats };
+  // Lateral edges: one per pair of groups (between their first members), and
+  // every step of every chain route with its exact trace.
+  const edgeList = [...routeEdges.values()];
+  for (const e of edges.values()) if (!routeEdges.has(`${e.from}>${e.to}`)) edgeList.push(e);
+  const report: BlastReport = { entries, edges: edgeList, chains: out, hidden: [...hidden], footprints, stats };
+  const rep = new Map<string, string>();
+  for (const m of groups.members) for (const id of m) rep.set(id, m[0]!);
+  groupsByReport.set(report, rep);
+  return report;
 }

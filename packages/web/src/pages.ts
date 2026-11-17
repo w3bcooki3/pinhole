@@ -100,6 +100,23 @@ export function blastPage(ctx: Ctx): HTMLElement {
   const sel = snapSelect(ctx, snap.key, (k) => ctx.go('blast', { blastKey: k, chain: '' }), (x) => D.blastOf(x).entries.length > 0);
   const graphBox = h('section', { class: 'box' }, boxHead('Lateral movement', chain ? 'The selected chain is outlined. Select a resource to open its chain.' : 'Every route that makes up a chain. Select a resource to open its chain.'), canvas);
   const out = chain ? chainDetail(ctx, snap, chain, graphBox) : chainOverview(ctx, snap, graphBox, sel);
+  if (blast.stats.truncated) {
+    const bar = h(
+      'div',
+      { class: 'warn-bar', style: 'margin:0 0 1rem;display:flex;flex-wrap:wrap;gap:0.5rem 1rem;align-items:center' },
+      h('span', { style: 'flex:1;min-width:16rem' }, `This network is large: the analysis stopped after ${blast.stats.pairsEvaluated.toLocaleString('en')} pairs of server groups, so some attack chains may be missing.`),
+      btn('Finish the analysis', 'sm', () => {
+        bar.replaceChildren(h('span', {}, 'Analysing every pair. On a large network this can take a minute; the page will not respond until it is done.'));
+        setTimeout(() => {
+          D.finishBlast(snap);
+          ctx.go('blast', {});
+        }, 50);
+      }),
+    );
+    const ph = out.querySelector('.ph');
+    if (ph) ph.after(bar);
+    else out.prepend(bar);
+  }
   draw();
   return out;
 }
@@ -964,6 +981,7 @@ export function planBox(ctx: Ctx): HTMLElement {
       h('p', { class: 'plan-sum' }, `${D.plural(steps.length, 'change')} close${steps.length === 1 ? 's' : ''} ${parts.join(' and ')}.`),
       h('p', { class: 'dim', style: 'margin:0' }, coll ? `${D.plural(coll, 'other path')} would also close; each is shown on its step. Check those are not wanted.` : 'Nothing else that is reachable today changes: no web or low-risk path is closed.'),
       (() => {
+        if (plans.some((x) => x.plan.stoppedEarly)) return h('p', { class: 'plan-proof' }, 'This network is large, so the search stopped early. Apply these changes and load a new snapshot to plan the rest.');
         const multi = plans.filter((x) => x.plan.steps.length > 1);
         if (!multi.length) return null;
         const proved = multi.every((x) => x.plan.optimality.status === 'optimal');

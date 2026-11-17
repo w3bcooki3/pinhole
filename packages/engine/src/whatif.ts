@@ -15,6 +15,7 @@ import { hasPorts, normalizeProtocol, protocolName } from './packet.js';
 import { assessPorts, compareSeverity } from './risk.js';
 import type { Severity } from './risk.js';
 import { inheritPairs } from './internal.js';
+import { LINEAGE } from './lineage.js';
 import type { Eni, Nacl, NaclEntry, NetworkModel, PortRange, Route, RouteTable, SecurityGroup, SgRule } from './types.js';
 
 export type Change =
@@ -324,6 +325,7 @@ export function applyChanges(model: NetworkModel, changes: Change[]): NetworkMod
     }
   }
   inheritPairs(model, out, changes);
+  LINEAGE.set(out, { base: model, changes });
   return out;
 }
 

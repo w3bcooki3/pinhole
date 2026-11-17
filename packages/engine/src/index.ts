@@ -25,7 +25,7 @@ export { assessPorts, categorize, compareSeverity, isPivotService, serviceName, 
 export type { Severity, RiskAssessment, ServiceCategory } from './risk.js';
 export { reachServices, serviceLabel, isLateralTarget } from './reach.js';
 export type { PairReach, ServiceReach, ReachOptions } from './reach.js';
-export { analyzeBlastRadius, analyzeOnPremBlast, findingKey } from './blast.js';
+export { analyzeBlastRadius, analyzeOnPremBlast, blastGroupRep, findingKey, reachBetween } from './blast.js';
 export type { AttackChain, BlastEntry, BlastFootprint, BlastReport, BlastOptions, ChainStep, LateralEdge } from './blast.js';
 export type { Hop, Stage } from './walk.js';
 export { SNAPSHOT_SCHEMA_VERSION, SnapshotError, assertSnapshot } from './snapshot.js';

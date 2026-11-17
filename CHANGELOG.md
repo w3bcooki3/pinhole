@@ -31,6 +31,17 @@ All notable changes to this project are recorded here. The format follows
   and animations stop when the system asks for reduced motion. The console
   follows the system's dark setting until a theme is chosen. The dashboard
   states its summary in sentences, with the counts as links.
+- Large networks: attack chains, the fix plan, crown jewel cuts and fix
+  checks evaluate each pair of server groups once instead of each pair of
+  servers (servers that no rule, route or address range tells apart share
+  one result), reuse unchanged results when a change is tried, and keep
+  only rule IDs for edges that are not on a chain. Results are identical to
+  before; on a 150-server synthetic account the whole set runs 8 times
+  faster and uses a third of the memory. When attack chains stop at their
+  limit the console now says so and offers to finish; on a large network
+  the dashboard appears before the fix plan, and the plan says when it
+  stopped early. `npm run synth` makes a large synthetic account and
+  `npm run bench:console` times every analysis the console runs.
 - Outbound: what each server can send to the internet, through an internet
   gateway (as its public IP) or a NAT gateway (as the gateway's Elastic IP),
   with the security group, routes, firewalls and network ACLs of both subnets,

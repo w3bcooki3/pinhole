@@ -39,7 +39,9 @@
     "build:web": "node scripts/build-web.mjs && node scripts/build-docs.mjs",
     "typecheck:web": "tsc -p packages/web/tsconfig.json",
     "bench": "node scripts/bench-engine.mjs",
-    "check": "npm run build && npm run typecheck:web && npm test && node scripts/fixture-count.mjs --check"
+    "check": "npm run build && npm run typecheck:web && npm test && node scripts/fixture-count.mjs --check",
+    "bench:console": "node scripts/bench-console.mjs",
+    "synth": "node scripts/synth-account.mjs"
   },
   "devDependencies": {
     "@fontsource/geist-mono": "^5.3.0",

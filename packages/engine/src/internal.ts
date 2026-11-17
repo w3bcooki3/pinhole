@@ -21,6 +21,7 @@
  */
 import { parseIpv4 } from './ipv4.js';
 import { reachServices, serviceLabel } from './reach.js';
+import { reachBetween } from './blast.js';
 import type { PairReach } from './reach.js';
 import { displayName, eniByPrivateIp, isElbNode, naclForSubnet, routeTableForSubnet } from './topology.js';
 import type { Change } from './whatif.js';
@@ -255,9 +256,9 @@ export function internalBreaks(before: NetworkModel, after: NetworkModel, change
   const rules = ruleIndex(before);
   const out: Breakage[] = [];
   for (const [a, b] of pairs(before, touched)) {
-    const r0 = pairReach(before, a, b);
+    const r0 = reachBetween(before, a, b);
     if (!r0.services.length) continue;
-    const r1 = after.enis.has(a) && after.enis.has(b) ? pairReach(after, a, b) : { services: [] as PairReach['services'] };
+    const r1 = after.enis.has(a) && after.enis.has(b) ? reachBetween(after, a, b) : { services: [] as PairReach['services'] };
     for (const flow of flowsOf(before, r0, rules)) {
       const still = r1.services.filter((s) => s.protocol === flow.protocol);
       if (!flow.ports) {

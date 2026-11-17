@@ -506,6 +506,8 @@ export interface FixPlan {
   unresolved: string[];
   /** How the plan was found: candidate changes tried, full re-analyses run, redundant steps dropped. */
   stats: { candidates: number; evaluations: number; pruned: number };
+  /** Set when the time limit ended the search: more steps may be needed for the goals still open. */
+  stoppedEarly?: boolean;
   /**
    * How close the plan is to the fewest steps possible, among the candidate
    * changes considered. `optimal`: no smaller set of them closes as much
@@ -530,6 +532,13 @@ export interface PlanOptions {
   protect?: (model: NetworkModel) => number;
   /** Most re-analyses to spend proving or improving the plan's size (default 500; 0 skips the proof). */
   proofBudget?: number;
+  /** Most time in milliseconds to spend on that proof (default 3000): on large networks each re-analysis is slow, and the plan stands without it. */
+  proofTimeMs?: number;
+  /**
+   * Stop adding steps after this many milliseconds (default: no limit). The
+   * steps found so far are kept, verified as usual, and `stoppedEarly` is set.
+   */
+  timeMs?: number;
 }
 
 // ------------------------------------------------------------------ plan size proof
@@ -718,7 +727,13 @@ export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: 
   const keyOf = (c: Cand) => c.changes.map((x) => JSON.stringify(x)).join('|');
   const byGoal = new Map<string, Set<string>>();
 
+  const deadline = opts.timeMs === undefined ? Infinity : performance.now() + opts.timeMs;
+  let stoppedEarly = false;
   for (let i = 0; i < maxSteps; i++) {
+    if (performance.now() > deadline) {
+      stoppedEarly = true;
+      break;
+    }
     const goalF = e.findings.filter((f) => isGoalF(f) && !skipped.has(findingKey(f)));
     const goalC = b.chains.filter((c) => isGoalC(c) && !skipped.has(c.id));
     if (!goalF.length && !goalC.length) break;
@@ -772,6 +787,11 @@ export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: 
     let best: { key: string; c: Cand; ev: Eval; gain: number } | undefined;
     for (const [key, c] of [...pool].sort((x, y) => y[1].bound - x[1].bound)) {
       if (best && c.bound - c.changes.length <= best.gain && !forced.has(key)) continue;
+      // Out of time: take the best step measured so far.
+      if (best && performance.now() > deadline) {
+        stoppedEarly = true;
+        break;
+      }
       const ev = evaluate(m, e, b, c.changes);
       if (!ev || ev.diff.opened || ev.diff.chainsOpened.length || breaksProtected(ev.m)) {
         pool.delete(key);
@@ -824,7 +844,7 @@ export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: 
     return { e: ee, b: analyzeBlastRadius(mm, ee) };
   };
   let plan = chosen;
-  if (plan.length > 1) {
+  if (plan.length > 1 && performance.now() <= deadline) {
     for (let i = plan.length - 1; i >= 0; i--) {
       const trial = plan.filter((_, j) => j !== i);
       let r: { e: ExposureReport; b: BlastReport };
@@ -843,9 +863,10 @@ export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: 
   // Proof: is there a smaller plan among the candidates? Every closed goal
   // must be touched by some step, which gives a lower bound; then every set of
   // candidates smaller than the plan that touches every closed goal is tried.
-  const optimality: FixPlan['optimality'] = { status: 'optimal', lowerBound: plan.length, searched: 0 };
+  const optimality: FixPlan['optimality'] = stoppedEarly ? { status: 'bounded', lowerBound: Math.min(1, plan.length), searched: 0 } : { status: 'optimal', lowerBound: plan.length, searched: 0 };
   const budget = opts.proofBudget ?? 500;
-  if (plan.length > 1 && budget > 0) {
+  const proofDeadline = performance.now() + (opts.proofTimeMs ?? 3000);
+  if (plan.length > 1 && budget > 0 && !stoppedEarly) {
     const all = [...new Map([...plan, ...pool.values()].map((c) => [keyOf(c), c])).values()];
     const openKeys = new Set([...e.findings.filter(isGoalF).map((f) => `f:${findingKey(f)}`), ...b.chains.filter(isGoalC).map((c) => `c:${c.id}`)]);
     const closedGoals = [
@@ -897,7 +918,7 @@ export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: 
     let exhausted = true;
     search: for (let k = optimality.lowerBound; k < plan.length; k++) {
       for (const idx of hitting(k)) {
-        if (optimality.searched >= budget) {
+        if (optimality.searched >= budget || performance.now() > proofDeadline) {
           exhausted = false;
           break search;
         }
@@ -968,5 +989,6 @@ export function planFixes(model: NetworkModel, exposure: ExposureReport, blast: 
     unresolved,
     stats,
     optimality,
+    ...(stoppedEarly ? { stoppedEarly } : {}),
   };
 }
