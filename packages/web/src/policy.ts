@@ -10,7 +10,7 @@ import { h, on, toast } from './dom.js';
 import * as D from './data.js';
 import type { Snap } from './data.js';
 import { iconSvg } from './graph.js';
-import { boxHead, btn, empty, sevPill } from './ui.js';
+import { btn, empty, sevPill } from './ui.js';
 
 /** The example in fixtures/policies/09-policy.json, which matches the demo's "orders" estate. */
 export const EXAMPLE_POLICY = `{

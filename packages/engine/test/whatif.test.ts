@@ -131,3 +131,28 @@ describe('IPv6 changes', () => {
     expect(cliFor(m, { kind: 'remove-route', routeTableId: 'rtb-dual', destination: '::/0' })[0]).toContain('--destination-ipv6-cidr-block ::/0');
   });
 });
+
+describe('commands built from free text cannot run anything', () => {
+  it('quotes descriptions and names so bash passes them to aws as one literal argument', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { existsSync, mkdtempSync, readFileSync: read } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join: j } = await import('node:path');
+    const E = await import('../src/index.js');
+    const dir = mkdtempSync(j(tmpdir(), 'pinhole-sh-'));
+    const m = E.normalize(JSON.parse(read(j(__dirname, '../../../fixtures/07-alb-private-targets/snapshot.json'), 'utf8')));
+    const g = [...m.securityGroups.values()][0]!;
+    const nasty = [`x'; touch ${dir}/p1; echo '`, `$(touch ${dir}/p2)`, `\`touch ${dir}/p3\``, 'a"b}c,d', `x\\$(touch ${dir}/p4)`];
+    const cmds: string[] = [];
+    for (const d of nasty) {
+      cmds.push(...E.cliFor(m, { kind: 'add-sg-rule', groupId: g.id, egress: false, protocol: 'tcp', fromPort: 22, toPort: 22, cidr: '10.0.0.0/8', description: d }));
+      cmds.push(...E.cliFor(m, { kind: 'create-sg', groupId: 'sg-new1', vpcId: g.vpcId, name: d }));
+    }
+    const out = execFileSync('bash', ['-c', `aws(){ printf 'ARG<%s>\\n' "$@"; }\n${cmds.join('\n')}`], { encoding: 'utf8' });
+    for (const p of ['p1', 'p2', 'p3', 'p4']) expect(existsSync(j(dir, p)), p).toBe(false);
+    // Each hostile description reached aws as data (a new group's name goes in a comment line, which bash never runs;
+    // names cannot hold a newline to leave it).
+    expect(out.match(/touch /g)?.length).toBe(4);
+    expect(out).toContain('a\\"b}c,d');
+  });
+});

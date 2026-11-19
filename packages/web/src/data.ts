@@ -3,7 +3,9 @@
  * labels, remediation text, rule impact and resource grouping. No DOM here
  * except the small file helpers.
  */
-import { analyzeBlastRadius, analyzeCleanup, analyzeExposure, analyzeHygiene, cleanupFindings, crossChains, findChokepoints, findMinCut, findFixes, joinSnapshots, normalize, planFixes, assertSnapshot, SEVERITY_ORDER } from '@pinhole/engine';
+import { analyzeBlastRadius, analyzeCleanup, analyzeExposure, analyzeHygiene, cleanupFindings, crossChains, findChokepoints, findMinCut, findFixes, ingest, joinSnapshots, normalize, planFixes, assertSnapshot, sniffBinary, SEVERITY_ORDER } from '@pinhole/engine';
+import type { IngestInput } from '@pinhole/engine';
+import type { Stored } from './store.js';
 import type { AttackChain, BlastReport, CleanupReport, MinCut, JoinLink, Chokepoint, ExposureFinding, ExposureReport, FixCandidate, FixPlan, HygieneFinding, Hop, NetworkModel, Severity, Snapshot, Warning } from '@pinhole/engine';
 
 declare const __DEMO__: { name: string; snapshot: unknown }[];
@@ -208,14 +210,42 @@ export interface HygieneRow {
 export const hygieneRows = (snaps: Snap[]): HygieneRow[] =>
   snaps.flatMap((snap) => hygieneOf(snap).map((h, i) => ({ id: `${snap.key}#h${i}`, h, snap }))).sort((a, b) => sevRank(a.h.severity) - sevRank(b.h.severity));
 
-export function parseFile(text: string, name: string): Snap {
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    throw new Error(`${name} is not JSON. Load the pinhole-snapshot-….json file the collector writes.`);
+export interface Loaded {
+  snaps: Snap[];
+  /** What to keep in this browser: the cleaned snapshots, not the files as loaded. */
+  records: Stored[];
+  notes: string[];
+  errors: string[];
+}
+
+/** Reads inputs with the engine's reader (snapshots, plain AWS CLI output, UTF-16, comments) and analyses each snapshot. */
+export function loadInputs(inputs: IngestInput[]): Loaded {
+  const r = ingest(inputs);
+  const out: Loaded = { snaps: [], records: [], notes: r.notes, errors: [...r.errors] };
+  const now = Date.now();
+  for (const { snapshot, name, sources } of r.snapshots) {
+    const label = sources.length === 1 ? sources[0]! : name;
+    try {
+      const snap = analyse(snapshot, label);
+      out.snaps.push(snap);
+      out.records.push({ id: snap.key, name: label, json: JSON.stringify(snapshot), addedAt: now });
+    } catch (e) {
+      out.errors.push(`${label}: ${(e as Error).message}`);
+    }
   }
-  return analyse(value, name);
+  return out;
+}
+
+/** One text input, as the console's test API and paste use it. */
+export const parseText = (text: string, name: string): Loaded => loadInputs([{ name, text }]);
+
+/** A stored record analysed again. Damaged records are reported, not fatal. */
+export function fromStored(r: Stored): Snap | string {
+  try {
+    return analyse(JSON.parse(r.json), r.name);
+  } catch (e) {
+    return `${r.name}: ${(e as Error).message}`;
+  }
 }
 
 /**
@@ -389,8 +419,8 @@ export const CLEAN_CMD = 'rm -f ~/pinhole-snapshot-*.json ~/cloudshell-collect.s
 export const STEPS = [
   { title: 'Open CloudShell', body: 'Sign in to the AWS console in the account to check and open CloudShell. It already has the AWS CLI and jq and is signed in as you.' },
   { title: 'Add the collector', body: 'Paste this into the CloudShell terminal. It writes cloudshell-collect.sh to your home folder. If CloudShell asks about a multi-line paste, choose Paste.' },
-  { title: 'Run it', body: 'Read-only describe calls; one JSON file per region. Nothing in the account changes.' },
-  { title: 'Download the snapshot', body: 'Actions, then Download file. Paste the path the script printed. Repeat per region.' },
+  { title: 'Run it', body: 'Read-only describe calls; one JSON file per Region. Nothing in the account changes.' },
+  { title: 'Download the snapshot', body: 'Actions, then Download file. Paste the path the script printed. Repeat per Region.' },
   { title: 'Load it here', body: 'Drop the files on this page. They are analysed in this tab and never uploaded.' },
   { title: 'Clean up (optional)', body: 'Remove the snapshots and the script from CloudShell.' },
 ];
@@ -401,35 +431,36 @@ export const MAX_SNAPSHOT_BYTES = 200_000_000;
 /** More files than this in one drop is almost certainly a mistake. */
 export const MAX_FILES = 200;
 
-export function readFiles(files: FileList | File[], done: (snaps: Snap[], errors: string[]) => void) {
+/** Reads dropped or chosen files as bytes (so the encoding can be detected), decompressing gzip, then loads them together. */
+export async function readFiles(files: FileList | File[]): Promise<Loaded> {
   const all = [...files];
   const list = all.slice(0, MAX_FILES);
-  const snaps: Snap[] = [];
   const errors: string[] = all.length > MAX_FILES ? [`Only the first ${MAX_FILES} of ${all.length} files were read.`] : [];
-  let left = list.length;
-  if (!left) return done(snaps, errors);
+  const inputs: IngestInput[] = [];
   for (const file of list) {
     if (file.size > MAX_SNAPSHOT_BYTES) {
       errors.push(`${file.name} is ${Math.round(file.size / 1e6)} MB; the limit is ${MAX_SNAPSHOT_BYTES / 1e6} MB. Use the CLI for very large snapshots.`);
-      if (--left === 0) done(snaps, errors);
       continue;
     }
-    const r = new FileReader();
-    r.onload = () => {
-      try {
-        snaps.push(parseFile(String(r.result), file.name));
-      } catch (e) {
-        const msg = (e as Error).message;
-        errors.push(msg.includes(file.name) ? msg : `${file.name}: ${msg}`);
-      }
-      if (--left === 0) done(snaps, errors);
-    };
-    r.onerror = () => {
-      errors.push(`Could not read ${file.name}.`);
-      if (--left === 0) done(snaps, errors);
-    };
-    r.readAsText(file);
+    try {
+      let bytes: Uint8Array = new Uint8Array(await file.arrayBuffer());
+      if (sniffBinary(bytes) === 'gzip') bytes = await gunzip(bytes, file.name);
+      inputs.push({ name: file.name, bytes });
+    } catch (e) {
+      errors.push(`${file.name}: ${(e as Error).message || 'could not be read'}`);
+    }
   }
+  const out = loadInputs(inputs);
+  out.errors.unshift(...errors);
+  return out;
+}
+
+async function gunzip(bytes: Uint8Array, name: string): Promise<Uint8Array> {
+  if (typeof DecompressionStream === 'undefined') throw new Error(`${name} is gzip-compressed and this browser cannot decompress it: decompress it first.`);
+  const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new DecompressionStream('gzip'));
+  const out = new Uint8Array(await new Response(stream).arrayBuffer());
+  if (out.length > MAX_SNAPSHOT_BYTES) throw new Error(`${name} is larger than ${MAX_SNAPSHOT_BYTES / 1e6} MB once decompressed.`);
+  return out;
 }
 
 // ---------------------------------------------------------------- categories

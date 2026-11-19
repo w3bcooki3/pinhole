@@ -8,7 +8,7 @@ export function savings(model: NetworkModel): SavingsReport {
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 const cost = (f: SavingsFinding) => (f.monthly !== undefined ? `${usd(f.monthly)}/month` : f.perGb !== undefined ? `$${f.perGb}/GB` : '');
-const PRICE_NOTE = `Prices are AWS list prices for ${PRICES.region} (${PRICES.hoursPerMonth} hours a month); most other regions charge the same or a little more.`;
+const PRICE_NOTE = `Prices are AWS list prices for ${PRICES.region} (${PRICES.hoursPerMonth} hours a month); most other Regions charge the same or a little more.`;
 
 export function savingsText(r: SavingsReport): string {
   const unused = r.findings.filter((f) => f.kind === 'unused');

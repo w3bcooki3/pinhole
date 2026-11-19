@@ -34,12 +34,12 @@ describe('snapshot validation', () => {
     s.ec2.SecurityGroups[0].GroupName = 'db\u001b]0;owned\u0007';
     s.ec2.SecurityGroupRules[0].Description = 'line one\nrm -rf ~';
     assertSnapshot(s);
-    expect(s.ec2.SecurityGroups[0].GroupName).toBe('db\ufffd]0;owned\ufffd');
-    expect(s.ec2.SecurityGroupRules[0].Description).toBe('line one\ufffdrm -rf ~');
+    expect(s.ec2!.SecurityGroups![0]!.GroupName).toBe('db\ufffd]0;owned\ufffd');
+    expect(s.ec2!.SecurityGroupRules![0]!.Description).toBe('line one\ufffdrm -rf ~');
   });
   it('refuses IDs and metadata of the wrong shape', () => {
     refuse((s) => { s.ec2.SecurityGroups[0].GroupId = "sg-x'; rm -rf ~"; }, /must be an ID starting with "sg-"/);
-    refuse((s) => { s.region = 'us-east-1 --profile prod'; }, /must be an AWS region name/);
+    refuse((s) => { s.region = 'us-east-1 --profile prod'; }, /must be an AWS Region name/);
     refuse((s) => { s.accountId = '12345'; }, /12-digit AWS account ID/);
   });
   it('refuses reserved keys in keyed maps', () => {

@@ -76,7 +76,7 @@ export function privateLinkPage(ctx: { st: { snaps: Snap[] } }): HTMLElement {
   const svcTable = h(
     'table',
     { class: 't pl-services' },
-    h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Service'), h('th', {}, 'Who may connect'), h('th', {}, 'Approval'), h('th', {}, 'Connected'), h('th', { class: 'last hide-sm' }, 'Account and region'))),
+    h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Service'), h('th', {}, 'Who may connect'), h('th', {}, 'Approval'), h('th', {}, 'Connected'), h('th', { class: 'last hide-sm' }, 'Account and Region'))),
     h(
       'tbody',
       {},

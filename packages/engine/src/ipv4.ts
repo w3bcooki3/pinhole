@@ -41,7 +41,9 @@ function maskFor(prefixLength: number): number {
  * A bare address is treated as /32.
  */
 export function parseCidr(text: string): Cidr {
-  const [addr, len] = text.includes('/') ? text.split('/') : [text, '32'];
+  const parts = text.split('/');
+  if (parts.length > 2) throw new Error(`Invalid IPv4 CIDR: "${text}"`);
+  const [addr, len] = parts.length === 2 ? parts : [text, '32'];
   const prefixLength = Number(len);
   if (!Number.isInteger(prefixLength) || prefixLength < 0 || prefixLength > 32 || !/^\d+$/.test(len ?? '')) {
     throw new Error(`Invalid IPv4 CIDR: "${text}"`);

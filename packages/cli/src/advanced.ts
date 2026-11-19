@@ -178,7 +178,7 @@ export function cutText(c: MinCut): string[] {
   return lines;
 }
 
-export function blastText(model: NetworkModel, b: BlastReport, minSeverity: Severity, cut?: MinCut): string {
+export function blastText(b: BlastReport, minSeverity: Severity, cut?: MinCut): string {
   const limit = SEVERITY_ORDER.indexOf(minSeverity);
   const chains = b.chains.filter((c) => SEVERITY_ORDER.indexOf(c.severity) <= limit);
   const lines: string[] = [];

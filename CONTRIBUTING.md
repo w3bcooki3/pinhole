@@ -29,6 +29,7 @@ Useful commands:
 | `npm run test:fixtures` | The hand-written scenarios only |
 | `npm run build:web` | Builds the console into `site/index.html`; open it from disk |
 | `npm run typecheck:web` | Type-checks the console |
+| `npm run typecheck:tests` | Type-checks the tests |
 | `npm run fixture-count` | Updates the fixture count in the README (CI checks it) |
 | `npm run bench` | Times the engine on a large synthetic account |
 

@@ -7,30 +7,19 @@ All notable changes to this project are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
-- The console works on every screen size, from small phones (320 px) to
-  very wide monitors: every page has been checked at 320, 375, 768, 1024,
-  1440 and 2560 px with no horizontal overflow. Phones and tablets get a
-  menu button instead of a scrolling row of links; tables on phones become
-  labelled cards; very wide screens keep pages at a readable width. The
-  sidebar lists every page, grouped (Policies, Outbound, On-premises and
-  PrivateLink were only reachable through search), and search finds pages
-  by other words ("vpn", "egress", "onprem"). The query page switches to the
-  snapshot that holds the names typed. The demo includes on-premises and
-  PrivateLink scenarios.
-- The Policies page leads with the answer (how many rules fail, across how
-  many snapshots) and shows one card per rule, written out in words, with
-  the snapshots where it fails and where it holds; the JSON editor is folded
-  away until needed. Outbound lists one row per server instead of one per
-  protocol. Graphs refit when their box changes size and never enlarge past
-  100%, so nothing is cut off at the edge; on phones the lateral-movement
-  graph is laid out top to bottom. Coverage describes what this version
-  models today.
-- Accessibility: all text meets WCAG AA contrast in light and dark themes,
-  every clickable row and graph node can be reached and opened from the
-  keyboard with a visible focus ring, headings and landmarks are in order,
-  and animations stop when the system asks for reduced motion. The console
-  follows the system's dark setting until a theme is chosen. The dashboard
-  states its summary in sentences, with the counts as links.
+- Reading input: a new reader in the engine, used by the console and the
+  CLI, loads Pinhole snapshots and also plain AWS CLI JSON output (one file
+  per describe command, assembled into one snapshot per account and Region,
+  with what is missing named), UTF-16 files from PowerShell, UTF-8 with a
+  byte order mark, gzip, several snapshots in one file, and JSON with
+  comments or trailing commas. Every other kind of file gets a message
+  saying what it looks like and what to load instead; invalid JSON says the
+  line and column. VPN tunnel keys and anything that looks like a
+  credential are removed from every input first.
+- Saved in this browser: loaded snapshots, the policy and simulator changes
+  survive a refresh (IndexedDB and local storage on the device; nothing is
+  uploaded). Removing a snapshot moves it to a new Trash page, with Undo;
+  it can be restored for 30 days. Forget everything deletes all of it.
 - Savings: network resources that cost money and serve nothing, from the
   same snapshot, without billing access. Elastic IPs attached to nothing;
   public IPs that no internet address reaches and that send nothing out;
@@ -43,17 +32,6 @@ All notable changes to this project are recorded here. The format follows
   with the monthly total on the dashboard. The collector and the CloudShell
   script now read Elastic IPs (`ec2:DescribeAddresses`, 36 read-only
   actions). Fixture 17.
-- Large networks: attack chains, the fix plan, crown jewel cuts and fix
-  checks evaluate each pair of server groups once instead of each pair of
-  servers (servers that no rule, route or address range tells apart share
-  one result), reuse unchanged results when a change is tried, and keep
-  only rule IDs for edges that are not on a chain. Results are identical to
-  before; on a 150-server synthetic account the whole set runs 8 times
-  faster and uses a third of the memory. When attack chains stop at their
-  limit the console now says so and offers to finish; on a large network
-  the dashboard appears before the fix plan, and the plan says when it
-  stopped early. `npm run synth` makes a large synthetic account and
-  `npm run bench:console` times every analysis the console runs.
 - Outbound: what each server can send to the internet, through an internet
   gateway (as its public IP) or a NAT gateway (as the gateway's Elastic IP),
   with the security group, routes, firewalls and network ACLs of both subnets,
@@ -147,14 +125,6 @@ All notable changes to this project are recorded here. The format follows
   (checked cell by cell), and quota warnings.
 - Differential testing: random networks checked against an independent
   packet-at-a-time reference evaluator on every run.
-
-### Changed
-- Faster planning and what-if on large accounts: service reachability cuts
-  ports only at the network ACLs on the path, results for interface pairs a
-  change cannot affect are reused from the model it came from, and the
-  planner re-analyses exposure only where a change reaches. On a synthetic
-  account with every interface exposed, a fix plan takes about a quarter less
-  time than before, even with the new checks.
 - Terraform plans: IPv6 security group rules, network ACL entries and routes
   are checked like IPv4 ones. New resource types: route table and main route
   table associations, network ACL associations, internet gateways and their
@@ -185,13 +155,67 @@ All notable changes to this project are recorded here. The format follows
   SSH host, and a cache that has no route back.
 
 ### Changed
+- The console works on every screen size, from small phones (320 px) to
+  very wide monitors: every page has been checked at 320, 375, 768, 1024,
+  1440 and 2560 px with no horizontal overflow. Phones and tablets get a
+  menu button instead of a scrolling row of links; tables on phones become
+  labelled cards; very wide screens keep pages at a readable width. The
+  sidebar lists every page, grouped (Policies, Outbound, On-premises and
+  PrivateLink were only reachable through search), and search finds pages
+  by other words ("vpn", "egress", "onprem"). The query page switches to the
+  snapshot that holds the names typed. The demo includes on-premises and
+  PrivateLink scenarios.
+- The Policies page leads with the answer (how many rules fail, across how
+  many snapshots) and shows one card per rule, written out in words, with
+  the snapshots where it fails and where it holds; the JSON editor is folded
+  away until needed. Outbound lists one row per server instead of one per
+  protocol. Graphs refit when their box changes size and never enlarge past
+  100%, so nothing is cut off at the edge; on phones the lateral-movement
+  graph is laid out top to bottom. Coverage describes what this version
+  models today.
+- Accessibility: all text meets WCAG AA contrast in light and dark themes,
+  every clickable row and graph node can be reached and opened from the
+  keyboard with a visible focus ring, headings and landmarks are in order,
+  and animations stop when the system asks for reduced motion. The console
+  follows the system's dark setting until a theme is chosen. The dashboard
+  states its summary in sentences, with the counts as links.
+- Large networks: attack chains, the fix plan, crown jewel cuts and fix
+  checks evaluate each pair of server groups once instead of each pair of
+  servers (servers that no rule, route or address range tells apart share
+  one result), reuse unchanged results when a change is tried, and keep
+  only rule IDs for edges that are not on a chain. Results are identical to
+  before; on a 150-server synthetic account the whole set runs 8 times
+  faster and uses a third of the memory. When attack chains stop at their
+  limit the console now says so and offers to finish; on a large network
+  the dashboard appears before the fix plan, and the plan says when it
+  stopped early. `npm run synth` makes a large synthetic account and
+  `npm run bench:console` times every analysis the console runs.
+- Faster planning and what-if on large accounts: service reachability cuts
+  ports only at the network ACLs on the path, results for interface pairs a
+  change cannot affect are reused from the model it came from, and the
+  planner re-analyses exposure only where a change reaches. On a synthetic
+  account with every interface exposed, a fix plan takes about a quarter less
+  time than before, even with the new checks.
 - The fix plan considers fixes for several open risks at once, including the
   entry point of an attack chain, so one change can cut every chain from that
   server. It re-measures candidates lazily (accelerated greedy) and drops
   steps a later step made redundant. Plans report how they were found.
 - The demo includes two linked accounts.
+- The build fails on unused code (`noUnusedLocals`, `noUnusedParameters`),
+  and tests are type-checked (`npm run typecheck:tests`, part of `npm run
+  check`).
 
 ### Fixed
+- Changes proposed in the console's simulator were not validated, so a port
+  that was not a number gave a rule that silently matched nothing. Every
+  change is now checked wherever it comes from (file, console, or the
+  engine's own search).
+- A CIDR with two slashes (`10.0.0.0/8/1`) is refused instead of being read
+  as its first part.
+- IPv6 addresses written with an IPv4 tail (`::ffff:192.0.2.1`) are read.
+- `pinhole exposure`, `validate` and `blast` read only their first file;
+  they now read every file given.
+- The help text listed `egress`'s options under `savings`.
 - The attack graph fits on screen when it opens. A tall graph is laid out in
   side-by-side columns, each with its own Internet node, instead of shrinking
   to an unreadable strip.
@@ -201,6 +225,17 @@ All notable changes to this project are recorded here. The format follows
   192.0.2.0/24 rather than addresses that look like real EC2 ones.
 - The attack chain detail page lost its two-column layout after the dashboard
   layout change.
+
+### Security
+- Bidirectional override characters in names (the "Trojan Source" trick)
+  are neutralised like control characters, and refused in IDs.
+- Secrets are removed from every input before anything else: VPN tunnel
+  configuration and pre-shared keys, and anything that looks like an AWS
+  secret key or session token. Only the cleaned snapshot is kept in the
+  browser.
+- Tests for hostile input: randomly damaged snapshots run through every
+  analysis, keys such as `__proto__`, and AWS CLI commands built from
+  hostile rule descriptions run through bash to show nothing executes.
 
 ## [0.2.0] - 2026-11-13
 

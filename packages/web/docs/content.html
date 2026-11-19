@@ -139,6 +139,21 @@ pinhole collect --profile audit --region us-east-1,eu-west-1 --out-dir snapshots
   <p>VPCs, subnets, route tables, internet, NAT and egress-only gateways, virtual private gateways and VPN connections (state, routes and tunnel status only; never the tunnel keys), peering connections, transit gateways and their route tables, network ACLs, security groups and rules, prefix lists, network interfaces, instance names, VPC endpoints and the PrivateLink endpoint services you provide (with who may connect, and who has), and load balancers with their listeners, rules, target groups and target health. No data from inside your servers, no credentials, no logs. It does contain your account ID, private and public IP addresses and resource names, so treat it as internal.</p>
 </section>
 
+<section id="inputs" data-group="Use it" data-title="What you can load">
+  <h2>What you can load</h2>
+  <p class="lede">The snapshot the collector or CloudShell script writes is the best input. Pinhole also reads what people often have instead.</p>
+  <ul>
+    <li><b>Plain AWS CLI output,</b> one file per <code>describe</code> command, loaded together: <code>aws ec2 describe-vpcs &gt; vpcs.json</code>, <code>describe-subnets</code>, <code>describe-route-tables</code>, <code>describe-security-groups</code>, <code>describe-network-acls</code>, <code>describe-network-interfaces</code>, <code>describe-instances</code>, the gateway and endpoint commands, <code>aws elbv2 describe-load-balancers</code>, <code>describe-listeners</code>, <code>describe-target-groups</code>, and Network Firewall's <code>describe-firewall</code>, <code>describe-firewall-policy</code> and <code>describe-rule-group</code>. They are assembled into one snapshot per account and Region, read from owner IDs, zones and ARNs. What is missing is named, and a file cut short by paging says so. Target health cannot come from plain output (it does not say which target group it is for); the collector records it.</li>
+    <li><b>Files from Windows:</b> UTF-16, which PowerShell's <code>&gt;</code> writes, and UTF-8 with a byte order mark.</li>
+    <li><b>Compressed files:</b> <code>.json.gz</code>.</li>
+    <li><b>Several snapshots in one file,</b> as a JSON array or one after another (<code>cat *.json &gt; all.json</code>).</li>
+    <li><b>Hand-edited JSON</b> with comments or trailing commas, with a note that they were left out.</li>
+  </ul>
+  <p>Anything else gets a message saying what the file looks like and what to load instead: AWS CLI table or text output, YAML, HTML, ZIP, Terraform code or plans, CloudFormation, IAM policies. A file that is not valid JSON says the line and column of the first problem. VPN tunnel keys and anything that looks like a credential are removed from every input before anything else. The command line reads the same inputs: <code>pinhole exposure vpcs.json subnets.json sgs.json …</code>.</p>
+  <h3>Saved in this browser, and the trash</h3>
+  <p>Loaded snapshots stay after a refresh: the console keeps them in this browser's storage on this device. Removing one (the × next to its account in the top bar) moves it to the <em>Trash</em> page, with Undo; it can be restored for 30 days and is then deleted. <em>Forget everything</em> on the same page deletes all of it. In a private window, or with storage turned off, the console works for that tab and says it will not keep anything.</p>
+</section>
+
 <section id="console" data-group="Use it" data-title="The console">
   <h2>The console</h2>
   <p class="lede">Load one or many snapshots, across accounts and Regions. Everything is analysed in the browser tab.</p>
@@ -400,8 +415,9 @@ pinhole diff last-week.json today.json --format markdown # for a ticket or pull 
   <ul class="ticks">
     <li><b>Read-only collection.</b> Only <code>Describe</code>, <code>Get</code> and <code>Search</code> calls, enforced in code and tested against the IAM policy.</li>
     <li><b>Nothing is uploaded.</b> The console has no server. Its Content Security Policy blocks every network request, and only its own script, identified by hash, may run.</li>
+    <li><b>Kept on your device only.</b> Loaded snapshots, the trash, your policy and simulator changes are kept in this browser's storage so a refresh does not lose them. What is kept is the snapshot after reading, with VPN keys and anything that looks like a credential removed. <em>Trash</em> &gt; <em>Forget everything</em> deletes it all.</li>
     <li><b>Nothing is changed.</b> Fixes are printed as commands for you to review and run.</li>
-    <li><b>Input is validated.</b> Snapshots, change lists and Terraform plans are checked field by field before use, and text from them is escaped everywhere it is shown.</li>
+    <li><b>Input is validated.</b> Snapshots, change lists and Terraform plans are checked field by field before use, and text from them is escaped everywhere it is shown. Control characters and right-to-left overrides in names are neutralised, keys such as <code>__proto__</code> are refused, and every command Pinhole prints quotes free text so a shell takes it literally.</li>
     <li><b>No secrets in the repository,</b> and real snapshots are kept out of it by <code>.gitignore</code>.</li>
   </ul>
   <p>To report a vulnerability, use GitHub's private reporting on the repository, as described in <a href="https://github.com/w3bcooki3/pinhole/blob/main/SECURITY.md">SECURITY.md</a>.</p>

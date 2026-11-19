@@ -8,7 +8,7 @@
 
 **[Open the console](https://w3bcooki3.github.io/pinhole/)** · **[Documentation](https://w3bcooki3.github.io/pinhole/docs/)** · [Quick start](#quick-start) · [How it decides](#how-it-decides) · [Limitations](#limitations) · [Report a wrong result](https://github.com/w3bcooki3/pinhole/issues/new/choose)
 
-![Pinhole dashboard: 21 internet exposures, 9 attack chains, and a verified 13-step fix plan](docs/images/dashboard.png)
+![Pinhole dashboard: the internet exposure summary in a sentence, the verified fix plan, exposures by kind of service and per account and Region](docs/images/dashboard.png)
 
 Pinhole reads your network configuration with read-only AWS calls, saves it as a JSON snapshot, and analyses the snapshot offline: in your browser or on the command line. Nothing is uploaded, and nothing in your account is changed.
 
@@ -20,12 +20,14 @@ It answers three questions, exactly rather than by sampling:
 
 It also checks your own rules (*the database is never reachable from the internet, even through a compromised server*; *the bastion can always reach it on 22*), finds the smallest set of rules that cuts every attack path to your crown jewels, and shows which security groups can be smaller with exactly the same effect.
 
+The same snapshot answers the other directions too: what each server can **send** to the internet, what clients **on-premises** reach over VPN and Direct Connect, who can reach your services through **PrivateLink**, and which network resources you **pay for and never use** (idle Elastic IPs, NAT gateways no route uses, empty load balancers), with the monthly cost.
+
 ## Quick start
 
 **In the browser, nothing to install:**
 
 1. Open **[the console](https://w3bcooki3.github.io/pinhole/)**. It starts on a labelled demo environment.
-2. Choose **Connect an account** and follow the steps: one command in AWS CloudShell writes a snapshot of a region.
+2. Choose **Connect an account** and follow the steps: one command in AWS CloudShell writes a snapshot of a Region.
 3. Download the snapshot from CloudShell and drop it on the console.
 
 **On the command line** (Node.js 22 or later):
@@ -106,27 +108,27 @@ Pinhole has no server and no backend. The console is a single static HTML page t
 
 1. Open the console at [w3bcooki3.github.io/pinhole](https://w3bcooki3.github.io/pinhole/), download `pinhole-<version>.html` from a [release](https://github.com/w3bcooki3/pinhole/releases) and open it from disk, or build it yourself with `npm run build:web`.
 2. Follow **Connect an AWS account**. It walks you through six steps in AWS CloudShell, with copy-ready commands:
-   1. Open CloudShell in the account and region to check.
+   1. Open CloudShell in the account and Region to check.
    2. Paste one command that writes `cloudshell-collect.sh` into CloudShell (or upload the file).
-   3. Run `bash cloudshell-collect.sh <region>`, or a loop over several regions.
+   3. Run `bash cloudshell-collect.sh <region>`, or a loop over several Regions.
    4. Download each `pinhole-snapshot-<account>-<region>.json` with Actions > Download file, using the path the script prints.
-   5. Drop the files on the console.
+   5. Drop the files on the console. It also reads plain AWS CLI JSON output (one file per `describe` command, dropped together), UTF-16 files from PowerShell and `.json.gz` files.
    6. Optionally, remove the files from CloudShell.
-3. Use the console. It opens on a demo environment, labelled as such, until you load your own snapshots.
-   - **Dashboard:** internet exposures by severity, a verified fix plan (the fewest rule changes that close every critical and high exposure and attack chain, with what each step closes and its AWS CLI command), exposures by kind of service, the top exposures and attack chains, and exposures per account and region.
-   - **Attack graph:** internet, entry point (internet gateway or load balancer), exposed resource and load balancer targets, grouped by account, region and VPC. Pan, zoom, filter by severity and highlight a resource.
+3. Use the console. It opens on a demo environment, labelled as such, until you load your own snapshots. Loaded snapshots are kept in this browser (never uploaded) so a refresh does not lose them; removed ones go to the Trash for 30 days.
+   - **Dashboard:** internet exposures by severity, a verified fix plan (the fewest rule changes that close every critical and high exposure and attack chain, with what each step closes and its AWS CLI command), exposures by kind of service, the top exposures and attack chains, and exposures per account and Region.
+   - **Attack graph:** internet, entry point (internet gateway or load balancer), exposed resource and load balancer targets, grouped by account, Region and VPC. Pan, zoom, filter by severity and highlight a resource.
    - **Blast radius:** if a server the internet can reach is compromised, what the attacker can reach next, as a graph of hops with the selected chain traced end to end. Each chain lists the rules that cut it, ranked by how many chains each one cuts.
    - **Exposures:** every service the internet can open a connection to, in a filterable table. Each one opens as a page with a plain verdict, the path hop by hop, verified fixes, attack chains that start there, and what the analysis could and could not see. Selecting one shows each hop with the exact rule that allowed it, the targets behind a listener, and verified fixes with their AWS CLI commands.
    - **Resources** and **Rule hygiene:** exposed resources, and rules that are redundant, shadowed, stale, unused or too broad. Rules already shown as exposures are left off the hygiene list unless you ask for them.
    - **Simulator:** switch rules off, edit them or drop public IPs, and see which internet paths and attack chains close or open. It prints the AWS CLI commands and can export the changes for `pinhole whatif --changes`.
-   - **Compare snapshots:** load an older snapshot of the same account and region next to the current one to see new and closed internet exposure and attack chains, and the rule, route and address changes behind them. Every other page uses only the latest snapshot of each account and region.
+   - **Compare snapshots:** load an older snapshot of the same account and Region next to the current one to see new and closed internet exposure and attack chains, and the rule, route and address changes behind them. Every other page uses only the latest snapshot of each account and Region.
    - **Reachability query:** "can A reach B, on what" and "who can reach B", by name, ID or IP.
    - **Coverage:** what each snapshot contained, and anything detected that this version does not analyse.
    - **Report:** everything on one page for people who will not open the console. Print it or save it as a PDF, or download it as a single HTML file with no script.
 
    Press Ctrl+K (Cmd+K on a Mac) or / to jump to any page, exposure, chain or resource. Export exposures as JSON or CSV. The console is light by default; the moon button switches to dark and the choice is remembered in this browser.
 
-The page reads files locally. It makes no network requests, and its Content Security Policy makes the browser enforce that. Several snapshots, across accounts and regions, can be loaded at once.
+The page reads files locally. It makes no network requests, and its Content Security Policy makes the browser enforce that. Several snapshots, across accounts and Regions, can be loaded at once.
 
 To publish the console from your fork: Settings > Pages > Source: "GitHub Actions". The [`pages`](.github/workflows/pages.yml) workflow then tests, builds and publishes on every push to `main`. GitHub Pages and Actions are free for public repositories.
 
@@ -162,7 +164,7 @@ bash cloudshell-collect.sh eu-west-1
 
 Then download the file (Actions > Download file).
 
-A snapshot covers one account and one region; `--region` takes a comma-separated list to collect several in one run.
+A snapshot covers one account and one Region; `--region` takes a comma-separated list to collect several in one run.
 
 ### 2. Analyse it
 
@@ -335,7 +337,7 @@ Read these before relying on a clean report.
 - **VPN and Direct Connect** are followed up to the AWS side: virtual private gateways (with their route tables) and transit gateway VPN and Direct Connect gateway attachments. The on-premises networks are what AWS routes to each link; on-premises routers and firewalls are not visible, so paths through a link assume they pass and carry a caveat. A connection from on-premises is taken to arrive over the link the server's subnet routes its replies to. Direct Connect virtual interfaces and BGP sessions themselves are not read.
 - **PrivateLink** is analysed from the provider's configuration: allowed principals, connections, the Network Load Balancer's security groups and its targets. Consumers' own security groups and endpoint policies in other accounts are not visible. Endpoint policies are checked only for statements that allow every principal every action on every resource without conditions; other policy logic is not evaluated. Services behind a Gateway Load Balancer are reported by who may connect only.
 - **Not modelled, detected and warned about:** routes to instances or interfaces acting as appliances, Global Accelerator, CloudFront and Classic Load Balancers. Results that pass through these are `unknown`, or incomplete where only a warning is possible.
-- **One account and one region per snapshot.** Load the snapshots on both sides of a peering connection or transit gateway together (in the console, or `pinhole blast A.json B.json`) and they are joined, so attack chains are followed across. Analysed alone, a path into a snapshot that is not loaded ends as `unknown`. Transit gateway route tables shared from another account can only be searched when the owner account's snapshot is loaded too. Only attack chains are followed across snapshots; internet exposure never needs to be, because it is decided inside one VPC.
+- **One account and one Region per snapshot.** Load the snapshots on both sides of a peering connection or transit gateway together (in the console, or `pinhole blast A.json B.json`) and they are joined, so attack chains are followed across. Analysed alone, a path into a snapshot that is not loaded ends as `unknown`. Transit gateway route tables shared from another account can only be searched when the owner account's snapshot is loaded too. Only attack chains are followed across snapshots; internet exposure never needs to be, because it is decided inside one VPC.
 - **Configuration, not traffic.** The snapshot is a point in time. Existing connections can outlive a rule change, because security groups track connections. Host firewalls, the OS, and whether anything is listening on the port are outside the model.
 - **Transit gateway ECMP** (several attachments for one route) follows the first attachment. Appliance mode is not modelled: a firewall is identified by its policy, so two endpoints of one firewall count as the same firewall.
 - **Load balancers:** health check reachability is not evaluated when the health check port differs from the traffic port. Lambda and ALB-as-target targets are reported as `unknown`. Listener rules are only used to find target groups; host or path conditions are not evaluated.

@@ -11,7 +11,7 @@ import * as D from './data.js';
 import type { Row, Severity, Snap } from './data.js';
 import { iconSvg } from './graph.js';
 import { renderLateral } from './lateral.js';
-import { boxHead, btn, cmdBlock, empty, linkBtn, sevPill, sevVar, short } from './ui.js';
+import { boxHead, btn, cmdBlock, empty, linkBtn, sevPill, short } from './ui.js';
 
 export interface PageState {
   snaps: Snap[];
@@ -352,7 +352,6 @@ export function simulatorPage(ctx: Ctx): HTMLElement {
   const toggle = (match: (c: Change) => boolean, add: Change) => setChanges(changes.some(match) ? changes.filter((c) => !match(c)) : [...changes, add]);
 
   // ---- left: everything that can be changed
-  const q = st.simQuery.trim().toLowerCase();
   const used = new Map<string, number>();
   for (const e of m.enis.values()) for (const g of e.groupIds) used.set(g, (used.get(g) ?? 0) + 1);
   const groups = [...m.securityGroups.values()].filter((g) => used.has(g.id)).sort((a, b) => a.name.localeCompare(b.name));
@@ -811,7 +810,7 @@ export function hygienePage(ctx: Ctx): HTMLElement {
         ? h(
             'table',
             { class: 't hyg' },
-            h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Finding'), h('th', { class: 'hide-sm' }, 'Account and region'), h('th', { class: 'last' }, h('span', { class: 'sr-only' }, 'Action')))),
+            h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Finding'), h('th', { class: 'hide-sm' }, 'Account and Region'), h('th', { class: 'last' }, h('span', { class: 'sr-only' }, 'Action')))),
             h(
               'tbody',
               {},

@@ -7,10 +7,12 @@ describe('IPv6 addresses', () => {
     expect(parseIpv6('::1')).toBe(1n);
     expect(parseIpv6('2001:db8::1')).toBe(parseIpv6('2001:0DB8:0000:0000:0000:0000:0000:0001'));
     expect(parseIpv6('ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff')).toBe((1n << 128n) - 1n);
+    // An IPv4 address in the last 32 bits (RFC 4291 section 2.2), as people type IPv4-mapped addresses.
+    expect(parseIpv6('::ffff:192.0.2.1')).toBe(parseIpv6('::ffff:c000:201'));
   });
 
   it('refuses malformed addresses', () => {
-    for (const bad of ['', ':', '1::2::3', '12345::', 'g::1', '1:2:3:4:5:6:7:8:9', '1:2:3:4:5:6:7', '::ffff:1.2.3.4']) expect(() => parseIpv6(bad), bad).toThrow(/Invalid IPv6/);
+    for (const bad of ['', ':', '1::2::3', '12345::', 'g::1', '1:2:3:4:5:6:7:8:9', '1:2:3:4:5:6:7', '::ffff:1.2.3', '::ffff:256.1.1.1', '::ffff:1.2.3.04', '1.2.3.4']) expect(() => parseIpv6(bad), bad).toThrow(/Invalid IPv6/);
   });
 
   it('formats in the shortest form (RFC 5952)', () => {

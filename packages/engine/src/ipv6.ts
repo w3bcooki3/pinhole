@@ -20,9 +20,18 @@ export interface Cidr6 {
   text: string;
 }
 
-export function parseIpv6(text: string): bigint {
-  const bad = () => new Error(`Invalid IPv6 address: "${text}"`);
-  if (typeof text !== 'string' || !/^[0-9a-fA-F:]+$/.test(text) || text.length > 39) throw bad();
+export function parseIpv6(input: string): bigint {
+  const bad = () => new Error(`Invalid IPv6 address: "${input}"`);
+  if (typeof input !== 'string' || input.length > 45) throw bad();
+  // An IPv4 address in the last 32 bits (::ffff:192.0.2.1) becomes two groups.
+  let text = input;
+  const dotted = /^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/.exec(input);
+  if (dotted) {
+    const p = dotted[2]!.split('.').map(Number);
+    if (p.some((x, i) => x > 255 || (dotted[2]!.split('.')[i]!.length > 1 && dotted[2]!.split('.')[i]!.startsWith('0')))) throw bad();
+    text = `${dotted[1]}${((p[0]! << 8) | p[1]!).toString(16)}:${((p[2]! << 8) | p[3]!).toString(16)}`;
+  }
+  if (!/^[0-9a-fA-F:]+$/.test(text) || text.length > 39) throw bad();
   const halves = text.split('::');
   if (halves.length > 2) throw bad();
   const groups = (s: string) => (s === '' ? [] : s.split(':'));
@@ -67,7 +76,9 @@ export function isIpv6Cidr(text: string): boolean {
 }
 
 export function parseCidr6(text: string): Cidr6 {
-  const [addr, len] = text.includes('/') ? text.split('/') : [text, '128'];
+  const parts = text.split('/');
+  if (parts.length > 2) throw new Error(`Invalid IPv6 CIDR: "${text}"`);
+  const [addr, len] = parts.length === 2 ? parts : [text, '128'];
   const prefixLength = Number(len);
   if (!/^\d{1,3}$/.test(len ?? '') || prefixLength > 128) throw new Error(`Invalid IPv6 CIDR: "${text}"`);
   const hostBits = BITS - BigInt(prefixLength);

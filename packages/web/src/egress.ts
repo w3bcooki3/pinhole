@@ -43,7 +43,7 @@ export function egressPage(ctx: { st: { snaps: Snap[] } }): HTMLElement {
   const table = h(
     'table',
     { class: 't eg-t' },
-    h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Server'), h('th', {}, 'Traffic'), h('th', { class: 'hide-sm' }, 'To'), h('th', {}, 'Leaves through'), h('th', { class: 'last hide-sm' }, 'Account and region'))),
+    h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Server'), h('th', {}, 'Traffic'), h('th', { class: 'hide-sm' }, 'To'), h('th', {}, 'Leaves through'), h('th', { class: 'last hide-sm' }, 'Account and Region'))),
     h(
       'tbody',
       {},

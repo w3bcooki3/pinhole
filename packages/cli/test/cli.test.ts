@@ -38,8 +38,32 @@ describe('pinhole CLI', () => {
   it('explains a bad snapshot file', async () => {
     const r = await cli('exposure', join(here, '../package.json'));
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/schemaVersion/);
+    expect(r.stderr).toMatch(/package\.json has none of the fields Pinhole reads \(it has name/);
     expect((await cli('exposure', '/no/such/file.json')).stderr).toMatch(/Cannot read/);
+  });
+
+  it('reads plain AWS CLI output, UTF-16 files from PowerShell and gzip files', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { gzipSync } = await import('node:zlib');
+    const dir = mkdtempSync(join(tmpdir(), 'pinhole-'));
+    const fxs = JSON.parse(readFileSync(fx('17-savings'), 'utf8'));
+    const files = Object.entries(fxs.ec2).map(([k, v]) => {
+      const f = join(dir, `${k}.json`);
+      writeFileSync(f, JSON.stringify(k === 'Instances' ? { Reservations: [{ Instances: v }] } : { [k]: v }));
+      return f;
+    });
+    const raw = await cli('savings', ...files);
+    expect(raw.code).toBe(0);
+    expect(raw.stdout).toMatch(/4 unused resources/);
+    const text = readFileSync(fx('07-alb-private-targets'), 'utf8');
+    const u16 = join(dir, 'ps.json');
+    writeFileSync(u16, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]));
+    const gz = join(dir, 's.json.gz');
+    writeFileSync(gz, gzipSync(text));
+    const plain = (await cli('exposure', fx('07-alb-private-targets'))).stdout;
+    expect((await cli('exposure', u16)).stdout).toBe(plain);
+    expect((await cli('exposure', gz)).stdout).toBe(plain);
   });
 
   it('prints a text report with the rule IDs on the path', async () => {
@@ -156,10 +180,10 @@ describe('pinhole CLI', () => {
   it('checks collect regions before calling AWS', async () => {
     const bad = await cli('collect', '--region', 'us-east-1,us east 1');
     expect(bad.code).toBe(1);
-    expect(bad.stderr).toMatch(/"us east 1" is not a region name/);
+    expect(bad.stderr).toMatch(/"us east 1" is not a Region name/);
     const two = await cli('collect', '--region', 'us-east-1,eu-west-1', '--out', 'x.json');
     expect(two.code).toBe(1);
-    expect(two.stderr).toMatch(/with several regions use --out-dir/);
+    expect(two.stderr).toMatch(/with several Regions use --out-dir/);
   });
 
   describe('plan', () => {
@@ -244,7 +268,7 @@ describe('pinhole CLI', () => {
       writeFileSync(file, JSON.stringify(s));
       const r = await cli('diff', f9, file);
       expect(r.code).toBe(1);
-      expect(r.stderr).toMatch(/different regions/);
+      expect(r.stderr).toMatch(/different Regions/);
       expect((await cli('diff', f9)).code).toBe(1);
       expect((await cli('diff', f9, f9, '--format', 'xml')).code).toBe(1);
     });

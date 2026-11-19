@@ -56,3 +56,5 @@ export { checkPolicy, diffPolicy, parsePolicy, PolicyError } from './policy.js';
 export type { PolicyFile, PolicyReport, PolicyResult, PolicyRule, Selector, Target, Violation } from './policy.js';
 export { analyzeSavings, PRICES } from './savings.js';
 export type { SavingsCode, SavingsFinding, SavingsReport } from './savings.js';
+export { decodeBytes, ingest, parseJsonText, scrubSecrets, sniffBinary } from './ingest.js';
+export type { IngestInput, IngestResult, IngestedSnapshot } from './ingest.js';

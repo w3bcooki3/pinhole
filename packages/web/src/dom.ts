@@ -18,7 +18,8 @@ export function on<K extends keyof HTMLElementEventMap>(el: HTMLElement, ev: K, 
   return el;
 }
 export function filePicker(onFiles: (f: FileList) => void): () => void {
-  const input = h('input', { type: 'file', accept: '.json', multiple: true, hidden: true }) as HTMLInputElement;
+  // JSON, gzip and the .txt PowerShell sometimes writes; the reader works out what each file is.
+  const input = h('input', { type: 'file', accept: '.json,.gz,.txt,application/json,application/gzip', multiple: true, hidden: true }) as HTMLInputElement;
   input.addEventListener('change', () => {
     if (input.files?.length) onFiles(input.files);
     input.value = '';
@@ -31,14 +32,23 @@ export function filePicker(onFiles: (f: FileList) => void): () => void {
   });
   return () => input.click();
 }
-export function toast(msg: string, cls = 'toast') {
+/** A short message at the bottom of the screen; with an action (Undo), it stays longer and offers a button. */
+export function toast(msg: string, cls = 'toast', action?: { label: string; run: () => void }) {
   let t = document.querySelector<HTMLElement>(`.${cls}`);
   if (!t) {
     t = h('div', { class: cls, role: 'status' });
     document.body.append(t);
   }
-  t.textContent = msg;
+  t.replaceChildren(msg);
+  if (action) {
+    const b = h('button', { type: 'button', class: 'toast-act' }, action.label);
+    b.addEventListener('click', () => {
+      t!.classList.remove('show');
+      action.run();
+    });
+    t.append(b);
+  }
   t.classList.add('show');
   clearTimeout((t as unknown as { _t?: number })._t);
-  (t as unknown as { _t?: number })._t = window.setTimeout(() => t!.classList.remove('show'), 1800);
+  (t as unknown as { _t?: number })._t = window.setTimeout(() => t!.classList.remove('show'), action ? 7000 : 1800);
 }

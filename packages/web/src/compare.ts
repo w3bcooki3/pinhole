@@ -49,13 +49,13 @@ export function comparePage(ctx: CompareCtx): HTMLElement {
   }
   for (const list of groups.values()) list.sort((a, b) => (a.collectedAt ?? '').localeCompare(b.collectedAt ?? ''));
   const pairs = [...groups.values()].filter((l) => l.length > 1);
-  const header = h('div', { class: 'ph' }, h('div', {}, h('h1', {}, 'Compare snapshots'), h('p', {}, 'What changed between two snapshots of the same account and region: new internet exposure and attack chains, what closed, and the rule changes behind it.')));
+  const header = h('div', { class: 'ph' }, h('div', {}, h('h1', {}, 'Compare snapshots'), h('p', {}, 'What changed between two snapshots of the same account and Region: new internet exposure and attack chains, what closed, and the rule changes behind it.')));
   if (!pairs.length) {
     return h(
       'div',
       { class: 'page' },
       header,
-      h('section', { class: 'box' }, empty('Load two snapshots of one account and region', 'Collect the same region again later, for example weekly, and load both files. The newest one is used on every other page; the older ones are kept here for comparison.')),
+      h('section', { class: 'box' }, empty('Load two snapshots of one account and Region', 'Collect the same Region again later, for example weekly, and load both files. The newest one is used on every other page; the older ones are kept here for comparison.')),
     );
   }
 
@@ -76,15 +76,15 @@ export function comparePage(ctx: CompareCtx): HTMLElement {
   };
   const scopeSel = pairs.length > 1
     ? (() => {
-        const sel = h('select', { class: 'snap-select', 'aria-label': 'Account and region' }, ...pairs.map((g) => h('option', { value: `${g[0]!.account}/${g[0]!.region}` }, `${g[0]!.account} / ${g[0]!.region}`))) as HTMLSelectElement;
+        const sel = h('select', { class: 'snap-select', 'aria-label': 'Account and Region' }, ...pairs.map((g) => h('option', { value: `${g[0]!.account}/${g[0]!.region}` }, `${g[0]!.account} / ${g[0]!.region}`))) as HTMLSelectElement;
         sel.value = `${newer.account}/${newer.region}`;
         sel.addEventListener('change', () => {
           const g = groups.get(sel.value)!;
           ctx.go('compare', { cmpOld: g.at(-2)!.key, cmpNew: g.at(-1)!.key });
         });
-        return h('label', { class: 'cmp-pick' }, h('span', {}, 'Account and region'), sel);
+        return h('label', { class: 'cmp-pick' }, h('span', {}, 'Account and Region'), sel);
       })()
-    : h('div', { class: 'cmp-pick' }, h('span', {}, 'Account and region'), h('strong', {}, `${newer.account} / ${newer.region}`));
+    : h('div', { class: 'cmp-pick' }, h('span', {}, 'Account and Region'), h('strong', {}, `${newer.account} / ${newer.region}`));
   const [a, b] = (older.collectedAt ?? '') <= (newer.collectedAt ?? '') ? [older, newer] : [newer, older];
   const o = a;
   const n = b;

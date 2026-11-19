@@ -22,6 +22,9 @@
     "url": "https://github.com/w3bcooki3/pinhole/issues"
   },
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
   "type": "module",
   "bin": {
     "pinhole": "dist/main.js"

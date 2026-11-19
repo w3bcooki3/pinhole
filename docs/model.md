@@ -331,7 +331,7 @@ Each rule is a union of boxes over protocol, source and destination addresses, s
 - **Exposure** is compared per resource, protocol and listener, over every port. Each port range is reported as new, wider (more internet sources than before), narrower, changed, or closed. Sources inside private address space were never internet exposure, so restricting a rule to `10.0.0.0/8` and then opening it to `0.0.0.0/0` shows as new, not wider.
 - **Attack chains** are compared by target and impact. A chain is reported closed only if it is gone and its target is not now reachable from the internet directly; a target that became directly exposed is shown as new exposure, which is worse.
 - **Configuration** is compared by AWS ID: security groups and their rules, network ACL entries and subnet associations, non-local routes, public IPs per interface, the security groups attached to each interface, internet gateway attachments, load balancers and listeners.
-- Snapshots must be of the same account and region; IDs do not line up otherwise.
+- Snapshots must be of the same account and Region; IDs do not line up otherwise.
 
 ## Terraform plans
 
@@ -360,7 +360,7 @@ IPv6 is handled throughout: `ipv6_cidr_blocks` on security group rules, `ipv6_ci
 
 Security groups and internet gateways the plan creates get a placeholder ID (`sg-plan1`, `igw-plan1`, ...). Where a rule, an attachment or a source group is unknown until apply, Pinhole follows the plan's `configuration` references, through module outputs, to the resource it comes from; if that is a security group or internet gateway the plan creates, the placeholder is used. A new group with its rules, attached to an existing instance in the same plan, is therefore checked end to end, and so is a new internet gateway with a route to it. A second internet gateway on a VPC that keeps its first is refused, as AWS refuses it. A reference that could mean several instances (`count` or `for_each` without an index) is not resolved.
 
-Listed as not analysed, with the reason: values known only after apply that do not lead to a security group or internet gateway the plan creates; resources not in the snapshot (another account, region or VPC); listeners whose load balancer the plan does not name; new instances, interfaces, subnets and load balancers; and other network resource types (NAT gateways, peering, transit gateways, endpoints). Everything outside networking is counted and ignored.
+Listed as not analysed, with the reason: values known only after apply that do not lead to a security group or internet gateway the plan creates; resources not in the snapshot (another account, Region or VPC); listeners whose load balancer the plan does not name; new instances, interfaces, subnets and load balancers; and other network resource types (NAT gateways, peering, transit gateways, endpoints). Everything outside networking is counted and ignored.
 
 Every mapped change passes the same validation as a hand-written `--changes` file before it is used.
 

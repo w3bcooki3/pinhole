@@ -48,7 +48,7 @@ export function reportDoc(snaps: Snap[], rows: Row[], now = new Date()): HTMLEle
   const doc = h(
     'article',
     { class: 'report' },
-    h('header', {}, h('p', { class: 'r-kicker' }, 'Pinhole network exposure report'), h('h1', {}, `${D.plural(accounts.length, 'account')}, ${D.plural(regions.length, 'region')}`), h('p', { class: 'r-meta' }, `Accounts ${accounts.join(', ')}. Regions ${regions.join(', ')}. Report generated ${now.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}.`)),
+    h('header', {}, h('p', { class: 'r-kicker' }, 'Pinhole network exposure report'), h('h1', {}, `${D.plural(accounts.length, 'account')}, ${D.plural(regions.length, 'Region')}`), h('p', { class: 'r-meta' }, `Accounts ${accounts.join(', ')}. Regions ${regions.join(', ')}. Report generated ${now.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}.`)),
     h('section', { id: 'r-summary' }, h('h2', {}, 'Summary'), h('p', { class: 'r-lede' }, summary), stale ? h('p', { class: 'r-warn' }, `At least one snapshot is more than ${D.STALE_DAYS} days old. The network may have changed since; collect fresh snapshots before acting.`) : null,
       table(['Critical', 'High', 'Medium', 'Low', 'Attack chains', 'Rule hygiene'], [[String(count('critical')), String(count('high')), String(count('medium')), String(count('low')), String(chains.length), String(hyg.length)]])),
   );
@@ -110,7 +110,7 @@ export function reportDoc(snaps: Snap[], rows: Row[], now = new Date()): HTMLEle
         h('h2', {}, 'Attack chains'),
         h('p', {}, 'Each row assumes the first server, which the internet can reach, is compromised, and follows remote administration and control-plane access to an internal resource the internet cannot reach directly.'),
         table(
-          ['Severity', 'Chain', 'Reaches', 'Account and region'],
+          ['Severity', 'Chain', 'Reaches', 'Account and Region'],
           chains.map(({ c, snap }) => {
             const end = c.steps.at(-1)!;
             return [sev(c.severity), chainText(c.steps), `${end.serviceName ? `${end.serviceName} ` : ''}${end.service ?? ''}`, `${snap.account} ${snap.region}`];
@@ -121,11 +121,11 @@ export function reportDoc(snaps: Snap[], rows: Row[], now = new Date()): HTMLEle
   }
 
   if (rest.length) {
-    doc.append(h('section', { id: 'r-other' }, h('h2', {}, 'Other exposures'), table(['Severity', 'Resource', 'Service', 'Open to', 'Account and region'], rest.map((r) => [sev(r.f.severity), D.shortName(r.f), `${D.service(r.f)}${D.serviceName(r.f) ? ` ${D.serviceName(r.f)}` : ''}`, D.openTo(r.f), `${r.snap.account} ${r.snap.region}`]))));
+    doc.append(h('section', { id: 'r-other' }, h('h2', {}, 'Other exposures'), table(['Severity', 'Resource', 'Service', 'Open to', 'Account and Region'], rest.map((r) => [sev(r.f.severity), D.shortName(r.f), `${D.service(r.f)}${D.serviceName(r.f) ? ` ${D.serviceName(r.f)}` : ''}`, D.openTo(r.f), `${r.snap.account} ${r.snap.region}`]))));
   }
 
   if (hyg.length) {
-    doc.append(h('section', { id: 'r-hygiene' }, h('h2', {}, 'Rule hygiene'), h('p', {}, 'Rules that do nothing, can never match, point at something that is gone, or allow much more than they need to. None of these lets the internet in today.'), table(['Severity', 'Finding', 'Account and region'], hyg.map((x) => [sev(x.h.severity), x.h.title, `${x.snap.account} ${x.snap.region}`]))));
+    doc.append(h('section', { id: 'r-hygiene' }, h('h2', {}, 'Rule hygiene'), h('p', {}, 'Rules that do nothing, can never match, point at something that is gone, or allow much more than they need to. None of these lets the internet in today.'), table(['Severity', 'Finding', 'Account and Region'], hyg.map((x) => [sev(x.h.severity), x.h.title, `${x.snap.account} ${x.snap.region}`]))));
   }
 
   const notes = snaps.flatMap((s) => s.warnings.map((w) => ({ s, w })));
@@ -136,7 +136,7 @@ export function reportDoc(snaps: Snap[], rows: Row[], now = new Date()): HTMLEle
       h('h2', {}, 'Method and limits'),
       h('p', {}, 'Pinhole read each account with read-only Describe calls and evaluated every security group rule, network ACL entry, route table, internet gateway, public IP and load balancer listener on each path, in both directions. Results describe what the network allows at the time of collection.'),
       h('p', {}, 'It does not see host firewalls, the applications themselves, AWS WAF or Shield, or IAM. A path means the network lets the connection through, not that the service accepts it. Attack chains assume an attacker who controls one server can use any remote administration or control-plane service the network lets it reach.'),
-      table(['Snapshot', 'Account and region', 'Collected', 'Coverage notes'], snaps.map((s, i) => [s.name, `${s.account} ${s.region}`, ages[i]!.text.replace(/^Collected /, ''), String(s.warnings.length)])),
+      table(['Snapshot', 'Account and Region', 'Collected', 'Coverage notes'], snaps.map((s, i) => [s.name, `${s.account} ${s.region}`, ages[i]!.text.replace(/^Collected /, ''), String(s.warnings.length)])),
       notes.length ? h('ul', {}, ...notes.map(({ s, w }) => h('li', {}, `${s.account} ${s.region}: ${w.message}`))) : null,
     ),
   );

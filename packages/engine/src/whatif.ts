@@ -7,7 +7,7 @@
  * The CLI commands are text for a person to review and run; Pinhole never
  * runs them and never calls a write API.
  */
-import type { ExposureFinding, ExposureReport } from './exposure.js';
+import type { ExposureReport } from './exposure.js';
 import type { AttackChain, BlastReport } from './blast.js';
 import { INTERNET, parseCidr, RangeSet } from './ipv4.js';
 import { INTERNET6, RangeSet6 } from './ipv6.js';
@@ -130,6 +130,9 @@ let added = 0;
 
 /** A new model with the changes applied, in order. The input is not modified. */
 export function applyChanges(model: NetworkModel, changes: Change[]): NetworkModel {
+  // Every change is checked, whether it came from a file, the console or the engine's own search:
+  // a port that is not a number would otherwise give a rule that silently matches nothing.
+  assertChanges(changes);
   const out: NetworkModel = { ...model };
   const owned = new Set<string>();
   const groups = () => (owned.has('sg') ? out.securityGroups : (owned.add('sg'), (out.securityGroups = new Map(out.securityGroups))));

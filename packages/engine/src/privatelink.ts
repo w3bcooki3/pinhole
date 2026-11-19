@@ -28,7 +28,6 @@ import { protocolName } from './packet.js';
 import { assessPorts, compareSeverity, SEVERITY_ORDER } from './risk.js';
 import type { Severity } from './risk.js';
 import { ruleText } from './whatif.js';
-import { PROTO_TCP } from './types.js';
 import type { EndpointService, LoadBalancer, NetworkModel, ProtocolNumber } from './types.js';
 
 export interface PrivateLinkListener {

@@ -469,8 +469,9 @@ type Spec =
 const MAX_ITEMS = 500_000;
 const MAX_STR = 4096;
 // No control characters (newlines, escapes) in anything that may reach a terminal or a command line.
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
-const CONTROL_ALL = /[\u0000-\u001f\u007f-\u009f]/g;
+// Control characters, and bidirectional overrides that make text display in a different order than it reads ("Trojan Source").
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+const CONTROL_ALL = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
 const RESERVED = new Set(['__proto__', 'constructor', 'prototype']);
 
 const arr = (of: Spec, max = MAX_ITEMS): Spec => ({ arr: of, max });
@@ -498,7 +499,7 @@ const SNAPSHOT: Spec = obj({
   schemaVersion: 'int', source: 'text', tool: obj({ name: 'text', version: 'text' }),
   collectedAt: { re: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})$/, what: 'an ISO 8601 time' },
   accountId: { re: /^\d{12}$/, what: 'a 12-digit AWS account ID' },
-  region: { re: /^[a-z]{2}(-[a-z]+)+-\d{1,2}$/, what: 'an AWS region name' },
+  region: { re: /^[a-z]{2}(-[a-z]+)+-\d{1,2}$/, what: 'an AWS Region name' },
   ec2: obj({
     Vpcs: arr(obj({ VpcId: id('vpc'), CidrBlock: 'str', CidrBlockAssociationSet: arr(obj({ CidrBlock: 'str', CidrBlockState: obj({ State: 'str' }) })), Ipv6CidrBlockAssociationSet: arr(obj({ Ipv6CidrBlock: 'str' })), OwnerId: 'str', Tags: TAGS }, ['VpcId'])),
     Subnets: arr(obj({ SubnetId: id('subnet'), VpcId: id('vpc'), CidrBlock: 'str', AvailabilityZone: 'str', AvailabilityZoneId: 'str', Tags: TAGS }, ['SubnetId', 'VpcId', 'CidrBlock'])),
@@ -614,7 +615,7 @@ function validate(value: unknown, spec: Spec, path: string): unknown {
         return CONTROL.test(value) ? value.replace(CONTROL_ALL, '\ufffd') : value;
       case 'msg':
         if (typeof value !== 'string' || value.length > 16_384) fail(path, 'must be text of reasonable length');
-        return value;
+        return CONTROL.test(value) ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '\ufffd') : value;
       case 'rules':
         // Suricata rules: lines of text (Network Firewall allows up to 2 MB).
         if (typeof value !== 'string' || value.length > 2_000_000) fail(path, 'must be rule text of at most 2 MB');

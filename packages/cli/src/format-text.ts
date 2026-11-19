@@ -82,7 +82,7 @@ export function formatExposureText(report: ExposureReport, snapshot: Snapshot, o
   const counts = SEVERITY_ORDER.map((s) => `${report.findings.filter((f) => f.severity === s).length} ${s}`).join(', ');
   const out: string[] = [];
   out.push('Pinhole internet exposure report');
-  out.push(`Snapshot: account ${snapshot.accountId ?? 'unknown'}, region ${snapshot.region ?? 'unknown'}, collected ${snapshot.collectedAt ?? 'unknown'} (${snapshot.source ?? 'unknown source'})`);
+  out.push(`Snapshot: account ${snapshot.accountId ?? 'unknown'}, Region ${snapshot.region ?? 'unknown'}, collected ${snapshot.collectedAt ?? 'unknown'} (${snapshot.source ?? 'unknown source'})`);
   out.push(
     `Analysed ${report.stats.interfacesAnalysed} interfaces with public IPs and ${report.stats.loadBalancersAnalysed} internet-facing load balancers.`,
   );

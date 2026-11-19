@@ -66,7 +66,7 @@ export function onPremPage(ctx: { st: { snaps: Snap[] } }): HTMLElement {
       stacked(h(
         'table',
         { class: 't op-links' },
-        h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Link'), h('th', {}, 'Type'), h('th', {}, 'On-premises networks'), h('th', {}, 'Tunnels'), h('th', { class: 'last hide-sm' }, 'Account and region'))),
+        h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Link'), h('th', {}, 'Type'), h('th', {}, 'On-premises networks'), h('th', {}, 'Tunnels'), h('th', { class: 'last hide-sm' }, 'Account and Region'))),
         h(
           'tbody',
           {},

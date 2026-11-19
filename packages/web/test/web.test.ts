@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
+import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -15,9 +16,16 @@ beforeAll(() => {
 }, 60_000);
 
 type Api = { loadText: (t: string, n: string) => boolean; go: (r: string, patch?: Record<string, unknown>) => void };
-function page() {
-  const dom = new JSDOM(html, { runScripts: 'dangerously', url: 'https://pinhole.test/' });
-  const w = dom.window as unknown as Window & { pinhole: Api };
+/** A fresh page. Pass the same storage to two pages to test what survives a refresh. */
+function page(idb?: IDBFactory) {
+  const dom = new JSDOM(html, {
+    runScripts: 'dangerously',
+    url: 'https://pinhole.test/',
+    beforeParse(w) {
+      if (idb) Object.assign(w, { indexedDB: idb, IDBKeyRange });
+    },
+  });
+  const w = dom.window as unknown as Window & typeof globalThis & { pinhole: Api };
   return { w, doc: w.document, api: w.pinhole };
 }
 const fixture = (name: string) => readFileSync(join(root, 'fixtures', name, 'snapshot.json'), 'utf8');
@@ -69,7 +77,7 @@ describe('web console', () => {
     // Two snapshots of different scopes only: nothing to compare.
     api.loadText(fixture('06-public-ip-without-igw-route'), 'a.json');
     api.go('compare');
-    expect(text(doc, '#main, main')).toMatch(/Load two snapshots of one account and region/);
+    expect(text(doc, '#main, main')).toMatch(/Load two snapshots of one account and Region/);
 
     // Load the same scope again, later and with a new open port: Compare picks it up.
     const later = JSON.parse(fixture('06-public-ip-without-igw-route'));
@@ -225,9 +233,142 @@ describe('web console', () => {
   it('shows a readable error for a file that is not a snapshot', () => {
     const { doc, api } = page();
     expect(api.loadText('{"hello": 1}', 'wrong.json')).toBe(false);
-    expect(text(doc, '#error')).toMatch(/wrong\.json: Unsupported snapshot schemaVersion/);
+    expect(text(doc, '#error')).toMatch(/wrong\.json has none of the fields Pinhole reads/);
     expect(api.loadText('not json', 'x.txt')).toBe(false);
-    expect(text(doc, '#error')).toMatch(/not JSON/);
+    expect(text(doc, '#error')).toMatch(/x\.txt is not valid JSON \(problem at line 1, column 1\)/);
+    expect(api.loadText('Vpcs:\n- VpcId: vpc-1\n', 'v.yaml')).toBe(false);
+    expect(text(doc, '#error')).toMatch(/v\.yaml looks like YAML/);
+  });
+
+  // Each page computes the demo first, so these take a few seconds.
+  describe('kept in this browser', { timeout: 60_000 }, () => {
+    const settle = async (w: Window, until: () => boolean) => {
+      const end = Date.now() + 20_000;
+      while (!until() && Date.now() < end) await new Promise((r) => w.setTimeout(r, 20));
+      expect(until()).toBe(true);
+    };
+    type State = { demo: boolean; all: { account: string }[]; trash: { name: string }[] };
+    const ready = (p: ReturnType<typeof page>) => (p.w as unknown as { pinhole: { ready: Promise<void> } }).pinhole.ready;
+    /** Waits until the storage holds n records: what a page wrote is there before the "refresh". */
+    const stored = (idb: IDBFactory, n: number) =>
+      new Promise<void>((resolve) => {
+        const poll = () => {
+          const req = idb.open('pinhole', 1);
+          req.onsuccess = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains('snapshots')) return db.close(), setTimeout(poll, 20);
+            const g = db.transaction('snapshots').objectStore('snapshots').getAll();
+            g.onsuccess = () => (db.close(), g.result.length >= n ? resolve() : setTimeout(poll, 20));
+          };
+        };
+        poll();
+      });
+    const state = (p: ReturnType<typeof page>) => (p.w as unknown as { pinhole: { state: State } }).pinhole.state;
+
+    it('keeps loaded snapshots across a refresh, moves removed ones to the trash and restores them', async () => {
+      const idb = new IDBFactory();
+      const a = page(idb);
+      await ready(a);
+      a.api.loadText(fixture('17-savings'), 'savings.json');
+      expect(state(a).demo).toBe(false);
+      await stored(idb, 1);
+      // Refresh: a new page on the same storage opens on the kept snapshot, not the demo.
+      const b = page(idb);
+      await ready(b);
+      expect(state(b).demo).toBe(false);
+      expect(state(b).all.map((x) => x.account)).toEqual(['111122223333']);
+      expect(text(b.doc, '#summary')).toMatch(/5 unused network resources/);
+      // Remove it: it goes to the trash, with Undo.
+      (b.doc.querySelector('.chip-snap button') as HTMLElement).click();
+      await settle(b.w, () => state(b).trash.length === 1);
+      expect(text(b.doc, '.toast')).toMatch(/Moved 111122223333 \/ us-east-1 to the trash.*Undo/);
+      expect(text(b.doc, 'nav a[data-route="trash"]')).toMatch(/Trash1/);
+      // Refresh again: nothing loaded (the demo), one in the trash.
+      const c = page(idb);
+      await ready(c);
+      expect(state(c).trash).toHaveLength(1);
+      expect(state(c).demo).toBe(true);
+      c.api.go('trash');
+      expect(text(c.doc, '.trash-t')).toMatch(/savings\.json.*111122223333 \/ us-east-1.*today.*30 days/);
+      (([...c.doc.querySelectorAll('.trash-t button')] as HTMLElement[]).find((x) => x.textContent === 'Restore')!).click();
+      await settle(c.w, () => !state(c).demo && state(c).trash.length === 0);
+      const d = page(idb);
+      await ready(d);
+      expect(state(d).demo).toBe(false);
+      // Forget everything asks once more, then clears it all.
+      d.api.go('trash');
+      const forget = () => ([...d.doc.querySelectorAll('button')] as HTMLElement[]).find((x) => /Forget everything|Yes, delete/.test(x.textContent ?? ''))!;
+      forget().click();
+      expect(text(d.doc, '.confirm-q')).toMatch(/Delete every snapshot in this browser/);
+      forget().click();
+      await settle(d.w, () => state(d).demo);
+      const e = page(idb);
+      await ready(e);
+      expect(state(e).demo).toBe(true);
+      expect(state(e).trash).toHaveLength(0);
+    });
+
+    it('stores the snapshot after reading, never the secrets in the file', async () => {
+      const idb = new IDBFactory();
+      const a = page(idb);
+      const s = JSON.parse(fixture('15-hybrid'));
+      s.ec2.VpnConnections[0].CustomerGatewayConfiguration = '<pre_shared_key>s3cr3t-psk</pre_shared_key>';
+      await ready(a);
+      a.api.loadText(JSON.stringify(s), 'vpn.json');
+      expect(text(a.doc, '#notes')).toMatch(/secret was removed/);
+      await stored(idb, 1);
+      const b = page(idb);
+      await ready(b);
+      expect(state(b).demo).toBe(false);
+      const raw = await new Promise<string>((resolve) => {
+        const req = idb.open('pinhole', 1);
+        req.onsuccess = () => {
+          const get = req.result.transaction('snapshots').objectStore('snapshots').getAll();
+          get.onsuccess = () => resolve(JSON.stringify(get.result));
+        };
+      });
+      expect(raw).toContain('vpn.json');
+      expect(raw).not.toContain('s3cr3t');
+    });
+
+    it('keeps simulator changes across a refresh, with their snapshot', async () => {
+      const idb = new IDBFactory();
+      const a = page(idb);
+      await ready(a);
+      a.api.loadText(fixture('07-alb-private-targets'), 'alb.json');
+      const st = state(a) as unknown as { all: { key: string }[] };
+      a.api.go('simulator', { simKey: st.all[0]!.key, changes: [{ kind: 'revoke-sg-rule', ruleId: 'sgr-alb-https' }] });
+      await stored(idb, 1);
+      const saved = a.w.localStorage.getItem('pinhole-sim');
+      expect(saved).toMatch(/sgr-alb-https/);
+      const b = page(idb);
+      b.w.localStorage.setItem('pinhole-sim', saved!);
+      await ready(b);
+      expect((state(b) as unknown as { changes: { ruleId: string }[] }).changes.map((c) => c.ruleId)).toEqual(['sgr-alb-https']);
+      // Damaged or hand-edited values are ignored.
+      const c = page(idb);
+      c.w.localStorage.setItem('pinhole-sim', JSON.stringify({ key: st.all[0]!.key, changes: [{ kind: 'edit-sg-rule', ruleId: 'x', fromPort: 'NaN' }] }));
+      await ready(c);
+      expect((state(c) as unknown as { changes: unknown[] }).changes).toEqual([]);
+    });
+
+    it('ignores a damaged record instead of breaking', async () => {
+      const idb = new IDBFactory();
+      await new Promise<void>((resolve) => {
+        const req = idb.open('pinhole', 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('snapshots', { keyPath: 'id' });
+        req.onsuccess = () => {
+          const tx = req.result.transaction('snapshots', 'readwrite');
+          tx.objectStore('snapshots').put({ id: 'x', name: 'broken.json', json: '{not json', addedAt: 1 });
+          tx.objectStore('snapshots').put({ id: 'y', nonsense: true });
+          tx.oncomplete = () => resolve();
+        };
+      });
+      const a = page(idb);
+      await ready(a);
+      expect(text(a.doc, '#error')).toMatch(/broken\.json/);
+      expect(state(a).demo).toBe(true);
+    });
   });
 
   it('never interprets snapshot text as HTML', () => {
@@ -480,7 +621,7 @@ describe('web console', () => {
       const { doc, api } = load9();
       api.go('report');
       const rep = doc.querySelector('.report')!;
-      expect(rep.querySelector('h1')!.textContent).toBe('1 account, 1 region');
+      expect(rep.querySelector('h1')!.textContent).toBe('1 account, 1 Region');
       expect(rep.textContent).toMatch(/Fix plan/);
       expect(rep.textContent).toMatch(/aws ec2 revoke-security-group-ingress --region us-east-1 --group-id sg-bastion --security-group-rule-ids sgr-bastion-ssh-world/);
       expect(rep.textContent).toMatch(/Attack chains/);
@@ -516,7 +657,7 @@ describe('web console', () => {
 describe('documentation', () => {
   it('builds, with every example produced by the real CLI', () => {
     const out = execFileSync(process.execPath, [join(root, 'scripts/build-docs.mjs')], { cwd: root, encoding: 'utf8' });
-    expect(out).toMatch(/22 sections, 17 live examples/);
+    expect(out).toMatch(/23 sections, 17 live examples/);
     const html = readFileSync(join(root, 'site/docs/index.html'), 'utf8');
     expect(html).not.toMatch(/<!--(run|trace|policy)/);
     expect(html).toContain('pinhole blast account-a/snapshot.json account-b/snapshot.json');

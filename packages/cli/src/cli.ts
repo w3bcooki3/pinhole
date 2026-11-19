@@ -10,7 +10,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { analyzeExposure, normalize, assertSnapshot, SEVERITY_ORDER, SnapshotError } from '@pinhole/engine';
+import { gunzipSync } from 'node:zlib';
+import { analyzeExposure, ingest, normalize, SEVERITY_ORDER, sniffBinary, SnapshotError } from '@pinhole/engine';
 import type { Severity, Snapshot } from '@pinhole/engine';
 import { formatExposureText } from './format-text.js';
 import { analyzeBlastRadius, assertChanges, ChangeError, diffSnapshots, DriftError, mapTerraformPlan, PlanError } from '@pinhole/engine';
@@ -43,8 +44,8 @@ Usage:
   pinhole fix      SNAPSHOT [--plan [--policy POLICY.json]] [--min-severity LEVEL] [--all]
   pinhole hygiene  SNAPSHOT [--fail-on LEVEL]
   pinhole egress   SNAPSHOT [--format text|json|markdown] [--min-severity LEVEL]
-  pinhole savings  SNAPSHOT [--format text|json|markdown] [--fail-over USD]
                             [--fail-on LEVEL] [--verbose]
+  pinhole savings  SNAPSHOT [--format text|json|markdown] [--fail-over USD]
   pinhole onprem   SNAPSHOT [--format text|json|markdown] [--min-severity LEVEL]
                             [--fail-on LEVEL] [--verbose]
   pinhole privatelink SNAPSHOT [--format text|json|markdown] [--min-severity LEVEL]
@@ -60,6 +61,11 @@ Usage:
   pinhole --version | --help
 
 Every analysis command also takes --format text|json.
+
+SNAPSHOT is a file the collector or CloudShell script wrote. It can also be
+plain AWS CLI JSON output, one file per describe command, given together
+(pinhole exposure vpcs.json subnets.json sgs.json ...); UTF-16 files from
+PowerShell and gzip files are read too.
 
 collect   Reads the network configuration of one account, in one or more
           regions, with read-only describe calls and writes one snapshot file
@@ -137,21 +143,42 @@ validate  Loads a snapshot and prints what it contains and any warnings.
 LEVEL is one of: ${SEVERITY_ORDER.join(', ')}.
 `;
 
+/** Where notes about the input go (comments removed, secrets removed, a file cut short by paging): standard error, so piped output stays clean. */
+let note: (text: string) => void = () => {};
+
+/** Reads files into snapshots: Pinhole snapshots, or plain AWS CLI output assembled into one (see ingest in the engine). */
+function readSnapshots(paths: string[]): Snapshot[] {
+  return readNamed(paths).map((s) => s.snapshot);
+}
+
+/** The same, with a name for each snapshot (the file, or the files it was assembled from). */
+function readNamed(paths: string[]): { snapshot: Snapshot; name: string }[] {
+  const inputs = paths.map((path) => {
+    let bytes: Uint8Array;
+    try {
+      bytes = readFileSync(path);
+    } catch (e) {
+      throw new SnapshotError(`Cannot read ${path}: ${(e as Error).message}`);
+    }
+    if (sniffBinary(bytes) === 'gzip') {
+      try {
+        bytes = gunzipSync(bytes, { maxOutputLength: 1_000_000_000 });
+      } catch (e) {
+        throw new SnapshotError(`${path} looks gzip-compressed but cannot be decompressed: ${(e as Error).message}`);
+      }
+    }
+    return { name: path, bytes };
+  });
+  const r = ingest(inputs);
+  for (const n of r.notes) note(`note: ${n}\n`);
+  if (r.errors.length) throw new SnapshotError(r.errors.join('\n'));
+  return r.snapshots.map((s) => ({ snapshot: s.snapshot, name: s.sources.length === 1 ? s.sources[0]! : s.name }));
+}
+
 function readSnapshot(path: string): Snapshot {
-  let text: string;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch (e) {
-    throw new SnapshotError(`Cannot read ${path}: ${(e as Error).message}`);
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch (e) {
-    throw new SnapshotError(`${path} is not valid JSON: ${(e as Error).message}`);
-  }
-  assertSnapshot(value);
-  return value;
+  const all = readSnapshots([path]);
+  if (all.length !== 1) throw new SnapshotError(`${path} holds ${all.length} snapshots; this command takes one. Split them into separate files.`);
+  return all[0]!;
 }
 
 function severityArg(value: string | undefined, flag: string): Severity | undefined {
@@ -165,10 +192,10 @@ class UsageError extends Error {}
 async function cmdCollect(args: string[], io: Io): Promise<number> {
   const { values } = parseArgs({ args, options: { profile: { type: 'string' }, region: { type: 'string' }, out: { type: 'string' }, 'out-dir': { type: 'string' } }, strict: true });
   const given = values.region ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION;
-  if (!given) throw new UsageError('No region: pass --region or set AWS_REGION.');
+  if (!given) throw new UsageError('No Region: pass --region or set AWS_REGION.');
   const regions = [...new Set(given.split(',').map((r) => r.trim()).filter(Boolean))];
-  for (const r of regions) if (!/^[a-z]{2}(-[a-z]+)+-\d{1,2}$/.test(r)) throw new UsageError(`"${r}" is not a region name, e.g. us-east-1.`);
-  if (regions.length > 1 && values.out) throw new UsageError('--out names one file; with several regions use --out-dir.');
+  for (const r of regions) if (!/^[a-z]{2}(-[a-z]+)+-\d{1,2}$/.test(r)) throw new UsageError(`"${r}" is not a Region name, e.g. us-east-1.`);
+  if (regions.length > 1 && values.out) throw new UsageError('--out names one file; with several Regions use --out-dir.');
   const dir = values['out-dir'] ?? '.';
   // Imported lazily so the analysis commands never load the AWS SDK.
   const { collectSnapshot, sdkSender } = await import('@pinhole/collector');
@@ -210,17 +237,18 @@ function cmdExposure(args: string[], io: Io): number {
     },
     strict: true,
   });
-  const [file] = positionals;
-  if (!file || positionals.length > 1) throw new UsageError('exposure takes exactly one snapshot file.');
+  if (!positionals.length) throw new UsageError('exposure takes a snapshot file.');
   const minSeverity = severityArg(values['min-severity'], '--min-severity');
   const failOn = severityArg(values['fail-on'], '--fail-on');
   const fmt = values.format;
   if (fmt !== 'text' && fmt !== 'json' && fmt !== 'sarif' && fmt !== 'markdown') throw new UsageError('--format must be text, json, sarif or markdown');
 
-  const snap = readSnapshot(file);
+  const all = readSnapshots(positionals);
+  if (all.length !== 1) throw new UsageError(`exposure takes one snapshot; these files hold ${all.length}.`);
+  const snap = all[0]!;
   const report = analyzeExposure(normalize(snap));
   if (fmt === 'sarif') {
-    io.stdout(exposureSarif(report, snap, file, VERSION, minSeverity));
+    io.stdout(exposureSarif(report, snap, positionals[0]!, VERSION, minSeverity));
   } else if (fmt === 'markdown') {
     io.stdout(exposureMarkdown(report, snap, minSeverity));
   } else if (fmt === 'json') {
@@ -256,9 +284,11 @@ function cmdExposure(args: string[], io: Io): number {
 
 const FORMAT = { format: { type: 'string', default: 'text' } } as const;
 function snapshotModel(positionals: string[], cmd: string) {
-  const [file] = positionals;
-  if (!file || positionals.length > 1) throw new UsageError(`${cmd} takes exactly one snapshot file.`);
-  return normalize(readSnapshot(file));
+  if (!positionals.length) throw new UsageError(`${cmd} takes a snapshot file.`);
+  // Several files are allowed when together they make one snapshot (plain AWS CLI output, one file per describe command).
+  const all = readSnapshots(positionals);
+  if (all.length !== 1) throw new UsageError(`${cmd} takes one snapshot; these files hold ${all.length}.`);
+  return normalize(all[0]!);
 }
 function checkFormat(f: string | undefined): 'text' | 'json' {
   if (f !== 'text' && f !== 'json') throw new UsageError('--format must be text or json');
@@ -287,19 +317,19 @@ function cmdBlast(args: string[], io: Io): number {
   const minSeverity = severityArg(values['min-severity'], '--min-severity') ?? 'info';
   const opts = { maxDepth: depth, ...(values['max-pairs'] ? { maxPairs: Number(values['max-pairs']) } : {}) };
   const fails = (list: { severity: Severity }[]) => !!failOn && list.some((c) => SEVERITY_ORDER.indexOf(c.severity) <= SEVERITY_ORDER.indexOf(failOn));
-  if (positionals.length <= 1) {
-    const model = snapshotModel(positionals, 'blast');
+  if (!positionals.length) throw new UsageError('blast takes one or more snapshot files.');
+  // Plain AWS CLI output in several files makes one snapshot; snapshot files are one each.
+  const named = readNamed(positionals);
+  if (named.length === 1) {
+    const model = normalize(named[0]!.snapshot);
     const exposure = analyzeExposure(model);
     const report = analyzeBlastRadius(model, exposure, opts);
     const cut = findMinCut(model, exposure, report);
-    io.stdout(format === 'json' ? json({ ...report, crownJewels: cut.jewels, cut }) : safeForTerminal(blastText(model, report, minSeverity, cut)));
+    io.stdout(format === 'json' ? json({ ...report, crownJewels: cut.jewels, cut }) : safeForTerminal(blastText(report, minSeverity, cut)));
     return fails(report.chains) ? 2 : 0;
   }
   // Several snapshots: each on its own, then the chains that cross between linked ones.
-  const inputs = positionals.map((file) => {
-    const snap = readSnapshot(file);
-    return { file, key: snap.accountId && snap.region ? `${snap.accountId} ${snap.region}` : file, model: normalize(snap) };
-  });
+  const inputs = named.map(({ snapshot: snap, name: file }) => ({ file, key: snap.accountId && snap.region ? `${snap.accountId} ${snap.region}` : file, model: normalize(snap) }));
   const keys = new Set<string>();
   for (const i of inputs) {
     if (keys.has(i.key)) i.key = i.file;
@@ -308,7 +338,7 @@ function cmdBlast(args: string[], io: Io): number {
   const each = inputs.map((i) => ({ key: i.key, report: analyzeBlastRadius(i.model, analyzeExposure(i.model), opts) }));
   const res = across(inputs, depth);
   if (format === 'json') io.stdout(json({ snapshots: each, ...res }));
-  else io.stdout(safeForTerminal([...each.map((x, i) => `== ${x.key}\n${blastText(inputs[i]!.model, x.report, minSeverity)}`), acrossText(res, minSeverity)].join('\n')));
+  else io.stdout(safeForTerminal([...each.map((x) => `== ${x.key}\n${blastText(x.report, minSeverity)}`), acrossText(res, minSeverity)].join('\n')));
   return fails([...each.flatMap((x) => x.report.chains), ...res.across.flatMap((a) => a.chains)]) ? 2 : 0;
 }
 
@@ -542,12 +572,14 @@ function policyDiffText(d: ReturnType<typeof diffPolicy>, md: boolean): string {
 
 function cmdValidate(args: string[], io: Io): number {
   const { positionals } = parseArgs({ args, allowPositionals: true, options: {}, strict: true });
-  const [file] = positionals;
-  if (!file) throw new UsageError('validate takes a snapshot file.');
-  const snap = readSnapshot(file);
+  if (!positionals.length) throw new UsageError('validate takes a snapshot file.');
+  const named = readNamed(positionals);
+  if (named.length !== 1) throw new UsageError(`validate takes one snapshot; these files hold ${named.length}.`);
+  const snap = named[0]!.snapshot;
+  const file = named[0]!.name;
   const m = normalize(snap);
   const lines = [
-    `Snapshot ${file}: schema ${snap.schemaVersion}, account ${snap.accountId ?? 'unknown'}, region ${snap.region ?? 'unknown'}, source ${snap.source ?? 'unknown'}`,
+    `Snapshot ${file}: schema ${snap.schemaVersion}, account ${snap.accountId ?? 'unknown'}, Region ${snap.region ?? 'unknown'}, source ${snap.source ?? 'unknown'}`,
     `  ${m.vpcs.size} VPCs, ${m.subnets.size} subnets, ${m.routeTables.size} route tables, ${m.nacls.size} network ACLs`,
     `  ${m.securityGroups.size} security groups, ${m.enis.size} network interfaces, ${m.instances.size} instances`,
     `  ${m.peerings.size} peering connections, ${m.transitGateways.size} transit gateways, ${m.tgwRouteTables.size} TGW route tables`,
@@ -576,6 +608,7 @@ export function safeForTerminal(text: string): string {
 
 export async function run(argv: string[], io: Io): Promise<number> {
   const [cmd, ...rest] = argv;
+  note = (text) => io.stderr(safeForTerminal(text));
   try {
     switch (cmd) {
       case undefined:

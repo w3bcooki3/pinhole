@@ -17,15 +17,19 @@ import { comparePage } from './compare.js';
 import { policyPage } from './policy.js';
 import { egressOf, egressPage } from './egress.js';
 import { savingsPage, savingsTotal, usd } from './savings.js';
+import * as S from './store.js';
+import type { Stored } from './store.js';
+import { trashPage } from './trash.js';
 import { onPremOf, onPremPage } from './onprem.js';
 import { privateLinkOf, privateLinkPage } from './privatelink.js';
 import { askPage, blastPage, fixesSection, hygienePage, openPalette, planBox, simulatorPage } from './pages.js';
 import type { Ctx } from './pages.js';
 import type { Change } from '@pinhole/engine';
+import { assertChanges } from '@pinhole/engine';
 
 
-type Route = 'dashboard' | 'graph' | 'blast' | 'issues' | 'resources' | 'hygiene' | 'policy' | 'savings' | 'egress' | 'onprem' | 'privatelink' | 'coverage' | 'simulator' | 'compare' | 'ask' | 'report' | 'connect';
-const ROUTES: Route[] = ['dashboard', 'graph', 'blast', 'issues', 'resources', 'hygiene', 'policy', 'savings', 'egress', 'onprem', 'privatelink', 'coverage', 'simulator', 'compare', 'ask', 'report', 'connect'];
+type Route = 'dashboard' | 'graph' | 'blast' | 'issues' | 'resources' | 'hygiene' | 'policy' | 'savings' | 'trash' | 'egress' | 'onprem' | 'privatelink' | 'coverage' | 'simulator' | 'compare' | 'ask' | 'report' | 'connect';
+const ROUTES: Route[] = ['dashboard', 'graph', 'blast', 'issues', 'resources', 'hygiene', 'policy', 'savings', 'trash', 'egress', 'onprem', 'privatelink', 'coverage', 'simulator', 'compare', 'ask', 'report', 'connect'];
 const PAGES: { route: Route; label: string; icon: string; keys?: string }[] = [
   { route: 'dashboard', label: 'Dashboard', icon: 'home' },
   { route: 'graph', label: 'Attack graph', icon: 'graph' },
@@ -43,6 +47,7 @@ const PAGES: { route: Route; label: string; icon: string; keys?: string }[] = [
   { route: 'compare', label: 'Compare snapshots', icon: 'compare' },
   { route: 'ask', label: 'Reachability query', icon: 'route', keys: 'can reach path fix repair why blocked' },
   { route: 'report', label: 'Report', icon: 'file' },
+  { route: 'trash', label: 'Trash', icon: 'trash', keys: 'deleted removed restore recycle bin' },
   { route: 'connect', label: 'Connect an account', icon: 'plug' },
 ];
 type CatFilter = Category | 'world' | '';
@@ -80,10 +85,13 @@ const st = {
   hygCode: '',
   hygAll: false,
   error: '',
+  /** Notes from reading the last files (comments removed, secrets removed, a file cut short by paging). */
+  notes: [] as string[],
+  /** Snapshots in the trash (kept in this browser). */
+  trash: [] as Stored[],
 };
 let rows: Row[] = [];
 
-const port = (r: Row) => D.service(r.f).split('/')[1] ?? D.service(r.f);
 const pathTitle = (r: Row) => `${D.shortName(r.f)} on ${D.service(r.f)}${r.f.family === 'ipv6' ? ' over IPv6' : ''}`;
 const scopeOf = (r: Row) => `${r.snap.account} / ${r.snap.region}`;
 
@@ -112,28 +120,85 @@ function setSnaps(all: Snap[], demo: boolean) {
   st.askPort = '';
 }
 
-function addSnaps(list: Snap[], errors: string[]) {
-  st.error = errors.join(' ');
+function addSnaps(loaded: D.Loaded) {
+  st.error = loaded.errors.join(' ');
+  st.notes = loaded.notes;
+  const list = loaded.snaps;
   if (list.length) {
     const keep = st.demo ? [] : st.all.filter((x) => !list.some((n) => n.key === x.key));
     setSnaps([...keep, ...list], false);
     st.route = 'dashboard';
+    // Kept in this browser so a refresh does not lose them; a snapshot loaded again replaces its copy, and leaves the trash.
+    st.trash = st.trash.filter((r) => !loaded.records.some((n) => n.id === r.id));
+    void S.put(loaded.records).then(() => S.keep());
     toast(`Loaded ${D.plural(list.length, 'snapshot')}`);
   }
   render();
 }
 
 function loadText(text: string, name: string): boolean {
-  try {
-    addSnaps([D.parseFile(text, name)], []);
-    return true;
-  } catch (e) {
-    addSnaps([], [`${name}: ${(e as Error).message}`]);
-    return false;
-  }
+  const loaded = D.parseText(text, name);
+  addSnaps(loaded);
+  return loaded.snaps.length > 0 && !loaded.errors.length;
 }
 
-const pick = filePicker((files) => D.readFiles(files, addSnaps));
+const pick = filePicker((files) => {
+  void D.readFiles(files).then(addSnaps, (e) => addSnaps({ snaps: [], records: [], notes: [], errors: [String((e as Error)?.message ?? e)] }));
+});
+
+/** Moves the snapshots of one account and region to the trash, with Undo. */
+function removeScope(account: string, region: string) {
+  const gone = st.all.filter((y) => y.account === account && y.region === region);
+  setSnaps(st.all.filter((y) => !gone.includes(y)), false);
+  const ids = gone.map((x) => x.key);
+  void S.setDeleted(ids, true).then(refreshTrash);
+  render();
+  toast(`Moved ${account} / ${region} to the trash`, 'toast', { label: 'Undo', run: () => void restore(ids) });
+}
+async function refreshTrash() {
+  st.trash = (await S.all()).filter((r) => r.deletedAt !== undefined);
+  render();
+}
+async function restore(ids: string[]) {
+  await S.setDeleted(ids, false);
+  const back = (await S.all()).filter((r) => ids.includes(r.id)).map(D.fromStored);
+  const snaps = back.filter((x): x is Snap => typeof x !== 'string');
+  const errors = back.filter((x): x is string => typeof x === 'string');
+  if (snaps.length) setSnaps([...(st.demo ? [] : st.all.filter((x) => !snaps.some((n) => n.key === x.key))), ...snaps], false);
+  st.error = errors.join(' ');
+  if (snaps.length) toast(`Restored ${D.plural(snaps.length, 'snapshot')}`);
+  await refreshTrash();
+}
+async function purge(ids: string[]) {
+  await S.remove(ids);
+  await refreshTrash();
+  toast(`Deleted ${D.plural(ids.length, 'snapshot')}`);
+}
+async function forgetAll() {
+  await S.clear();
+  st.trash = [];
+  setSnaps(D.demoSnaps(), true);
+  render();
+  toast('Everything this browser kept was deleted');
+}
+
+/** On start: the snapshots kept from last time, or the demo when there are none. */
+async function restoreSaved() {
+  const saved = await S.all();
+  st.trash = saved.filter((r) => r.deletedAt !== undefined);
+  const live = saved.filter((r) => r.deletedAt === undefined).map(D.fromStored);
+  const snaps = live.filter((x): x is Snap => typeof x !== 'string');
+  const errors = live.filter((x): x is string => typeof x === 'string');
+  // Something loaded in the meantime (a quick drop, or the test API) wins over what was kept.
+  if (snaps.length && st.demo) {
+    const route = st.route;
+    setSnaps(snaps, false);
+    st.route = route;
+    loadSim();
+  }
+  if (errors.length) st.error = `Some kept snapshots could not be read again and were skipped: ${errors.join(' ')}`;
+  render();
+}
 document.addEventListener('dragenter', () => document.body.classList.add('dragging'));
 document.addEventListener('dragleave', (e) => !e.relatedTarget && document.body.classList.remove('dragging'));
 document.addEventListener('drop', () => document.body.classList.remove('dragging'));
@@ -362,16 +427,6 @@ function detail(r: Row, back: { label: string; act: () => void }, extra: Child[]
   );
 }
 
-function sevSegments(list: Severity[]): HTMLElement {
-  const bar = h('div', { class: 'bar', 'aria-hidden': 'true' });
-  for (const sv of D.SEVERITY_ORDER) {
-    const n = list.filter((x) => x === sv).length;
-    if (n) bar.append(h('span', { style: `flex:${n};background:${sevVar(sv)}` }));
-  }
-  if (!list.length) bar.append(h('span', { style: 'flex:1;background:var(--line2)' }));
-  return bar;
-}
-
 // ---------------------------------------------------------------- dashboard
 
 
@@ -398,7 +453,7 @@ function dashboard(): HTMLElement {
     h(
       'div',
       { class: 'ph' },
-      h('div', {}, h('h1', {}, 'Dashboard'), h('p', {}, `Internet exposure across ${D.plural(accounts.size, 'account')} and ${D.plural(regions.size, 'region')}.`, ...(() => {
+      h('div', {}, h('h1', {}, 'Dashboard'), h('p', {}, `Internet exposure across ${D.plural(accounts.size, 'account')} and ${D.plural(regions.size, 'Region')}.`, ...(() => {
         const ages = st.snaps.map((x) => ({ x, c: D.collected(x) }));
         const known = ages.filter((a) => a.c.days !== undefined).sort((a, b) => b.c.days! - a.c.days!);
         if (!known.length) return [];
@@ -432,7 +487,6 @@ function dashboard(): HTMLElement {
   if (!rows.length) bar.append(h('span', { style: 'flex:1;background:var(--line2)' }));
   const world = rows.filter((r) => D.isWorld(r.f)).length;
   const warn = st.snaps.reduce((n, x) => n + x.warnings.length, 0);
-  const lbs = res.filter((x) => x.kind.includes('Load')).length;
   const crit = chainRows.filter((c) => c.c.severity === 'critical').length;
   const stopped = D.withJoined(st.snaps).some((x) => D.blastOf(x).stats.truncated);
   const saving = savingsTotal(st.snaps);
@@ -508,7 +562,7 @@ function dashboard(): HTMLElement {
       h(
         'table',
         { class: 't' },
-        h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Path'), h('th', {}, 'Service'), h('th', { class: 'hide-sm' }, 'Open to'), h('th', { class: 'last hide-sm' }, 'Account and region'))),
+        h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Path'), h('th', {}, 'Service'), h('th', { class: 'hide-sm' }, 'Open to'), h('th', { class: 'last hide-sm' }, 'Account and Region'))),
         h(
           'tbody',
           {},
@@ -550,7 +604,7 @@ function dashboard(): HTMLElement {
       matrix.append(on(h('button', { type: 'button', class: 'c', style: `background:${softVar(worst)};color:${worst === 'medium' ? 'var(--medium-ink)' : sevVar(worst)}`, 'aria-label': `${here.length} paths in ${a} ${g}` }, String(here.length)), 'click', toIssues({ scope: `${a} / ${g}` })));
     }
   }
-  sideCol.append(h('section', { class: 'box', id: 'matrix' }, boxHead('Accounts and regions', 'Exposures, coloured by the worst one'), matrix));
+  sideCol.append(h('section', { class: 'box', id: 'matrix' }, boxHead('Accounts and Regions', 'Exposures, coloured by the worst one'), matrix));
 
   // Lateral movement: the worst chains, and the rules that cut the most of them.
   if (chainRows.length) {
@@ -563,7 +617,7 @@ function dashboard(): HTMLElement {
         h(
           'table',
           { class: 't' },
-          h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Chain'), h('th', {}, 'Ends at'), h('th', { class: 'last hide-sm' }, 'Account and region'))),
+          h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Chain'), h('th', {}, 'Ends at'), h('th', { class: 'last hide-sm' }, 'Account and Region'))),
           h(
             'tbody',
             {},
@@ -636,7 +690,7 @@ function graphPage(): HTMLElement {
     tools.append(on(h('button', { type: 'button', class: 'tog', 'aria-pressed': String(st.sevOn.has(sv)) }, h('i', { style: `background:${sevVar(sv)}` }), `${D.SEV_LABEL[sv]} ${c}`), 'click', () => { if (st.sevOn.has(sv)) st.sevOn.delete(sv); else st.sevOn.add(sv); render(); }));
   }
   tools.append(on(h('button', { type: 'button', class: 'tog', 'aria-pressed': String(st.showTargets) }, iconSvg('target', 14), 'Load balancer targets'), 'click', () => { st.showTargets = !st.showTargets; render(); }));
-  const find = h('input', { type: 'search', placeholder: 'Highlight a resource, IP or port', value: st.gq, 'aria-label': 'Highlight in graph', id: 'gfind' }) as HTMLInputElement;
+  const find = h('input', { type: 'search', placeholder: 'Highlight a resource or IP', value: st.gq, 'aria-label': 'Highlight in graph', id: 'gfind' }) as HTMLInputElement;
   tools.append(h('label', { class: 'gfind' }, iconSvg('search', 14), find));
   canvas.append(
     host,
@@ -700,7 +754,7 @@ function issuesPage(): HTMLElement {
   catSel.value = st.cat;
   catSel.addEventListener('change', () => { st.cat = catSel.value as CatFilter; render(); });
   const scopes = [...new Set(rows.map(scopeOf))].sort();
-  const scopeSel = h('select', { 'aria-label': 'Account and region', id: 'scope' }, h('option', { value: '' }, 'All accounts and regions'), ...scopes.map((x) => h('option', { value: x }, x))) as HTMLSelectElement;
+  const scopeSel = h('select', { 'aria-label': 'Account and Region', id: 'scope' }, h('option', { value: '' }, 'All accounts and Regions'), ...scopes.map((x) => h('option', { value: x }, x))) as HTMLSelectElement;
   scopeSel.value = st.scope;
   scopeSel.addEventListener('change', () => { st.scope = scopeSel.value; render(); });
 
@@ -745,7 +799,7 @@ function issuesPage(): HTMLElement {
     'table',
     { class: 't xt' },
     h('colgroup', {}, h('col', { class: 'w-sev' }), h('col', { class: 'w-res' }), h('col', { class: 'w-svc' }), h('col', { class: 'w-open' }), h('col', { class: 'w-where' }), h('col', { class: 'w-go' })),
-    h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Resource'), h('th', {}, 'Service'), h('th', {}, 'Open to'), h('th', {}, 'Account and region'), h('th', { class: 'last' }, h('span', { class: 'sr' }, 'Open')))),
+    h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Severity'), h('th', {}, 'Resource'), h('th', {}, 'Service'), h('th', {}, 'Open to'), h('th', {}, 'Account and Region'), h('th', { class: 'last' }, h('span', { class: 'sr' }, 'Open')))),
     tbody,
   );
   fill();
@@ -785,7 +839,7 @@ function resourcesPage(): HTMLElement {
         ? h(
             'table',
             { class: 't' },
-            h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Resource'), h('th', {}, 'Open ports'), h('th', { class: 'hide-sm' }, 'Public IPs'), h('th', { class: 'hide-sm' }, 'VPC'), h('th', { class: 'hide-sm' }, 'Account and region'), h('th', { class: 'last' }, 'Worst'))),
+            h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Resource'), h('th', {}, 'Open ports'), h('th', { class: 'hide-sm' }, 'Public IPs'), h('th', { class: 'hide-sm' }, 'VPC'), h('th', { class: 'hide-sm' }, 'Account and Region'), h('th', { class: 'last' }, 'Worst'))),
             h(
               'tbody',
               {},
@@ -867,7 +921,7 @@ function coveragePage(): HTMLElement {
       h(
         'table',
         { class: 't' },
-        h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Account and region'), h('th', { class: 'hide-sm' }, 'Collected'), h('th', {}, 'Interfaces'), h('th', {}, 'Load balancers'), h('th', {}, 'Open paths'), h('th', { class: 'last' }, 'Notes'))),
+        h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Account and Region'), h('th', { class: 'hide-sm' }, 'Collected'), h('th', {}, 'Interfaces'), h('th', {}, 'Load balancers'), h('th', {}, 'Open paths'), h('th', { class: 'last' }, 'Notes'))),
         h(
           'tbody',
           {},
@@ -984,8 +1038,8 @@ function connectPage(): HTMLElement {
           { class: 'wiz', id: 'wizard', style: 'list-style:none;margin:0' },
           step(1, 'Open AWS CloudShell in the account to check', 'Sign in to the AWS console with a role that can read EC2 and Elastic Load Balancing configuration. CloudShell already has the AWS CLI and jq, and runs as you.', h('div', { style: 'display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap' }, h('label', { class: 'dim', for: 'region', style: 'font-size:0.7812rem' }, 'Regions'), rin, cs)),
           step(2, 'Put the collector script into CloudShell', 'Paste this into the terminal. It writes cloudshell-collect.sh to your home folder. If CloudShell warns about a multi-line paste, choose Paste.', cmd([p(), `cat > cloudshell-collect.sh <<'PINHOLE_EOF'\n`, h('span', { class: 'c' }, `  ${D.scriptLines()} lines, read it with View script\n`), 'PINHOLE_EOF\n', p(), 'chmod +x cloudshell-collect.sh'], D.heredoc), h('div', { style: 'display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.5rem' }, btn([iconSvg('file', 14), 'View script'], 'sm', () => codeDialog('script')), btn([iconSvg('shield', 14), 'View IAM policy'], 'sm', () => codeDialog('policy')))),
-          step(3, 'Run it', 'It makes only Describe and Get calls, writes one JSON file per region and prints where it saved it. Nothing in the account changes.', runHost, h('p', { style: 'margin:0.625rem 0 0;font-size:0.7812rem' }, 'When it finishes you will see something like:'), outHost),
-          step(4, 'Download the snapshot to your computer', 'In CloudShell choose Actions, then Download file, and paste the path the script printed. Repeat for each region. To list the files again:', cmd([p(), D.LIST_CMD], () => D.LIST_CMD)),
+          step(3, 'Run it', 'It makes only Describe and Get calls, writes one JSON file per Region and prints where it saved it. Nothing in the account changes.', runHost, h('p', { style: 'margin:0.625rem 0 0;font-size:0.7812rem' }, 'When it finishes you will see something like:'), outHost),
+          step(4, 'Download the snapshot to your computer', 'In CloudShell choose Actions, then Download file, and paste the path the script printed. Repeat for each Region. To list the files again:', cmd([p(), D.LIST_CMD], () => D.LIST_CMD)),
           step(5, 'Load the snapshots here', 'Drop the files anywhere on this page, or choose them. They are read and analysed in this browser tab and never uploaded.', btn([iconSvg('upload', 14), 'Choose snapshot files'], 'primary', pick)),
           step(6, 'Optional: clean up CloudShell', 'Remove the snapshots and the script from your CloudShell home folder.', cmd([p(), D.CLEAN_CMD], () => D.CLEAN_CMD)),
         ),
@@ -1017,7 +1071,7 @@ function connectPage(): HTMLElement {
             ['AccessDenied or UnauthorizedOperation', 'The role is missing a permission. The script carries on and records the failed call; the Coverage page lists what is incomplete. Attach the IAM policy to fix it.'],
             ['"jq is required" outside CloudShell', 'Install jq and the AWS CLI v2, or use CloudShell where both are already installed.'],
             ['Several accounts', 'Run the script once in each account and load all the files together. The dashboard shows them side by side.'],
-            ['Region not enabled', 'Opt-in regions must be enabled in the account before they can be collected.'],
+            ['Region not enabled', 'Opt-in Regions must be enabled in the account before they can be collected.'],
           ].map(([q, a]) => h('details', { class: 'faq' }, h('summary', {}, q!), h('p', {}, a!))),
         ),
       ),
@@ -1044,7 +1098,38 @@ function focusKey(el: Element | null): string {
   return '';
 }
 
+/** Simulator changes, kept with the snapshot they apply to so a refresh does not lose them. */
+const SIM_KEY = 'pinhole-sim';
+let simSaved = '';
+function saveSim() {
+  if (st.demo) return;
+  const v = st.changes.length ? JSON.stringify({ key: st.simKey, changes: st.changes }) : '';
+  if (v === simSaved) return;
+  simSaved = v;
+  try {
+    if (v) localStorage.setItem(SIM_KEY, v);
+    else localStorage.removeItem(SIM_KEY);
+  } catch {
+    /* storage refused: the changes last for this tab */
+  }
+}
+function loadSim() {
+  try {
+    const v = localStorage.getItem(SIM_KEY);
+    if (!v) return;
+    const o = JSON.parse(v) as { key?: unknown; changes?: unknown };
+    if (typeof o.key !== 'string' || !st.all.some((x) => x.key === o.key)) return;
+    assertChanges(o.changes);
+    st.simKey = o.key;
+    st.changes = o.changes;
+    simSaved = v;
+  } catch {
+    /* damaged or from another version: ignore */
+  }
+}
+
 function render() {
+  saveSim();
   const before = document.querySelector('main.view') as HTMLElement | null;
   if (before && lastKey) scrollMemo.set(lastKey, before.scrollTop);
   const key = `${st.route}|${st.sel}|${st.chain}`;
@@ -1076,9 +1161,9 @@ function renderNow() {
   if (st.demo) scope.append(h('span', { class: 'scope-chip' }, 'Demo environment'));
   else
     for (const x of st.snaps)
-      scope.append(h('span', { class: 'scope-chip chip-snap', title: x.name }, h('span', { class: 'k' }, x.account), x.region, on(h('button', { type: 'button', 'aria-label': `Remove ${x.account} ${x.region}` }, iconSvg('x', 12)), 'click', () => { setSnaps(st.all.filter((y) => y.account !== x.account || y.region !== x.region), false); render(); })));
+      scope.append(h('span', { class: 'scope-chip chip-snap', title: x.name }, h('span', { class: 'k' }, x.account), x.region, on(h('button', { type: 'button', 'aria-label': `Move ${x.account} ${x.region} to the trash`, title: 'Move to the trash' }, iconSvg('x', 12)), 'click', () => removeScope(x.account, x.region))));
     const older = st.all.length - st.snaps.length;
-    if (older > 0) scope.append(on(h('button', { type: 'button', class: 'scope-chip chip-older', title: 'Older snapshots of the same account and region are kept for Compare and left out of every other page.' }, `+${older} older`), 'click', () => go('compare')));
+    if (older > 0) scope.append(on(h('button', { type: 'button', class: 'scope-chip chip-older', title: 'Older snapshots of the same account and Region are kept for Compare and left out of every other page.' }, `+${older} older`), 'click', () => go('compare')));
   const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? '');
 
   let view: HTMLElement;
@@ -1089,6 +1174,7 @@ function renderNow() {
     case 'policy': view = policyPage(ctx); break;
     case 'egress': view = egressPage(ctx); break;
     case 'savings': view = savingsPage(ctx); break;
+    case 'trash': view = trashPage({ trash: st.trash, savedCount: st.demo ? 0 : st.all.length, persistent: S.persistent, restore: (ids) => void restore(ids), purge: (ids) => void purge(ids), forgetAll: () => void forgetAll() }); break;
     case 'onprem': view = onPremPage(ctx); break;
     case 'privatelink': view = privateLinkPage(ctx); break;
     case 'simulator': view = simulatorPage(ctx); break;
@@ -1102,7 +1188,10 @@ function renderNow() {
     default: view = dashboard();
   }
   const banners: HTMLElement[] = [];
-  if (st.error) banners.push(h('div', { class: 'error-bar', id: 'error', role: 'alert' }, st.error));
+  const close = (label: string, run: () => void) => on(h('button', { type: 'button', class: 'bar-x', 'aria-label': label }, iconSvg('x', 14)), 'click', () => { run(); render(); });
+  if (st.error) banners.push(h('div', { class: 'error-bar', id: 'error', role: 'alert' }, h('span', {}, st.error), close('Dismiss the error', () => { st.error = ''; })));
+  if (st.notes.length)
+    banners.push(h('div', { class: 'note-bar', id: 'notes', role: 'status' }, h('div', {}, st.notes.length === 1 ? st.notes[0]! : h('ul', {}, ...st.notes.slice(0, 8).map((n) => h('li', {}, n)), st.notes.length > 8 ? h('li', {}, `and ${st.notes.length - 8} more`) : null)), close('Dismiss these notes', () => { st.notes = []; })));
   if (banners.length) {
     const holder = view.classList.contains('page') ? view : view.querySelector('.page, .list-h');
     if (holder) holder.prepend(...banners);
@@ -1159,6 +1248,7 @@ function renderNow() {
           link('compare', 'compare', 'Compare', st.all.length - st.snaps.length),
           link('ask', 'route', 'Reachability query'),
           link('report', 'file', 'Report'),
+          link('trash', 'trash', 'Trash', st.trash.length),
           link('connect', 'plug', 'Connect an account'),
           // The documentation is a separate page published next to the console (site/docs/).
           h('a', { href: 'docs/', id: 'docs-link' }, iconSvg('file', 18), 'Documentation'),
@@ -1190,6 +1280,7 @@ function shortRegion(r: string): string {
 // ---------------------------------------------------------------- start
 
 setSnaps(D.demoSnaps(), true);
+const ready = restoreSaved();
 st.route = routeFromHash() ?? 'dashboard';
 render();
 let resizeT = 0;
@@ -1198,4 +1289,4 @@ window.addEventListener('resize', () => {
   resizeT = window.setTimeout(() => st.route === 'graph' && render(), 150);
 });
 
-(window as unknown as { pinhole: unknown }).pinhole = { loadText, go, state: st, reportHtml: () => reportHtml(reportDoc(st.snaps, rows), 'Pinhole report') };
+(window as unknown as { pinhole: unknown }).pinhole = { loadText, go, state: st, ready, reportHtml: () => reportHtml(reportDoc(st.snaps, rows), 'Pinhole report') };

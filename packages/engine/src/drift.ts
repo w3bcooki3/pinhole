@@ -43,7 +43,7 @@ export class DriftError extends Error {}
  */
 export function diffSnapshots(before: NetworkModel, after: NetworkModel): SnapshotDiff {
   if (before.accountId && after.accountId && before.accountId !== after.accountId) throw new DriftError(`The snapshots are of different accounts (${before.accountId} and ${after.accountId}).`);
-  if (before.region && after.region && before.region !== after.region) throw new DriftError(`The snapshots are of different regions (${before.region} and ${after.region}).`);
+  if (before.region && after.region && before.region !== after.region) throw new DriftError(`The snapshots are of different Regions (${before.region} and ${after.region}).`);
   const eb = analyzeExposure(before);
   const ea = analyzeExposure(after);
   const exposure = diffExposure(eb, ea, { before: analyzeBlastRadius(before, eb), after: analyzeBlastRadius(after, ea) });

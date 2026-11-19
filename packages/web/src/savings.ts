@@ -47,7 +47,7 @@ export function savingsPage(ctx: { st: { snaps: Snap[] } }): HTMLElement {
     const t = h(
       'table',
       { class: 't sv-t' },
-      h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Resource'), h('th', {}, 'What'), h('th', {}, 'Cost'), h('th', { class: 'last hide-sm' }, 'Account and region'))),
+      h('thead', {}, h('tr', {}, h('th', { class: 'first' }, 'Resource'), h('th', {}, 'What'), h('th', {}, 'Cost'), h('th', { class: 'last hide-sm' }, 'Account and Region'))),
       h(
         'tbody',
         {},
@@ -105,7 +105,7 @@ export function savingsPage(ctx: { st: { snaps: Snap[] } }): HTMLElement {
       unused.length ? h('strong', {}, `${D.plural(unused.length, 'unused resource')} ${unused.length === 1 ? 'costs' : 'cost'} about ${usd(monthly)} a month (${usd(monthly * 12)} a year)`) : h('strong', {}, 'Nothing found that costs money and serves nothing'),
       `. ${D.plural(ips, 'public IPv4 address', 'public IPv4 addresses')} cost about ${usd(ipCost)} a month together.`,
     ),
-    h('p', { class: 'faint', style: 'margin:-0.5rem 0 1rem' }, `Prices are AWS list prices for ${PRICES.region}; most other regions charge the same or a little more.`),
+    h('p', { class: 'faint', style: 'margin:-0.5rem 0 1rem' }, `Prices are AWS list prices for ${PRICES.region}; most other Regions charge the same or a little more.`),
     noEips ? h('div', { class: 'warn-bar', style: 'margin:0 0 1rem' }, `${noEips === all.length ? (all.length === 1 ? 'This snapshot has' : 'These snapshots have') : `${noEips} of ${D.plural(all.length, 'snapshot')} have`} no Elastic IP list, so Elastic IPs attached to nothing are not checked there. Collect again with the current script or collector to include them.`) : null,
     unused.length ? table(unused, 'Unused', 'Nothing can use these: removing them changes nothing but the bill. Select a row for why and how.') : null,
     check.length ? table(check, 'Worth checking', 'Charged per gigabyte. The snapshot has no traffic volumes, so these give the rate and the free or cheaper alternative.') : null,

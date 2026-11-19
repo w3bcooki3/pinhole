@@ -25,7 +25,7 @@ You can expect an acknowledgement within a week. Fixes are released as a new ver
 
 **Every file is checked before it is used.**
 
-- Snapshots are validated field by field before analysis: types, port and rule-number ranges, ID and ARN shapes, account, region and time formats, and size limits. A snapshot that fails is refused with the exact field named, so an edited or truncated file cannot give a silently wrong answer.
+- Snapshots are validated field by field before analysis: types, port and rule-number ranges, ID and ARN shapes, account, Region and time formats, and size limits. A snapshot that fails is refused with the exact field named, so an edited or truncated file cannot give a silently wrong answer.
 - Control characters are refused in IDs, addresses and other structural fields. In free text (names, tags, descriptions) they are replaced, so one odd tag does not block an account. Reserved keys such as `__proto__` are refused.
 - The web console reads at most 200 files of at most 200 MB each.
 - Change lists given to `pinhole whatif --changes` are validated the same way.
